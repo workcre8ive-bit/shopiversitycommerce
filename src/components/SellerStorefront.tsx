@@ -349,9 +349,9 @@ export default function SellerStorefront({ sellerId, currentUser, previewSetting
               <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Categories</span>
             </div>
             <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none no-scrollbar">
-              {availableCategories.map(cat => (
+              {availableCategories.map((cat, cIdx) => (
                 <button
-                  key={cat}
+                  key={`sf-cat-${cat}-${cIdx}`}
                   onClick={() => setActiveCategory(cat)}
                   className={cn(
                     "px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest whitespace-nowrap transition-all border-2 cursor-pointer",
@@ -383,9 +383,9 @@ export default function SellerStorefront({ sellerId, currentUser, previewSetting
               <p className="text-sm text-slate-500">Check back later or browse other categories.</p>
             </motion.div>
           ) : (
-            filteredItems.map((product) => (
+            filteredItems.map((product, pIdx) => (
               <motion.div
-                key={product.id}
+                key={`sf-product-${product.id || pIdx}-${pIdx}`}
                 layout
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
@@ -448,22 +448,30 @@ export default function SellerStorefront({ sellerId, currentUser, previewSetting
 
       {/* Render layout blocks in their custom drag-and-dropped order */}
       <div className="space-y-8">
-        {layoutBlocks.map((block: any) => {
+        {layoutBlocks.map((block: any, idx: number) => {
           if (!block.visible) return null;
+          let content = null;
           switch (block.id) {
             case "banner":
-              return renderBannerBlock();
+              content = renderBannerBlock();
+              break;
             case "header":
-              return renderHeaderBlock();
+              content = renderHeaderBlock();
+              break;
             case "about":
-              return renderAboutBlock();
+              content = renderAboutBlock();
+              break;
             case "badges":
-              return renderBadgesBlock();
+              content = renderBadgesBlock();
+              break;
             case "products":
-              return renderProductsBlock();
+              content = renderProductsBlock();
+              break;
             default:
-              return null;
+              content = null;
           }
+          if (!content) return null;
+          return <React.Fragment key={`sf-block-${block.id}-${idx}`}>{content}</React.Fragment>;
         })}
       </div>
     </div>

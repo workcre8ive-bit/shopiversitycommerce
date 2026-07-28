@@ -1292,11 +1292,11 @@ export default function App() {
 
                     {/* Horizontally Scrollable Category Pill Navigation */}
                     <div className="flex items-center gap-2.5 overflow-x-auto pb-4 pt-1 scrollbar-none -mx-4 px-4 sm:mx-0 sm:px-0">
-                      {["All", ...ALL_CATEGORIES.filter(c => !["Events & Lifestyle", "Creative & Design", "Academic & Tutoring", "Tech & Digital", "Logistics & Errands", "Jobs & Internships"].includes(c))].map((category) => {
+                      {["All", ...ALL_CATEGORIES.filter(c => !["Events & Lifestyle", "Creative & Design", "Academic & Tutoring", "Tech & Digital", "Logistics & Errands", "Jobs & Internships"].includes(c))].map((category, catIdx) => {
                         const isSelected = filterCategory === category;
                         return (
                           <button
-                            key={`cat-pill-${category}`}
+                            key={`cat-pill-${category}-${catIdx}`}
                             onClick={() => setFilterCategory(category)}
                             className={cn(
                               "whitespace-nowrap px-4 py-2 rounded-full text-xs font-semibold transition-all duration-300 border select-none cursor-pointer shrink-0 shadow-sm",
@@ -1330,7 +1330,7 @@ export default function App() {
                       ) : (
                         filteredProducts.map((p, pIdx) => (
                           <ProductCard 
-                            key={`market-card-${p.id}-${pIdx}`}
+                            key={`market-card-${p.id || pIdx}-${pIdx}`}
                             product={p}
                             onAddToCart={handleAddToCart}
                             isOwner={currentUser?.uid === p.sellerId}
@@ -1473,13 +1473,13 @@ export default function App() {
                             </h3>
                           </div>
                           <div className="grid grid-cols-1 gap-4">
-                            {matchingSellers.map((seller) => {
+                            {matchingSellers.map((seller, sellerIdx) => {
                               const bizName = seller.businessName || seller.storefrontSettings?.businessName || seller.displayName;
                               const bannerUrl = seller.storefrontSettings?.bannerUrl;
                               const bioText = seller.storefrontSettings?.businessBio || seller.description || "Welcome to my official campus storefront! Fast delivery and reliable quality guaranteed.";
                               return (
                                 <motion.div
-                                  key={`storefront-card-${seller.uid}`}
+                                  key={`storefront-card-${seller.uid || sellerIdx}-${sellerIdx}`}
                                   whileHover={{ y: -4 }}
                                   className="bg-white dark:bg-zinc-900 rounded-3xl border border-slate-150/80 dark:border-zinc-800 overflow-hidden shadow-sm hover:shadow-md transition-all flex flex-col h-full bg-clip-border"
                                 >

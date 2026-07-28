@@ -667,7 +667,7 @@ export default function AdminDashboard({ currentUser, onBack }: { currentUser: a
                 <tr className="border-b border-slate-50 dark:border-slate-800">
                   <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">User Details</th>
                   <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">Role / Stats</th>
-                  <th className="px-8 py-6 text-[10px) font-black text-slate-400 uppercase tracking-widest">Status</th>
+                  <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">Status</th>
                   <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Actions</th>
                 </tr>
               </thead>
