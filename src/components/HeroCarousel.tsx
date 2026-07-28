@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   Sparkles, 
@@ -308,11 +308,32 @@ export default function HeroCarousel({ onShopNow, onStartSelling, currentUser }:
     }
   };
 
+  // Touch gesture support for mobile swiping
+  const [touchStartX, setTouchStartX] = useState<number | null>(null);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    setTouchStartX(e.touches[0].clientX);
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (touchStartX === null) return;
+    const touchEndX = e.changedTouches[0].clientX;
+    const diff = touchStartX - touchEndX;
+    if (diff > 40) {
+      handleNext();
+    } else if (diff < -40) {
+      handlePrev();
+    }
+    setTouchStartX(null);
+  };
+
   return (
     <div 
       className="relative w-full h-full bg-[#0a0d14] select-none font-sans overflow-hidden group border border-slate-100 dark:border-zinc-800 rounded-3xl shadow-lg"
       onMouseEnter={() => setIsPaused(true)}
       onMouseLeave={() => setIsPaused(false)}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
     >
       <style>{`
         @keyframes blink {
@@ -417,11 +438,11 @@ export default function HeroCarousel({ onShopNow, onStartSelling, currentUser }:
         </div>
       </div>
 
-      {/* Prev / Next Navigation Chevron Buttons */}
+      {/* Prev / Next Navigation Chevron Buttons (Desktop only - hidden on mobile view) */}
       <button 
         onClick={handlePrev}
         aria-label="Previous Slide"
-        className="absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 z-30 w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-black/40 hover:bg-black/70 backdrop-blur-md text-white flex items-center justify-center border border-white/20 shadow-md transition-all active:scale-95 cursor-pointer"
+        className="hidden sm:flex absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 z-30 w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-black/40 hover:bg-black/70 backdrop-blur-md text-white items-center justify-center border border-white/20 shadow-md transition-all active:scale-95 cursor-pointer"
       >
         <ChevronLeft className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
       </button>
@@ -429,7 +450,7 @@ export default function HeroCarousel({ onShopNow, onStartSelling, currentUser }:
       <button 
         onClick={handleNext}
         aria-label="Next Slide"
-        className="absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 z-30 w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-black/40 hover:bg-black/70 backdrop-blur-md text-white flex items-center justify-center border border-white/20 shadow-md transition-all active:scale-95 cursor-pointer"
+        className="hidden sm:flex absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 z-30 w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-black/40 hover:bg-black/70 backdrop-blur-md text-white items-center justify-center border border-white/20 shadow-md transition-all active:scale-95 cursor-pointer"
       >
         <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
       </button>

@@ -992,10 +992,10 @@ export default function App() {
           initial={{ y: -15, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           transition={{ duration: 0.4, ease: "easeOut" }}
-          className="bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md text-zinc-800 dark:text-zinc-100 border-b border-slate-100 dark:border-zinc-800/80 sticky top-0 z-[120] shrink-0 select-none font-sans px-4 h-14 flex items-center justify-between shadow-sm"
+          className="bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md text-zinc-800 dark:text-zinc-100 border-b border-slate-100 dark:border-zinc-800/80 sticky top-0 z-[120] shrink-0 select-none font-sans px-3 sm:px-6 h-14 flex items-center justify-between shadow-sm"
         >
           {/* Left: App title or dynamic back button */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2">
             {viewingSellerId || viewingProduct || (activeTab !== "market" && activeTab !== "search" && activeTab !== "messages" && activeTab !== "orders" && activeTab !== "settings" && activeTab !== "dashboard") ? (
               <button 
                 onClick={handleGoBack} 
@@ -1005,10 +1005,10 @@ export default function App() {
                 <ArrowLeft className="w-5 h-5" />
               </button>
             ) : (
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1 sm:gap-2">
                 <button
                   onClick={() => setIsSidebarOpen(true)}
-                  className="p-1 hover:bg-slate-100 dark:hover:bg-zinc-800/80 rounded-xl text-[#ff6b00] mr-1 active:scale-95 transition-all cursor-pointer border-none flex items-center justify-center"
+                  className="p-1 hover:bg-slate-100 dark:hover:bg-zinc-800/80 rounded-xl text-[#ff6b00] active:scale-95 transition-all cursor-pointer border-none flex items-center justify-center shrink-0"
                   title="Open Navigation Menu"
                 >
                   <Menu className="w-5 h-5" />
@@ -1016,7 +1016,7 @@ export default function App() {
                 {activeRole === "seller" ? (
                   <>
                     <div className="w-2 h-5 bg-gradient-to-b from-[#ff6b00] to-orange-500 rounded-full" />
-                    <span className="text-sm font-black tracking-tight uppercase bg-gradient-to-r from-orange-600 to-amber-500 bg-clip-text text-transparent font-sans">
+                    <span className="text-xs sm:text-sm font-black tracking-tight uppercase bg-gradient-to-r from-orange-600 to-amber-500 bg-clip-text text-transparent font-sans">
                       Merchant Hub
                     </span>
                   </>
@@ -1029,7 +1029,7 @@ export default function App() {
                       setFilterCategory("All");
                       setSearchQuery("");
                     }} 
-                    className="ml-3 sm:ml-5" 
+                    className="ml-1 sm:ml-3" 
                   />
                 )}
               </div>
@@ -1057,7 +1057,7 @@ export default function App() {
         )}
 
         {/* Right actions: Theme toggle, Cart/Search, and Mini profile shortcut */}
-        <div className="flex items-center gap-2 sm:gap-4 md:gap-6">
+        <div className="flex items-center gap-1.5 sm:gap-3 md:gap-5">
           {/* Cart with count (only in buyer explore tab) */}
           {activeRole === "buyer" && (
             <button 
