@@ -1,0 +1,152 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700;800&family=Playfair+Display:ital,wght@0,600;0,700;0,800;1,600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", sans-serif;
+
+  --color-primary: #ff6b00;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #ffffff;
+  --color-secondary-foreground: #ff6b00;
+  --color-accent: #ff6b00;
+
+  /* Overrides for purple with Vibrant Orange shades */
+  --color-purple-50: #fffbf7;
+  --color-purple-100: #ffe8d6;
+  --color-purple-200: #ffd0b3;
+  --color-purple-300: #ffb380;
+  --color-purple-400: #ff8e4d;
+  --color-purple-500: #ff6b00;
+  --color-purple-600: #ff6b00;
+  --color-purple-700: #e55a00;
+  --color-purple-800: #cc4d00;
+  --color-purple-900: #993700;
+  --color-purple-950: #4d1800;
+
+  /* Overrides for indigo with Soft Warm Grays and Amber */
+  --color-indigo-50: #ffffff;
+  --color-indigo-100: #fafaf9;
+  --color-indigo-200: #f5f5f4;
+  --color-indigo-300: #e7e5e4;
+  --color-indigo-400: #ffa166;
+  --color-indigo-500: #ff6b00;
+  --color-indigo-600: #e55a00;
+  --color-indigo-700: #cc4d00;
+  --color-indigo-800: #993700;
+  --color-indigo-900: #4d1800;
+  --color-indigo-950: #1a0800;
+
+  /* Overrides for emerald & teal to vibrant premium Orange */
+  --color-emerald-50: #fffcf9;
+  --color-emerald-100: #ffe8d1;
+  --color-emerald-200: #ffd1a4;
+  --color-emerald-300: #ffb16b;
+  --color-emerald-400: #ff8c33;
+  --color-emerald-500: #ff6b00;
+  --color-emerald-600: #e55a00;
+  --color-emerald-700: #cc4d00;
+  --color-emerald-800: #993700;
+  --color-emerald-990: #662200;
+  --color-emerald-950: #331000;
+
+  --color-teal-50: #fffcf9;
+  --color-teal-100: #ffe8d1;
+  --color-teal-200: #ffd1a4;
+  --color-teal-300: #ffb16b;
+  --color-teal-400: #ff8c33;
+  --color-teal-500: #ff6b00;
+  --color-teal-600: #e55a00;
+  --color-teal-700: #cc4d00;
+  --color-teal-850: #993700;
+}
+
+@variant dark (&:where(.dark, .dark *));
+
+.dark {
+  --background: #060b13;
+  --foreground: #f4f7fb;
+  --primary: #ff6b00;
+  --primary-foreground: #ffffff;
+  --secondary: #0c1622;
+  --secondary-foreground: #ffe8d1;
+  --muted: #0c1622;
+  --muted-foreground: #749ed4;
+  --accent: #ff6b00;
+  --accent-foreground: #ffffff;
+  --border: #001738;
+  --input: #001738;
+  --ring: #ff6b00;
+}
+
+:root {
+  color-scheme: light dark;
+  --background: #ffffff;
+  --foreground: #ff6b00;
+  --primary: #ff6b00;
+  --primary-foreground: #ffffff;
+  --secondary: #fff5eb;
+  --secondary-foreground: #ff6b00;
+  --muted: #f4f7fb;
+  --muted-foreground: #627d98;
+  --accent: #ff6b00;
+  --accent-foreground: #ffffff;
+  --border: #e2ebf6;
+  --input: #e2ebf6;
+  --ring: #ff6b00;
+  --radius: 1.5rem;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  @apply antialiased transition-colors duration-300;
+}
+
+@layer base {
+  input, textarea, select {
+    @apply text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 placeholder:text-slate-400 dark:placeholder:text-slate-500 transition-all focus:ring-2 focus:ring-orange-500 outline-none shadow-sm rounded-2xl;
+  }
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+  @apply tracking-tight font-bold text-primary dark:text-white;
+}
+
+.bg-brand-gradient {
+  background: linear-gradient(135deg, #ff6b00 0%, #ff8c33 100%);
+}
+
+.bg-emerald-gradient {
+  background: linear-gradient(135deg, #ff6b00 0%, #ffffff 100%);
+}
+
+.bg-amazon-navy {
+  background-color: #ff6b00;
+}
+
+.bg-amazon-light-navy {
+  background-color: #ffe8d6;
+}
+
+/* =========================================
+   EXCLUSIVE STYLE SHAPING DEFINITIONS
+   ========================================= */
+
+/* Vibrant Sunset (Default) */
+.theme-sunset {
+  --color-primary: #ff6b00;
+  --color-accent: #ff6b00;
+  --color-purple-500: #ff6b00;
+  --color-purple-600: #ff6b00;
+  --color-emerald-500: #ff6b00;
+  --color-teal-500: #ff6b00;
+  --primary: #ff6b00;
+  --accent: #ff6b00;
+  --font-display: "Outfit", sans-serif;
+  --radius: 1.5rem;
+}
+
+

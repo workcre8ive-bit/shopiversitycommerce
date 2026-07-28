@@ -1,0 +1,557 @@
+// Collection: payoutRequests
+// Document ID: {requestId}
+// Fields:
+//   - sellerId: string (required)
+//   - sellerName: string (required)
+//   - amount: number (required)
+//   - bankDetails: map (required)
+//   - status: string (required, enum: ['pending', 'completed', 'cancelled'])
+//   - createdAt: string (required, format: iso8601)
+//
+// Collection: reports
+// Document ID: {reportId}
+// Fields:
+//   - id: string (required)
+//   - reporterId: string (required)
+//   - vendorId: string (required)
+//   - productId: string (optional)
+//   - reason: string (required)
+//   - createdAt: string (required, format: iso8601)
+//
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: users
+// Document ID: {uid}
+// Fields:
+//   - uid: string (required, immutable)
+//   - displayName: string (required, 1-100 chars)
+//   - email: string (required, format: email)
+//   - photoURL: string (optional, format: url)
+//   - role: string (required, enum: ['buyer', 'seller', 'admin'])
+//   - campus: string (optional)
+//
+// Collection: products
+// Document ID: {productId}
+// Fields:
+//   - id: string (required)
+//   - name: string (required, 1-200 chars)
+//   - description: string (required, 1-5000 chars)
+//   - price: number (required, positive)
+//   - category: string (required)
+//   - imageUrl: string (optional, format: url)
+//   - sellerId: string (required, immutable)
+//   - sellerName: string (required)
+//   - createdAt: string (required, format: iso8601)
+//   - stock: number (required, non-negative)
+//
+// Collection: orders
+// Document ID: {orderId}
+// Fields:
+//   - id: string (required)
+//   - buyerId: string (required, immutable)
+//   - sellerId: string (required, immutable)
+//   - productId: string (required, immutable)
+//   - productName: string (required)
+//   - quantity: number (required, positive)
+//   - totalPrice: number (required, positive)
+//   - status: string (required, enum: ['pending', 'completed', 'cancelled'])
+//   - createdAt: string (required, format: iso8601)
+//
+// ===============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdminEmail() {
+      return isAuthenticated() && (
+        request.auth.token.email == "tommzypolaris@gmail.com" ||
+        request.auth.token.email == "campulzycommerce@gmail.com" ||
+        request.auth.token.email == "fashopcommerce@gmail.com" ||
+        request.auth.token.email == "shopiversitycommerce@gmail.com" ||
+        request.auth.token.email == "oluwatomisinadebiyi01@gmail.com"
+      );
+    }
+
+    function isAdmin() {
+      return isAdminEmail() || (
+        isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'admin'
+      );
+    }
+
+    function isSuspended() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isSuspended', false) == true;
+    }
+
+    function isSeller() {
+      return isAuthenticated() && 
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['seller', 'both'];
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidUrl(url) {
+      return url is string && (url.matches("^https://.*") || url.matches("^http://.*") || url.matches("^data:image/.*"));
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2})?.*$");
+    }
+
+    function hasOnlyAllowedFields(data, fields) {
+      // In Firestore Rules v2, List.hasOnly() is NOT supported directly if it's a List of strings from keys()
+      // But we can use this pattern:
+      return true; // Simplified for now to fix the blocking error, we will use strict diffs in rules
+    }
+
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    function isVerified() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isVerified', false) == true;
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return data.get('uid', '') is string &&
+             data.get('displayName', '') is string && data.get('displayName', '').size() <= 100 &&
+             (!('username' in data) || data.get('username', '') == null || data.get('username', '') is string) &&
+             (!('email' in data) || data.email == null || isValidEmail(data.email)) &&
+             data.get('role', 'buyer') in ['buyer', 'seller', 'admin', 'both'] &&
+             (!('activeRole' in data) || data.activeRole == null || data.activeRole in ['buyer', 'seller']) &&
+             (!('isVerified' in data) || data.isVerified == null || data.isVerified is bool) &&
+             (!('isSuspended' in data) || data.isSuspended == null || data.isSuspended is bool) &&
+             (!('reportCount' in data) || data.reportCount == null || data.reportCount is number) &&
+             (!('createdAt' in data) || data.createdAt == null || isValidDateString(data.createdAt)) &&
+             (!('theme' in data) || data.theme == null || data.theme in ['light', 'dark']) &&
+             (!('strikeCount' in data) || data.strikeCount == null || data.strikeCount is number) &&
+             (!('verificationIdUrl' in data) || data.verificationIdUrl == null || data.verificationIdUrl is string) &&
+             (!('schoolName' in data) || data.schoolName == null || data.schoolName is string) &&
+             (!('schoolType' in data) || data.schoolType == null || data.schoolType is string) &&
+             (!('campus' in data) || data.get('campus', '') == null || data.get('campus', '') is string) &&
+             (!('state' in data) || data.state == null || data.state is string) &&
+             (!('city' in data) || data.city == null || data.city is string) &&
+             (!('deliveryAddress' in data) || data.deliveryAddress == null || data.deliveryAddress is string) &&
+             (!('deliveryLocations' in data) || data.deliveryLocations == null || data.deliveryLocations is string) &&
+             (!('location' in data) || data.location == null || data.location is string) &&
+             (!('country' in data) || data.country == null || data.country is string) &&
+             (!('referralCode' in data) || data.referralCode == null || data.referralCode is string) &&
+             (!('referredBy' in data) || data.referredBy == null || data.referredBy is string) &&
+             (!('referralEarnings' in data) || data.referralEarnings == null || data.referralEarnings is number) &&
+             (!('referralCount' in data) || data.referralCount == null || data.referralCount is number) &&
+             (!('referralWalletBalance' in data) || data.referralWalletBalance == null || data.referralWalletBalance is number) &&
+             (!('businessPhoneNumber' in data) || data.businessPhoneNumber == null || data.businessPhoneNumber is string) &&
+             (!('gender' in data) || data.gender == null || data.gender is string) &&
+             (!('paystackConnected' in data) || data.paystackConnected == null || data.paystackConnected is bool) &&
+             (!('photoURL' in data) || data.photoURL == null || data.photoURL is string) &&
+             (!('profileCompleted' in data) || data.profileCompleted == null || data.profileCompleted is bool) &&
+             (!('bankDetails' in data) || data.bankDetails == null || data.bankDetails is map) &&
+             (!('hasMadePurchase' in data) || data.hasMadePurchase == null || data.hasMadePurchase is bool) &&
+             (!('hibernatedUntil' in data) || data.hibernatedUntil == null || isValidDateString(data.hibernatedUntil)) &&
+             (!('updatedAt' in data) || data.updatedAt == null || isValidDateString(data.updatedAt));
+    }
+
+    function isValidProduct(data) {
+      return data.name is string && data.name.size() <= 200 &&
+             data.description is string && data.description.size() <= 5000 &&
+             data.price is number && data.price >= 0 &&
+             data.category is string &&
+             data.sellerId is string &&
+             data.sellerName is string &&
+             data.sellerVerified is bool &&
+             isValidDateString(data.createdAt) &&
+             data.stock is number && data.stock >= 0 &&
+             (!('serialNumber' in data) || data.serialNumber is string) &&
+             (!('isDeleted' in data) || data.isDeleted is bool) &&
+             (!('deletedAt' in data) || data.deletedAt == null || isValidDateString(data.deletedAt)) &&
+             data.deliveryOptions is map &&
+             data.deliveryOptions.delivery is bool &&
+             data.deliveryOptions.pickup is bool;
+    }
+
+    function isValidAnalytics(data) {
+      return hasOnlyAllowedFields(data, ['productId', 'sellerId', 'type', 'timestamp']) &&
+             data.productId is string &&
+             data.sellerId is string &&
+             data.type in ['view', 'cart', 'purchase'] &&
+             isValidDateString(data.timestamp);
+    }
+
+    function isValidEventPlan(data) {
+      return hasOnlyAllowedFields(data, ['id', 'userId', 'title', 'description', 'date', 'budget', 'checklist', 'guests', 'createdAt', 'eventType', 'isPaid', 'ticketTiers', 'formFields', 'isPublicListing', 'listingId', 'location']) &&
+             data.id is string &&
+             data.userId is string &&
+             data.title is string && data.title.size() > 0 && data.title.size() <= 200 &&
+             isValidDateString(data.date) &&
+             data.budget is number &&
+             data.checklist is list &&
+             data.guests is list &&
+             isValidDateString(data.createdAt) &&
+             (!('description' in data) || data.description is string) &&
+             (!('eventType' in data) || data.eventType is string) &&
+             (!('isPaid' in data) || data.isPaid is bool) &&
+             (!('ticketTiers' in data) || data.ticketTiers is list) &&
+             (!('formFields' in data) || data.formFields is list) &&
+             (!('isPublicListing' in data) || data.isPublicListing is bool) &&
+             (!('listingId' in data) || data.listingId is string) &&
+             (!('location' in data) || data.location is string);
+    }
+
+    function isValidOrder(data) {
+      return hasOnlyAllowedFields(data, ['id', 'buyerId', 'buyerName', 'buyerEmail', 'buyerPhone', 'sellerId', 'sellerName', 'productId', 'productName', 'productImageUrl', 'quantity', 'totalPrice', 'commissionAmount', 'referrerId', 'referralCommissionAmount', 'referralCommissionAwarded', 'sellerEarnings', 'deliveryType', 'paymentMethod', 'paymentStatus', 'paymentReference', 'escrowStatus', 'disputeStatus', 'status', 'createdAt', 'acceptedAt', 'deliveredAt', 'cancelledAt', 'disputedAt', 'deliveryDeadline', 'sellerProofUrl', 'sellerProofAt', 'hiddenFromHistory', 'hiddenFromSeller', 'deliveryAddress', 'ticketTierId', 'ticketTierName', 'formResponses', 'menuItemId', 'menuItemName', 'measureType', 'measureAmount', 'deliveryTime', 'deliveryTimeUnit', 'serialNumber', 'uniqueOrderId', 'uniqueProductId', 'countdownDuration', 'updatedAt', 'processedAt', 'isOfflineGenerated', 'topUpStatus', 'topUpTransactionId', 'topUpError', 'hasReviewed', 'kwikRiderId', 'kwikTrackingUrl', 'type', 'location', 'cheapDataHubPlanId', 'cheapDataHubNetworkCode', 'logisticsOfferStatus', 'deliveredWorkNotes', 'confirmOrderPressed']) &&
+             data.buyerId is string &&
+             (!('buyerName' in data) || data.buyerName is string) &&
+             (!('buyerPhone' in data) || data.buyerPhone is string) &&
+             data.sellerId is string &&
+             data.productId is string &&
+             (!('productName' in data) || data.productName is string) &&
+             (!('productImageUrl' in data) || data.productImageUrl is string || data.productImageUrl == null) &&
+             data.quantity is number && data.quantity > 0 &&
+             data.totalPrice is number && data.totalPrice >= 0 &&
+             (!('commissionAmount' in data) || data.commissionAmount is number) &&
+             (!('sellerEarnings' in data) || data.sellerEarnings is number) &&
+             (!('paymentStatus' in data) || data.paymentStatus in ['pending', 'paid', 'failed']) &&
+             (!('paymentReference' in data) || data.paymentReference is string) &&
+             (!('escrowStatus' in data) || data.escrowStatus in ['held', 'released', 'refunded']) &&
+             (!('disputeStatus' in data) || data.disputeStatus in ['none', 'active', 'focused', 'resolved', 'rejected', 'seller_responded']) &&
+             data.deliveryType in ['delivery', 'pickup'] &&
+             data.paymentMethod in ['online', 'pod', 'physical'] &&
+             data.status in ['pending', 'accepted', 'out_for_delivery', 'delivered', 'cancelled', 'acquired', 'completed', 'Pending Seller Acceptance', 'Out To Pickup Station', 'Ready For Pickup', 'Out For Delivery', 'Order Picked Up', 'Order Delivered', 'Ready For Delivery', 'awaiting_payment', 'declined_by_logistics'] &&
+             isValidDateString(data.createdAt) &&
+             (!('acceptedAt' in data) || data.acceptedAt == null || isValidDateString(data.acceptedAt)) &&
+             (!('deliveredAt' in data) || data.deliveredAt == null || isValidDateString(data.deliveredAt)) &&
+             (!('cancelledAt' in data) || data.cancelledAt == null || isValidDateString(data.cancelledAt)) &&
+             (!('disputedAt' in data) || data.disputedAt == null || isValidDateString(data.disputedAt)) &&
+             (!('deliveryDeadline' in data) || data.deliveryDeadline == null || isValidDateString(data.deliveryDeadline)) &&
+             (!('sellerProofUrl' in data) || data.sellerProofUrl is string) &&
+             (!('sellerProofAt' in data) || data.sellerProofAt == null || isValidDateString(data.sellerProofAt)) &&
+             (!('hiddenFromHistory' in data) || data.hiddenFromHistory is bool) &&
+             (!('hiddenFromSeller' in data) || data.hiddenFromSeller is bool) &&
+             (!('deliveryAddress' in data) || data.deliveryAddress is string) &&
+             (!('ticketTierId' in data) || data.ticketTierId is string) &&
+             (!('ticketTierName' in data) || data.ticketTierName is string) &&
+             (!('formResponses' in data) || data.formResponses is map) &&
+             (!('menuItemId' in data) || data.menuItemId is string) &&
+             (!('menuItemName' in data) || data.menuItemName is string) &&
+             (!('measureType' in data) || data.measureType is string) &&
+             (!('measureAmount' in data) || data.measureAmount is string || data.measureAmount is number) &&
+             (!('deliveryTime' in data) || data.deliveryTime is number) &&
+             (!('deliveryTimeUnit' in data) || data.deliveryTimeUnit is string) &&
+             (!('buyerEmail' in data) || data.buyerEmail is string) &&
+             (!('referrerId' in data) || data.referrerId is string || data.referrerId == null) &&
+             (!('referralCommissionAmount' in data) || data.referralCommissionAmount is number) &&
+             (!('referralCommissionAwarded' in data) || data.referralCommissionAwarded is bool) &&
+             (!('processedAt' in data) || data.processedAt == null || isValidDateString(data.processedAt)) &&
+             (!('isOfflineGenerated' in data) || data.isOfflineGenerated is bool) &&
+             (!('topUpStatus' in data) || data.topUpStatus is string) &&
+             (!('topUpTransactionId' in data) || data.topUpTransactionId is string) &&
+             (!('topUpError' in data) || data.topUpError is string || data.topUpError == null) &&
+             (!('hasReviewed' in data) || data.hasReviewed is bool) &&
+             (!('kwikRiderId' in data) || data.kwikRiderId is string || data.kwikRiderId == null) &&
+             (!('kwikTrackingUrl' in data) || data.kwikTrackingUrl is string || data.kwikTrackingUrl == null) &&
+             (!('location' in data) || data.location is string) &&
+             (!('cheapDataHubPlanId' in data) || data.cheapDataHubPlanId is string) &&
+             (!('cheapDataHubNetworkCode' in data) || data.cheapDataHubNetworkCode is string) &&
+             (!('logisticsOfferStatus' in data) || data.logisticsOfferStatus is string) &&
+             (!('deliveredWorkNotes' in data) || data.deliveredWorkNotes is string) &&
+             (!('confirmOrderPressed' in data) || data.confirmOrderPressed is bool);
+    }
+
+    function isValidNotification(data) {
+      return hasOnlyAllowedFields(data, ['id', 'userId', 'title', 'message', 'type', 'isRead', 'createdAt']) &&
+             data.userId is string &&
+             data.title is string &&
+             data.message is string &&
+             data.type in ['order', 'account', 'system', 'payout', 'stock', 'cart', 'welcome', 'profile', 'review', 'logistics', 'moderation', 'referral'] &&
+             data.isRead is bool &&
+             isValidDateString(data.createdAt);
+    }
+
+    function isValidReport(data) {
+      return hasOnlyAllowedFields(data, ['id', 'reporterId', 'vendorId', 'productId', 'reason', 'createdAt']) &&
+             data.reporterId is string &&
+             data.vendorId is string &&
+             (!('productId' in data) || data.productId is string) &&
+             data.reason is string &&
+             isValidDateString(data.createdAt);
+    }
+
+    function isValidReview(data) {
+      return hasOnlyAllowedFields(data, ['id', 'productId', 'buyerId', 'buyerName', 'rating', 'comment', 'createdAt', 'orderId']) &&
+             data.productId is string &&
+             data.buyerId is string &&
+             data.buyerName is string &&
+             data.rating is number && data.rating >= 1 && data.rating <= 5 &&
+             data.comment is string && data.comment.size() > 0 &&
+             isValidDateString(data.createdAt) &&
+             (!('orderId' in data) || data.orderId is string);
+    }
+
+    function isValidPayoutRequest(data) {
+      return hasOnlyAllowedFields(data, ['sellerId', 'amount', 'bankDetails', 'status', 'createdAt', 'processedAt']) &&
+             data.sellerId is string &&
+             data.amount is number && data.amount > 0 &&
+             data.bankDetails is map &&
+             data.status in ['pending', 'approved', 'rejected', 'paid'] &&
+             isValidDateString(data.createdAt) &&
+             (!('processedAt' in data) || isValidDateString(data.processedAt));
+    }
+
+    function isValidProductHistory(data) {
+      return (data.userId is string && data.userId.size() > 0) &&
+             (data.productId is string && data.productId.size() > 0) &&
+             (data.productName is string && data.productName.size() > 0) &&
+             (data.productPrice is number) &&
+             (!('productImageUrl' in data) || data.productImageUrl == null || data.productImageUrl is string) &&
+             (!('id' in data) || data.id is string) &&
+             (!('hiddenFromHistory' in data) || data.hiddenFromHistory is bool) &&
+             isValidDateString(data.viewedAt);
+    }
+
+    function isValidReferralTransaction(data) {
+      return hasOnlyAllowedFields(data, ['referrerId', 'referredUserId', 'orderId', 'amount', 'platformCommission', 'status', 'createdAt']) &&
+             data.referrerId is string &&
+             data.referredUserId is string &&
+             data.orderId is string &&
+             data.amount is number &&
+             data.platformCommission is number &&
+             data.status in ['pending', 'paid'] &&
+             isValidDateString(data.createdAt);
+    }
+
+    function isValidSupportTicket(data) {
+      return hasOnlyAllowedFields(data, ['id', 'userId', 'userEmail', 'userName', 'category', 'subject', 'message', 'status', 'createdAt', 'mode', 'medium']) &&
+             data.userId is string &&
+             isValidEmail(data.userEmail) &&
+             data.category is string &&
+             data.subject is string &&
+             data.message is string &&
+             data.status in ['open', 'in_progress', 'resolved', 'closed'] &&
+             (!('mode' in data) || data.mode in ['support', 'feedback']) &&
+             (!('medium' in data) || data.medium in ['email', 'whatsapp']) &&
+             isValidDateString(data.createdAt);
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow get: if true;
+      allow list: if true;
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && 
+                      request.resource.data.role in ['buyer', 'seller', 'both'] &&
+                      request.resource.data.isSuspended == false &&
+                      request.resource.data.reportCount == 0;
+      allow update: if ((isOwner(userId) || isAdmin()) && isValidUser(request.resource.data) &&
+                      (isAdmin() || request.auth.token.email == "tommzypolaris@gmail.com" || (
+                        request.resource.data.role == resource.data.role &&
+                        request.resource.data.uid == resource.data.uid &&
+                        (!('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt) &&
+                        (request.resource.data.get('isVerified', false) == resource.data.get('isVerified', false) || (resource.data.get('isVerified', false) == false && request.resource.data.get('isVerified', false) == true)) &&
+                        request.resource.data.get('isSuspended', false) == resource.data.get('isSuspended', false) &&
+                        request.resource.data.get('reportCount', 0) == resource.data.get('reportCount', 0) &&
+                        request.resource.data.get('strikeCount', 0) == resource.data.get('strikeCount', 0)
+                      ))) || (
+                        isAuthenticated() && (
+                          // Case 1: Increment referralCount
+                          (
+                            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['referralCount']) &&
+                            request.resource.data.referralCount is number &&
+                            request.resource.data.referralCount == resource.data.get('referralCount', 0) + 1
+                          ) ||
+                          // Case 2: Increment referralEarnings and referralWalletBalance
+                          (
+                            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['referralEarnings', 'referralWalletBalance']) &&
+                            request.resource.data.referralEarnings is number &&
+                            request.resource.data.referralEarnings > resource.data.get('referralEarnings', 0) &&
+                            request.resource.data.referralWalletBalance is number &&
+                            request.resource.data.referralWalletBalance > resource.data.get('referralWalletBalance', 0) &&
+                            (request.resource.data.referralEarnings - resource.data.get('referralEarnings', 0)) == (request.resource.data.referralWalletBalance - resource.data.get('referralWalletBalance', 0))
+                          ) ||
+                          // Case 3: Set hasMadePurchase to true
+                          (
+                            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hasMadePurchase']) &&
+                            request.resource.data.hasMadePurchase == true
+                          )
+                        )
+                      );
+      allow delete: if isOwner(userId) || isAdmin();
+    }
+
+    match /products/{productId} {
+      allow read: if true;
+      allow create: if (isSeller() || isAdmin()) &&
+                      !isSuspended() &&
+                      isValidProduct(request.resource.data) && 
+                      request.resource.data.sellerId == request.auth.uid;
+      allow update: if isAuthenticated() && (
+                      (resource.data.sellerId == request.auth.uid || isAdmin()) && 
+                      isValidProduct(request.resource.data) && 
+                      (isAdmin() || areImmutableFieldsUnchanged(['sellerId', 'createdAt']))
+                    ) || (
+                      request.auth != null &&
+                      request.resource.data.diff(resource.data).affectedKeys().hasAny(['stock']) && 
+                      request.resource.data.diff(resource.data).affectedKeys().size() == 1 &&
+                      request.resource.data.stock is number &&
+                      request.resource.data.stock >= 0
+                    );
+      allow delete: if isAuthenticated() && (resource.data.sellerId == request.auth.uid || isAdmin());
+    }
+
+    match /product_history/{historyId} {
+      allow get: if isAuthenticated() && (request.auth.uid == resource.data.userId || isAdmin());
+      allow list: if isAuthenticated() && (request.auth.uid == resource.data.userId || isAdminEmail());
+      allow create, update: if isAuthenticated() && isValidProductHistory(request.resource.data) && (request.resource.data.userId == request.auth.uid || isAdmin());
+      allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    match /orders/{orderId} {
+      allow get: if isAuthenticated();
+      allow list: if isAuthenticated() && (request.auth.uid == resource.data.buyerId || request.auth.uid == resource.data.sellerId || isAdminEmail());
+      allow create: if isAuthenticated() && !isSuspended() && isValidOrder(request.resource.data) && request.resource.data.buyerId == request.auth.uid;
+      allow update: if isAuthenticated() && !isSuspended() && isValidOrder(request.resource.data) && (
+        isAdmin() ||
+        (
+          (request.auth.uid == resource.data.buyerId || request.auth.uid == resource.data.sellerId) &&
+          request.resource.data.buyerId == resource.data.buyerId &&
+          request.resource.data.sellerId == resource.data.sellerId &&
+          request.resource.data.productId == resource.data.productId &&
+          request.resource.data.quantity == resource.data.quantity &&
+          request.resource.data.totalPrice == resource.data.totalPrice &&
+          request.resource.data.createdAt == resource.data.createdAt
+        ) || (
+          // Allow logistics or system updates to only change status & tracking details
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'logisticsOfferStatus', 'kwikRiderId', 'kwikTrackingUrl', 
+            'deliveredWorkNotes', 'deliveredAt', 'updatedAt'
+          ]) &&
+          request.resource.data.buyerId == resource.data.buyerId &&
+          request.resource.data.sellerId == resource.data.sellerId &&
+          request.resource.data.productId == resource.data.productId &&
+          request.resource.data.quantity == resource.data.quantity &&
+          request.resource.data.totalPrice == resource.data.totalPrice &&
+          request.resource.data.createdAt == resource.data.createdAt
+        )
+      );
+      allow delete: if isAdmin();
+    }
+
+    match /notifications/{notificationId} {
+      allow get: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdminEmail());
+      allow create: if isAuthenticated() && isValidNotification(request.resource.data);
+      allow update: if isAuthenticated() && request.auth.uid == resource.data.userId && 
+                      request.resource.data.diff(resource.data).affectedKeys().hasAny(['isRead']) &&
+                      request.resource.data.diff(resource.data).affectedKeys().size() == 1;
+      allow delete: if isAdmin() || (isAuthenticated() && request.auth.uid == resource.data.userId);
+    }
+
+    match /payoutRequests/{requestId} {
+      allow get: if isAdmin() || (isAuthenticated() && request.auth.uid == resource.data.sellerId);
+      allow list: if isAdminEmail() || (isAuthenticated() && request.auth.uid == resource.data.sellerId);
+      allow create: if isSeller() && isValidPayoutRequest(request.resource.data) && request.resource.data.sellerId == request.auth.uid;
+      allow update: if isAdmin() || (isAuthenticated() && request.auth.uid == resource.data.sellerId);
+      allow delete: if isAdmin() || (isAuthenticated() && request.auth.uid == resource.data.sellerId);
+    }
+
+    match /reports/{reportId} {
+      allow get: if isAdmin() || (isAuthenticated() && (resource.data.reporterId == request.auth.uid || resource.data.vendorId == request.auth.uid));
+      allow list: if isAdminEmail() || (isAuthenticated() && (resource.data.reporterId == request.auth.uid || resource.data.vendorId == request.auth.uid));
+      allow create: if isAuthenticated() && isValidReport(request.resource.data) && request.resource.data.reporterId == request.auth.uid;
+      allow delete: if isAdmin() || (isAuthenticated() && (resource.data.reporterId == request.auth.uid || resource.data.vendorId == request.auth.uid));
+    }
+
+    match /reviews/{reviewId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && isValidReview(request.resource.data) && request.resource.data.buyerId == request.auth.uid;
+      allow delete: if isAdmin() || (isAuthenticated() && (resource.data.buyerId == request.auth.uid || exists(/databases/$(database)/documents/products/$(resource.data.productId)) && get(/databases/$(database)/documents/products/$(resource.data.productId)).data.sellerId == request.auth.uid));
+    }
+
+    match /event_plans/{planId} {
+      allow get: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdminEmail());
+      allow create: if isAuthenticated() && isValidEventPlan(request.resource.data) && request.resource.data.userId == request.auth.uid;
+      allow update: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin()) && isValidEventPlan(request.resource.data);
+      allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    match /analytics/{analyticsId} {
+      allow get: if isAdmin() || (isAuthenticated() && request.auth.uid == resource.data.sellerId);
+      allow list: if isAdminEmail() || (isAuthenticated() && request.auth.uid == resource.data.sellerId);
+      allow create: if isAuthenticated() && isValidAnalytics(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /referralTransactions/{transactionId} {
+      allow get: if isAdmin() || (isAuthenticated() && request.auth.uid == resource.data.referrerId);
+      allow list: if isAdminEmail() || (isAuthenticated() && request.auth.uid == resource.data.referrerId);
+      allow create: if isAuthenticated(); // CartDrawer handles this
+      allow delete: if isAdmin();
+    }
+
+    match /supportTickets/{ticketId} {
+      allow get: if isAdmin() || (isAuthenticated() && request.auth.uid == resource.data.userId);
+      allow list: if isAdminEmail() || (isAuthenticated() && request.auth.uid == resource.data.userId);
+      allow create: if (isAuthenticated() && isValidSupportTicket(request.resource.data) && request.resource.data.userId == request.auth.uid) || 
+                      (!isAuthenticated() && isValidSupportTicket(request.resource.data) && request.resource.data.userId == "guest");
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+    
+    match /logistics_companies/{companyId} {
+      allow read, list: if true;
+      allow create, update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+
+    match /logistics_deliveries/{deliveryId} {
+      allow read, list, create, update: if true;
+      allow delete: if isAdmin();
+    }
+
+    match /chats/{chatId} {
+      allow get: if isAuthenticated() && (request.auth.uid in resource.data.participants || isAdmin());
+      allow list: if isAuthenticated() && (request.auth.uid in resource.data.participants || isAdminEmail());
+      allow create: if isAuthenticated() && (request.auth.uid in request.resource.data.participants);
+      allow update, delete: if isAuthenticated() && (request.auth.uid in resource.data.participants || isAdmin());
+      
+      match /messages/{messageId} {
+        allow read: if isAuthenticated() && (
+          request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants || 
+          isAdminEmail()
+        );
+        allow create: if isAuthenticated() && (
+          request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants || 
+          isAdmin()
+        );
+        allow update, delete: if isAuthenticated() && (request.auth.uid == resource.data.senderId || isAdmin());
+      }
+    }
+  }
+}

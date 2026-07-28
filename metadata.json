@@ -1,0 +1,8 @@
+{
+  "name": "SHOPIVERSITY",
+  "description": "A modern, clean, and mobile-first student multi-vendor e-commerce platform. The marketplace at your fingertips.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

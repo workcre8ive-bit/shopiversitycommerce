@@ -1,0 +1,412 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "username": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "phoneNumber": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["buyer", "seller", "admin", "both"] },
+        "activeRole": { "type": "string", "enum": ["buyer", "seller"] },
+        "referralCode": { "type": "string" },
+        "referredBy": { "type": "string" },
+        "referralEarnings": { "type": "number" },
+        "referralCount": { "type": "number" },
+        "campus": { "type": "string" },
+        "verificationIdUrl": { "type": "string" },
+        "isVerified": { "type": "boolean" },
+        "isSuspended": { "type": "boolean" },
+        "reportCount": { "type": "number" },
+        "strikeCount": { "type": "number" },
+        "lastStrikeAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "location": { "type": "string" },
+        "country": { "type": "string" },
+        "state": { "type": "string" },
+        "city": { "type": "string" },
+        "deliveryAddress": { "type": "string" },
+        "hibernatedUntil": { "type": "string", "format": "date-time" },
+        "bankDetails": {
+          "type": "object",
+          "properties": {
+            "bankName": { "type": "string" },
+            "accountNumber": { "type": "string" },
+            "accountName": { "type": "string" }
+          }
+        },
+        "paystackConnected": { "type": "boolean" }
+      },
+      "required": ["uid", "displayName", "username", "email", "phoneNumber", "role", "isVerified", "isSuspended", "reportCount", "createdAt"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "A product listed for sale",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "price": { "type": "number" },
+        "category": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "imageUrls": { "type": "array", "items": { "type": "string" } },
+        "sellerId": { "type": "string" },
+        "sellerName": { "type": "string" },
+        "sellerVerified": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "stock": { "type": "number" },
+        "condition": { "type": "string", "enum": ["new", "refurbished", "used"] },
+        "deliveryOptions": {
+          "type": "object",
+          "properties": {
+            "delivery": { "type": "boolean" },
+            "pickup": { "type": "boolean" }
+          }
+        },
+        "type": { "type": "string", "enum": ["good", "service"] },
+        "pricingType": { "type": "string", "enum": ["fixed", "hourly", "project", "daily"] },
+        "isDeleted": { "type": "boolean" },
+        "deletedAt": { "type": "string", "format": "date-time" },
+        "location": { "type": "string" },
+        "menuItems": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "price": { "type": "number" },
+              "imageUrl": { "type": "string" }
+            }
+          }
+        },
+        "eventDetails": {
+          "type": "object",
+          "properties": {
+            "eventType": { "type": "string" },
+            "ticketTiers": {
+              "type": "array",
+              "items": { "type": "object" }
+            },
+            "formFields": {
+              "type": "array",
+              "items": { "type": "object" }
+            }
+          }
+        }
+      },
+      "required": ["name", "price", "sellerId", "category"]
+    },
+    "Analytics": {
+      "title": "Analytics",
+      "description": "Product interaction analytics",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string" },
+        "sellerId": { "type": "string" },
+        "type": { "type": "string", "enum": ["view", "cart", "purchase"] },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["productId", "sellerId", "type", "timestamp"]
+    },
+    "EventPlan": {
+      "title": "EventPlan",
+      "description": "User event planning data",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "budget": { "type": "number" },
+        "checklist": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" },
+              "completed": { "type": "boolean" }
+            }
+          }
+        },
+        "guests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "status": { "type": "string", "enum": ["invited", "attending", "declined"] }
+            }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "eventType": { "type": "string" },
+        "isPaid": { "type": "boolean" },
+        "ticketTiers": { "type": "array", "items": { "type": "object" } },
+        "formFields": { "type": "array", "items": { "type": "object" } },
+        "isPublicListing": { "type": "boolean" },
+        "listingId": { "type": "string" }
+      },
+      "required": ["userId", "title", "date", "createdAt"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "A purchase order",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "buyerId": { "type": "string" },
+        "buyerName": { "type": "string" },
+        "buyerPhone": { "type": "string" },
+        "sellerId": { "type": "string" },
+        "productId": { "type": "string" },
+        "productName": { "type": "string" },
+        "quantity": { "type": "number" },
+        "totalPrice": { "type": "number" },
+        "commissionAmount": { "type": "number" },
+        "referralCommissionAmount": { "type": "number" },
+        "sellerEarnings": { "type": "number" },
+        "deliveryType": { "type": "string", "enum": ["delivery", "pickup"] },
+        "paymentMethod": { "type": "string", "enum": ["online", "pod"] },
+        "paymentStatus": { "type": "string", "enum": ["pending", "paid", "failed"] },
+        "escrowStatus": { "type": "string", "enum": ["held", "released", "refunded"] },
+        "disputeStatus": { "type": "string", "enum": ["none", "active", "resolved", "rejected"] },
+        "status": { "type": "string", "enum": ["pending", "accepted", "out_for_delivery", "delivered", "cancelled"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "acceptedAt": { "type": "string", "format": "date-time" },
+        "deliveredAt": { "type": "string", "format": "date-time" },
+        "disputedAt": { "type": "string", "format": "date-time" },
+        "deliveryDeadline": { "type": "string", "format": "date-time" },
+        "sellerProofUrl": { "type": "string" },
+        "sellerProofAt": { "type": "string", "format": "date-time" },
+        "hiddenFromHistory": { "type": "boolean" },
+        "hiddenFromSeller": { "type": "boolean" },
+        "deliveryAddress": { "type": "string" },
+        "ticketTierId": { "type": "string" },
+        "ticketTierName": { "type": "string" },
+        "formResponses": { "type": "object" },
+        "logisticsOfferStatus": { "type": "string" },
+        "deliveredWorkNotes": { "type": "string" },
+        "confirmOrderPressed": { "type": "boolean" }
+      },
+      "required": ["buyerId", "buyerName", "buyerPhone", "sellerId", "productId", "quantity", "totalPrice", "deliveryType", "paymentMethod", "status"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "User notification",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string", "enum": ["order", "account", "system", "payout", "stock", "cart", "welcome", "profile", "review", "logistics", "moderation", "referral"] },
+        "isRead": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "title", "message", "type", "isRead", "createdAt"]
+    },
+    "Report": {
+      "title": "Report",
+      "description": "Vendor report",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "reporterId": { "type": "string" },
+        "vendorId": { "type": "string" },
+        "reason": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["reporterId", "vendorId", "reason", "createdAt"]
+    },
+    "Review": {
+      "title": "Review",
+      "description": "Product review",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "productId": { "type": "string" },
+        "buyerId": { "type": "string" },
+        "buyerName": { "type": "string" },
+        "rating": { "type": "number" },
+        "comment": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["productId", "buyerId", "buyerName", "rating", "comment", "createdAt"]
+    },
+    "ProductHistory": {
+      "title": "ProductHistory",
+      "description": "User product view history",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "productId": { "type": "string" },
+        "productName": { "type": "string" },
+        "productPrice": { "type": "number" },
+        "productImageUrl": { "type": "string" },
+        "viewedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "productId", "productName", "productPrice", "viewedAt"]
+    },
+    "PayoutRequest": {
+      "title": "PayoutRequest",
+      "description": "Seller payout request",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "sellerId": { "type": "string" },
+        "amount": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected", "paid"] },
+        "bankDetails": {
+          "type": "object",
+          "properties": {
+            "bankName": { "type": "string" },
+            "accountNumber": { "type": "string" },
+            "accountName": { "type": "string" }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "processedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["sellerId", "amount", "status", "bankDetails", "createdAt"]
+    },
+    "ReferralTransaction": {
+      "title": "ReferralTransaction",
+      "description": "Record of a referral commission earned",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "referrerId": { "type": "string" },
+        "referredUserId": { "type": "string" },
+        "orderId": { "type": "string" },
+        "amount": { "type": "number" },
+        "platformCommission": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["referrerId", "referredUserId", "orderId", "amount", "platformCommission", "createdAt"]
+    },
+    "Chat": {
+      "title": "Chat",
+      "description": "A chat conversation between buyer and seller",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "participants": { "type": "array", "items": { "type": "string" } },
+        "participantDetails": {
+          "type": "object",
+          "properties": {
+            "buyer": { "type": "object" },
+            "seller": { "type": "object" }
+          }
+        },
+        "lastMessage": { "type": "string" },
+        "lastMessageAt": { "type": "string", "format": "date-time" },
+        "productId": { "type": "string" },
+        "productName": { "type": "string" },
+        "productImageUrl": { "type": "string" },
+        "buyerId": { "type": "string" },
+        "sellerId": { "type": "string" },
+        "unreadCount": { "type": "object" }
+      },
+      "required": ["participants", "buyerId", "sellerId"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "A single chat message",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "chatId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "text": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "isRead": { "type": "boolean" }
+      },
+      "required": ["chatId", "senderId", "text", "createdAt"]
+    },
+    "SupportTicket": {
+      "title": "SupportTicket",
+      "description": "A customer support request",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "userName": { "type": "string" },
+        "category": { "type": "string" },
+        "subject": { "type": "string" },
+        "message": { "type": "string" },
+        "status": { "type": "string", "enum": ["open", "in_progress", "resolved", "closed"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "userEmail", "category", "subject", "message", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Products for sale"
+    },
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Purchase orders"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "User notifications"
+    },
+    "/reports/{reportId}": {
+      "schema": "Report",
+      "description": "Vendor reports"
+    },
+    "/reviews/{reviewId}": {
+      "schema": "Review",
+      "description": "Product reviews"
+    },
+    "/product_history/{historyId}": {
+      "schema": "ProductHistory",
+      "description": "User product history"
+    },
+    "/payoutRequests/{requestId}": {
+      "schema": "PayoutRequest",
+      "description": "Seller payout requests"
+    },
+    "/event_plans/{planId}": {
+      "schema": "EventPlan",
+      "description": "User event plans"
+    },
+    "/analytics/{analyticsId}": {
+      "schema": "Analytics",
+      "description": "Product analytics"
+    },
+    "/referralTransactions/{transactionId}": {
+      "schema": "ReferralTransaction",
+      "description": "Referral earnings records"
+    },
+    "/supportTickets/{ticketId}": {
+      "schema": "SupportTicket",
+      "description": "Support tickets"
+    },
+    "/chats/{chatId}": {
+      "schema": "Chat",
+      "description": "Chat conversations"
+    },
+    "/chats/{chatId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Chat messages"
+    }
+  }
+}
