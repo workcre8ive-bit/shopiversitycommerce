@@ -1042,9 +1042,9 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
           <div className="space-y-2">
             <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">Gender</label>
             <div className="grid grid-cols-3 gap-2">
-              {["male", "female", "other"].map((g) => (
+              {["male", "female", "other"].map((g, gIdx) => (
                 <button
-                  key={g}
+                  key={`gender-${g}-${gIdx}`}
                   type="button"
                   onClick={() => setGender(g as any)}
                   className={cn(
@@ -1069,8 +1069,8 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                   onChange={(e) => setPhonePrefix(e.target.value)}
                   className="w-24 h-14 px-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 outline-none transition-all text-slate-900 dark:text-white text-xs font-bold"
                 >
-                  {PHONE_PREFIXES.map(p => (
-                    <option key={p.code} value={p.code} className="bg-white dark:bg-slate-900">{p.code} ({p.country})</option>
+                  {PHONE_PREFIXES.map((p, pIdx) => (
+                    <option key={`phone-prefix-${p.code}-${pIdx}`} value={p.code} className="bg-white dark:bg-slate-900">{p.code} ({p.country})</option>
                   ))}
                 </select>
                 <div className="relative flex-1">

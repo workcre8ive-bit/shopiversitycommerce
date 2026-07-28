@@ -1132,8 +1132,8 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {availableJobs.map((job) => (
-                        <div key={job.id} className="bg-white dark:bg-zinc-900 border border-slate-200/60 dark:border-zinc-800/60 p-6 rounded-[2rem] shadow-sm hover:shadow-md transition-all flex flex-col justify-between">
+                      {availableJobs.map((job, jIdx) => (
+                        <div key={`avail-job-${job.id || jIdx}-${jIdx}`} className="bg-white dark:bg-zinc-900 border border-slate-200/60 dark:border-zinc-800/60 p-6 rounded-[2rem] shadow-sm hover:shadow-md transition-all flex flex-col justify-between">
                           <div className="space-y-4">
                             <div className="flex items-start justify-between gap-4 border-b border-slate-50 dark:border-zinc-850 pb-3">
                               <div className="space-y-0.5">
@@ -1228,8 +1228,8 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      {activeDeliveries.map((job) => (
-                        <div key={job.id} className="bg-white dark:bg-zinc-900 border border-slate-200/60 dark:border-zinc-800/60 p-6 rounded-[2.5rem] shadow-sm space-y-6">
+                      {activeDeliveries.map((job, aIdx) => (
+                        <div key={`active-job-${job.id || aIdx}-${aIdx}`} className="bg-white dark:bg-zinc-900 border border-slate-200/60 dark:border-zinc-800/60 p-6 rounded-[2.5rem] shadow-sm space-y-6">
                           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-zinc-850 pb-4">
                             <div>
                               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-500/10 text-amber-500 rounded-full text-[10px] font-black uppercase tracking-wider mb-2">
@@ -1339,8 +1339,8 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-50 dark:divide-zinc-850">
-                              {deliveryHistory.map((job) => (
-                                <tr key={job.id} className="text-xs hover:bg-slate-50/50 dark:hover:bg-zinc-850/30 transition-colors">
+                              {deliveryHistory.map((job, hIdx) => (
+                                <tr key={`hist-job-${job.id || hIdx}-${hIdx}`} className="text-xs hover:bg-slate-50/50 dark:hover:bg-zinc-850/30 transition-colors">
                                   <td className="px-6 py-4">
                                     <p className="font-bold text-slate-800 dark:text-zinc-100">{job.productName}</p>
                                     <p className="text-[10px] text-slate-400 font-medium">Order: #{job.orderId.slice(-6).toUpperCase()}</p>
