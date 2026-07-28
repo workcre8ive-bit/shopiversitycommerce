@@ -1191,7 +1191,7 @@ export default function App() {
 
                     {/* Moving Carousel Hero */}
                     <div className="px-4 lg:px-8 pt-4 max-w-[1600px] mx-auto animate-in fade-in slide-in-from-top-4 duration-300">
-                      <div className="relative h-[250px] sm:h-[320px] md:h-[380px] lg:h-[460px] rounded-3xl overflow-hidden group shadow-sm border border-slate-100 dark:border-zinc-800/60">
+                      <div className="relative h-[280px] sm:h-[340px] md:h-[400px] lg:h-[460px] rounded-3xl overflow-hidden group shadow-sm border border-slate-100 dark:border-zinc-800/60">
                         <Carousel 
                           onShopNow={() => {
                             if (currentUser) {

@@ -347,20 +347,20 @@ export default function HeroCarousel({ onShopNow, onStartSelling, currentUser }:
       </div>
 
       {/* Hero Content Area */}
-      <div className="absolute inset-0 flex flex-col md:flex-row md:items-center justify-between px-6 sm:px-12 lg:px-16 z-20 pb-10 pt-6 gap-6">
+      <div className="absolute inset-0 flex flex-col md:flex-row md:items-center justify-between px-4 sm:px-12 lg:px-16 z-20 pb-8 sm:pb-10 pt-4 sm:pt-6 gap-3 sm:gap-6">
         
         {/* Left Side: Typewriter Text details */}
-        <div className="flex-1 max-w-2xl space-y-4 text-left self-center">
+        <div className="flex-1 max-w-2xl space-y-2 sm:space-y-4 text-left self-center">
           
           {/* Dynamic Badge */}
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-orange-500/10 border border-orange-500/25 rounded-full text-[10px] font-black uppercase tracking-widest text-[#ff6b00] shadow-sm animate-pulse">
-            <Sparkles className="w-3 h-3 text-[#ff6b00]" />
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 sm:px-3 sm:py-1 bg-orange-500/10 border border-orange-500/25 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest text-[#ff6b00] shadow-sm animate-pulse">
+            <Sparkles className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-[#ff6b00]" />
             <span>{currentSlide.badge}</span>
           </div>
 
           {/* Typing sentence area */}
-          <div className="min-h-[100px] sm:min-h-[120px] md:min-h-[140px] flex items-center">
-            <h1 className="text-lg sm:text-2xl md:text-3xl lg:text-4xl font-extrabold text-white leading-snug tracking-tight font-sans drop-shadow-[0_2.5px_2.5px_rgba(0,0,0,0.85)]">
+          <div className="min-h-[50px] sm:min-h-[90px] md:min-h-[130px] flex items-center">
+            <h1 className="text-sm sm:text-2xl md:text-3xl lg:text-4xl font-extrabold text-white leading-snug tracking-tight font-sans drop-shadow-[0_2.5px_2.5px_rgba(0,0,0,0.85)]">
               <span className="text-white/95">{prefixTyped}</span>
               {highlightTyped && (
                 <span className="text-[#ff6b00] drop-shadow-[0_2px_12px_rgba(255,107,0,0.3)] mx-1 font-black">
@@ -373,17 +373,17 @@ export default function HeroCarousel({ onShopNow, onStartSelling, currentUser }:
           </div>
 
           {/* Supportive description */}
-          <p className="text-xs sm:text-sm text-slate-100 font-semibold max-w-lg leading-relaxed line-clamp-2 md:line-clamp-none drop-shadow-[0_1.5px_1.5px_rgba(0,0,0,0.85)]">
+          <p className="text-[11px] sm:text-xs md:text-sm text-slate-100 font-semibold max-w-lg leading-snug sm:leading-relaxed line-clamp-2 drop-shadow-[0_1.5px_1.5px_rgba(0,0,0,0.85)]">
             {currentSlide.subtext}
           </p>
 
           {/* Actions CTAs */}
-          <div className="flex flex-row items-center gap-3 pt-3">
+          <div className="flex flex-row items-center gap-2.5 pt-1.5 sm:pt-3">
             <motion.button 
               whileHover={{ scale: 1.03 }}
               whileTap={{ scale: 0.97 }}
               onClick={onShopNow}
-              className="px-5 py-2.5 sm:px-6 sm:py-3 bg-[#ff6b00] hover:bg-[#e05e00] text-white rounded-xl font-black tracking-wider transition-all text-[11px] sm:text-xs uppercase cursor-pointer flex items-center gap-1.5 border-none outline-none shadow-lg shadow-orange-500/15"
+              className="px-4 py-2 sm:px-6 sm:py-3 bg-[#ff6b00] hover:bg-[#e05e00] text-white rounded-xl font-black tracking-wider transition-all text-[10px] sm:text-xs uppercase cursor-pointer flex items-center gap-1.5 border-none outline-none shadow-lg shadow-orange-500/15 shrink-0"
             >
               <span>Explore Deals</span>
               <ShoppingBag className="w-3.5 h-3.5 text-white" />
@@ -393,7 +393,7 @@ export default function HeroCarousel({ onShopNow, onStartSelling, currentUser }:
               whileHover={{ scale: 1.03 }}
               whileTap={{ scale: 0.97 }}
               onClick={onStartSelling}
-              className="px-5 py-2.5 sm:px-6 sm:py-3 bg-white/10 text-white hover:bg-white/15 border border-white/20 rounded-xl font-black tracking-wider transition-all text-[11px] sm:text-xs uppercase cursor-pointer flex items-center gap-1.5 outline-none"
+              className="px-4 py-2 sm:px-6 sm:py-3 bg-white/10 text-white hover:bg-white/15 border border-white/20 rounded-xl font-black tracking-wider transition-all text-[10px] sm:text-xs uppercase cursor-pointer flex items-center gap-1.5 outline-none shrink-0"
             >
               Start Selling
             </motion.button>
@@ -415,6 +415,40 @@ export default function HeroCarousel({ onShopNow, onStartSelling, currentUser }:
             </motion.div>
           </AnimatePresence>
         </div>
+      </div>
+
+      {/* Prev / Next Navigation Chevron Buttons */}
+      <button 
+        onClick={handlePrev}
+        aria-label="Previous Slide"
+        className="absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 z-30 w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-black/40 hover:bg-black/70 backdrop-blur-md text-white flex items-center justify-center border border-white/20 shadow-md transition-all active:scale-95 cursor-pointer"
+      >
+        <ChevronLeft className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
+      </button>
+
+      <button 
+        onClick={handleNext}
+        aria-label="Next Slide"
+        className="absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 z-30 w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-black/40 hover:bg-black/70 backdrop-blur-md text-white flex items-center justify-center border border-white/20 shadow-md transition-all active:scale-95 cursor-pointer"
+      >
+        <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
+      </button>
+
+      {/* Slide Indicator Dots */}
+      <div className="absolute bottom-2.5 sm:bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-black/30 backdrop-blur-md px-3 py-1 rounded-full border border-white/10">
+        {slides.map((slide, idx) => (
+          <button
+            key={`hero-dot-${slide.id}-${idx}`}
+            onClick={() => handleJumpToSlide(idx)}
+            aria-label={`Go to slide ${idx + 1}`}
+            className={cn(
+              "h-1.5 rounded-full transition-all cursor-pointer",
+              idx === slideIndex 
+                ? "w-5 sm:w-6 bg-[#ff6b00]" 
+                : "w-1.5 bg-white/40 hover:bg-white/70"
+            )}
+          />
+        ))}
       </div>
     </div>
   );
