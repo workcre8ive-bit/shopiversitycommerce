@@ -4,7 +4,7 @@ import { X, ArrowLeft, Star, ShoppingCart, Truck, MapPin, Send, MessageSquare, C
 import { motion, AnimatePresence } from "motion/react";
 import { auth, db } from "../firebase";
 import { collection, query, where, orderBy, onSnapshot, addDoc, doc, getDoc, setDoc, getDocs, updateDoc, deleteDoc } from "firebase/firestore";
-import { usePaystackPayment } from "react-paystack";
+import { usePaystackPayment } from "../hooks/usePaystackPayment";
 import { APIProvider, Map as GoogleMap, AdvancedMarker, Pin } from '@vis.gl/react-google-maps';
 
 const GOOGLE_MAPS_API_KEY =

@@ -6,7 +6,7 @@ import { auth, db } from "../firebase";
 import { collection, addDoc, doc, updateDoc, getDoc, query, where, getDocs, setDoc } from "firebase/firestore";
 import { cn } from "../lib/utils";
 import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
-import { usePaystackPayment } from "react-paystack";
+import { usePaystackPayment } from "../hooks/usePaystackPayment";
 
 interface CartDrawerProps {
   isOpen: boolean;

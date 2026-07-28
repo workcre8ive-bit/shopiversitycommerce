@@ -26,7 +26,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/utils";
 import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
-import { usePaystackPayment } from "react-paystack";
+import { usePaystackPayment } from "../hooks/usePaystackPayment";
 import ReceiptModal from "./ReceiptModal";
 import LiveRiderTrackingModal from "./LiveRiderTrackingModal";
 import { Star, MessageSquare, AlertTriangle, ExternalLink as ExternalLinkIcon } from "lucide-react";
