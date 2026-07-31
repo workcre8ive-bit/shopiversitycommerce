@@ -103,7 +103,7 @@ function BeautifulDropdown<T extends string>({
               exit={{ opacity: 0, y: 4, scale: 0.95 }}
               transition={{ duration: 0.15 }}
               className={cn(
-                "absolute mt-2 w-56 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl z-40 p-1.5 space-y-0.5 overflow-hidden",
+                "absolute top-full mt-2 w-56 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl z-50 p-1.5 space-y-0.5 overflow-hidden",
                 align === 'right' ? "right-0" : "left-0"
               )}
             >
@@ -505,14 +505,18 @@ export default function SalesAnalytics({
       `"${order.status || 'pending'}"`
     ]);
 
-    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
-    const encodedUri = encodeURI(csvContent);
+    const csvString = [headers.join(","), ...rows.map(e => e.join(","))].join("\r\n");
+    // UTF-8 BOM (\uFEFF) ensures Excel, Google Sheets, Apple Numbers & CSV readers open cleanly without corruption
+    const blob = new Blob(["\uFEFF" + csvString], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
+    link.setAttribute("href", url);
     link.setAttribute("download", `CampusMarket_SalesReport_${period}_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
     setIsExportMenuOpen(false);
   };
 
@@ -720,7 +724,7 @@ export default function SalesAnalytics({
                       animate={{ opacity: 1, y: 0, scale: 1 }}
                       exit={{ opacity: 0, y: 4, scale: 0.95 }}
                       transition={{ duration: 0.15 }}
-                      className="absolute right-0 mt-2 w-60 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl z-40 p-2 space-y-1 overflow-hidden"
+                      className="absolute top-full right-0 mt-2 w-60 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl z-50 p-2 space-y-1 overflow-hidden"
                     >
                       <div className="px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-slate-400 dark:text-slate-500 border-b border-slate-100 dark:border-slate-800">
                         Export Sales Records
