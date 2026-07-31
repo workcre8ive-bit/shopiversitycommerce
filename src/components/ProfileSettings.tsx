@@ -1070,7 +1070,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                   className="w-24 h-14 px-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 outline-none transition-all text-slate-900 dark:text-white text-xs font-bold"
                 >
                   {PHONE_PREFIXES.map((p, pIdx) => (
-                    <option key={`phone-prefix-${p.code}-${pIdx}`} value={p.code} className="bg-white dark:bg-slate-900">{p.code} ({p.country})</option>
+                    <option key={`phone-prefix-${p.code}-${pIdx}`} value={p.code} className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">{p.code} ({p.country})</option>
                   ))}
                 </select>
                 <div className="relative flex-1">
@@ -1789,13 +1789,13 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                 onChange={(e) => setHibernateDuration(e.target.value)}
                 className="flex-1 h-12 px-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-bold outline-none focus:border-blue-500 transition-all text-slate-900 dark:text-white"
               >
-                <option value="0" className="bg-white dark:bg-slate-900">Select Duration</option>
-                <option value="1d" className="bg-white dark:bg-slate-900">1 Day</option>
-                <option value="3d" className="bg-white dark:bg-slate-900">3 Days</option>
-                <option value="1w" className="bg-white dark:bg-slate-900">1 Week</option>
-                <option value="2w" className="bg-white dark:bg-slate-900">2 Weeks</option>
-                <option value="1m" className="bg-white dark:bg-slate-900">1 Month</option>
-                <option value="3m" className="bg-white dark:bg-slate-900">3 Months</option>
+                <option value="0" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">Select Duration</option>
+                <option value="1d" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">1 Day</option>
+                <option value="3d" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">3 Days</option>
+                <option value="1w" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">1 Week</option>
+                <option value="2w" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">2 Weeks</option>
+                <option value="1m" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">1 Month</option>
+                <option value="3m" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">3 Months</option>
               </select>
               <button
                 onClick={() => setShowHibernateConfirm(true)}

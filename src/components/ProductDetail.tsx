@@ -1407,9 +1407,9 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                                   onChange={(e) => setFormResponses({ ...formResponses, [field.id]: e.target.value })}
                                   className="w-full h-12 px-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900 dark:text-white"
                                 >
-                                  <option value="">Select an option</option>
+                                  <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="">Select an option</option>
                                   {field.options?.map((opt: string, optIdx: number) => (
-                                    <option key={`${opt}-${optIdx}`} value={opt}>{opt}</option>
+                                    <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" key={`${opt}-${optIdx}`} value={opt}>{opt}</option>
                                   ))}
                                 </select>
                               ) : (
@@ -1655,9 +1655,9 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                                       onChange={(e) => setServiceDoneInputs(prev => ({...prev, learningMode: e.target.value}))}
                                       className="w-full text-xs p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 outline-none focus:border-indigo-500 text-slate-900 dark:text-white font-sans"
                                     >
-                                      <option value="">Select learning mode</option>
-                                      <option value="In-person (On Campus)">In-person (On Campus)</option>
-                                      <option value="Online (Zoom / GMeet)">Online (Zoom / GMeet)</option>
+                                      <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="">Select learning mode</option>
+                                      <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="In-person (On Campus)">In-person (On Campus)</option>
+                                      <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="Online (Zoom / GMeet)">Online (Zoom / GMeet)</option>
                                     </select>
                                   </div>
                                   <div className="space-y-1">
@@ -1705,11 +1705,11 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                                       onChange={(e) => setServiceDoneInputs(prev => ({...prev, requiredFormat: e.target.value}))}
                                       className="w-full text-xs p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 outline-none focus:border-indigo-500 text-slate-900 dark:text-white font-sans"
                                     >
-                                      <option value="">Select preferred files format</option>
-                                      <option value="Final Output Files Only (PNG/JPG/PDF)">Final Output Files Only (PNG/JPG/PDF)</option>
-                                      <option value="Source Code / Live Website Link">Source Code / Live Website Link</option>
-                                      <option value="Raw Media / Videos (.MP4 / HighRes RAW)">Raw Media / Videos (.MP4 / HighRes RAW)</option>
-                                      <option value="Complete Design Assets Bundle (with Source .AI/.PSD)">Complete Design Assets Bundle (with Source .AI/.PSD)</option>
+                                      <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="">Select preferred files format</option>
+                                      <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="Final Output Files Only (PNG/JPG/PDF)">Final Output Files Only (PNG/JPG/PDF)</option>
+                                      <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="Source Code / Live Website Link">Source Code / Live Website Link</option>
+                                      <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="Raw Media / Videos (.MP4 / HighRes RAW)">Raw Media / Videos (.MP4 / HighRes RAW)</option>
+                                      <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="Complete Design Assets Bundle (with Source .AI/.PSD)">Complete Design Assets Bundle (with Source .AI/.PSD)</option>
                                     </select>
                                   </div>
                                   <div className="space-y-1">

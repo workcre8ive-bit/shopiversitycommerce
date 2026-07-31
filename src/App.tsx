@@ -1240,20 +1240,20 @@ export default function App() {
                           onChange={(e) => setFilterCondition(e.target.value)}
                           className="h-9 px-3 bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-700 rounded-md text-xs font-medium text-slate-700 dark:text-zinc-300 outline-none focus:border-[#ff6b00] transition-all shadow-sm cursor-pointer"
                         >
-                          <option value="All">All Conditions</option>
-                          <option value="new">Brand New</option>
-                          <option value="used">Gently Used</option>
+                          <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="All">All Conditions</option>
+                          <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="new">Brand New</option>
+                          <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="used">Gently Used</option>
                         </select>
                         <select 
                           value={filterPriceRange}
                           onChange={(e) => setFilterPriceRange(e.target.value)}
                           className="h-9 px-3 bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-700 rounded-md text-xs font-medium text-slate-700 dark:text-zinc-300 outline-none focus:border-amber-500 transition-all shadow-sm cursor-pointer"
                         >
-                          <option value="All">Any Price</option>
-                          <option value="0-5000">Under ₦5,000</option>
-                          <option value="5000-20000">₦5,000 - ₦20,000</option>
-                          <option value="20000-50000">₦20,000 - ₦50,000</option>
-                          <option value="50000">₦50,000 & Above</option>
+                          <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="All">Any Price</option>
+                          <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="0-5000">Under ₦5,000</option>
+                          <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="5000-20000">₦5,000 - ₦20,000</option>
+                          <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="20000-50000">₦20,000 - ₦50,000</option>
+                          <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="50000">₦50,000 & Above</option>
                         </select>
                       </div>
                     </motion.div>

@@ -546,7 +546,7 @@ export default function ReferralDashboard({ user, onBack }: ReferralDashboardPro
                   </button>
 
                   {showBankDropdown && (
-                    <div className="absolute z-20 left-0 right-0 mt-2 p-4 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl shadow-xl space-y-3 max-h-60 overflow-y-auto">
+                    <div className="absolute z-20 left-0 right-0 top-full mt-2 p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl space-y-3 max-h-60 overflow-y-auto">
                       <input
                         type="text"
                         placeholder="Search bank name..."

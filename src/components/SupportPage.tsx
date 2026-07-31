@@ -272,26 +272,26 @@ export default function SupportPage({ user, onBack, mode = "support" }: SupportP
                 }}
                 className="w-full px-5 py-3.5 bg-slate-50 dark:bg-slate-950 rounded-2xl border border-slate-200 dark:border-slate-850 focus:bg-white dark:focus:bg-slate-900 focus:outline-none focus:border-purple-500 transition-all font-bold text-sm text-slate-900 dark:text-white cursor-pointer"
               >
-                <option value="" disabled>-- Select a category --</option>
+                <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="" disabled>-- Select a category --</option>
                 {mode === "support" ? (
                   <>
-                    <option value="Order & Delivery Issue">Order & Delivery Issue</option>
-                    <option value="Escrow Dispute or Refund">Escrow Dispute or Refund</option>
-                    <option value="Payment Receipt / Failure Notice">Payment Receipt / Failure Notice</option>
-                    <option value="Vendor Listing Issue">Vendor Listing Issue</option>
-                    <option value="Student ID Verification Inquiry">Student ID Verification Inquiry</option>
-                    <option value="Report Suspicious Activity / Fraud">Report Suspicious Activity / Fraud</option>
-                    <option value="others">Others (Specify below)</option>
+                    <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="Order & Delivery Issue">Order & Delivery Issue</option>
+                    <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="Escrow Dispute or Refund">Escrow Dispute or Refund</option>
+                    <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="Payment Receipt / Failure Notice">Payment Receipt / Failure Notice</option>
+                    <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="Vendor Listing Issue">Vendor Listing Issue</option>
+                    <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="Student ID Verification Inquiry">Student ID Verification Inquiry</option>
+                    <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="Report Suspicious Activity / Fraud">Report Suspicious Activity / Fraud</option>
+                    <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="others">Others (Specify below)</option>
                   </>
                 ) : (
                   <>
-                    <option value="Feature Suggestion / Enhancement Request">Feature Suggestion / Enhancement Request</option>
-                    <option value="UI/UX Design & Theme Customization">UI/UX Design & Theme Customization</option>
-                    <option value="Payout & Balances Simplification">Payout & Balances Simplification</option>
-                    <option value="Community Events feedback">Community Events Feedback</option>
-                    <option value="Security or Privacy suggestion">Security or Privacy Suggestion</option>
-                    <option value="General Praise / Review">General Praise / Review</option>
-                    <option value="others">Others (Specify below)</option>
+                    <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="Feature Suggestion / Enhancement Request">Feature Suggestion / Enhancement Request</option>
+                    <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="UI/UX Design & Theme Customization">UI/UX Design & Theme Customization</option>
+                    <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="Payout & Balances Simplification">Payout & Balances Simplification</option>
+                    <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="Community Events feedback">Community Events Feedback</option>
+                    <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="Security or Privacy suggestion">Security or Privacy Suggestion</option>
+                    <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="General Praise / Review">General Praise / Review</option>
+                    <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="others">Others (Specify below)</option>
                   </>
                 )}
               </select>

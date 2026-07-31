@@ -1295,12 +1295,12 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
                               onChange={(e) => setPhonePrefix(e.target.value)}
                               className="w-20 h-[34px] px-1.5 bg-slate-50 dark:bg-zinc-900 border border-slate-300 dark:border-zinc-700 rounded text-xs font-semibold text-slate-700 dark:text-zinc-200 focus:border-[#9333ea]"
                             >
-                              <option value="+234">🇳🇬 +234</option>
-                              <option value="+233">🇬🇭 +233</option>
-                              <option value="+254">🇰🇪 +254</option>
-                              <option value="+27">🇿🇦 +27</option>
-                              <option value="+44">🇬🇧 +44</option>
-                              <option value="+1">🇺🇸 +1</option>
+                              <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="+234">🇳🇬 +234</option>
+                              <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="+233">🇬🇭 +233</option>
+                              <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="+254">🇰🇪 +254</option>
+                              <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="+27">🇿🇦 +27</option>
+                              <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="+44">🇬🇧 +44</option>
+                              <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="+1">🇺🇸 +1</option>
                             </select>
                             <input 
                               required

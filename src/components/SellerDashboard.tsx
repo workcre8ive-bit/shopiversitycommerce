@@ -980,9 +980,9 @@ export default function SellerDashboard({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-8 lg:grid-cols-3">
+            <div className="grid grid-cols-1 gap-8">
               {/* Recent Orders Preview */}
-              <div className="lg:col-span-1">
+              <div>
                 <DashboardCard 
                   title="Recent Orders" 
                   count={orders.length}
@@ -1022,7 +1022,7 @@ export default function SellerDashboard({
               </div>
 
               {/* Recent Products Preview */}
-              <div className="lg:col-span-1">
+              <div>
                 <DashboardCard 
                   title="My Listings" 
                   count={products.filter(p => !p.isDeleted).length}
@@ -1061,7 +1061,7 @@ export default function SellerDashboard({
               </div>
 
               {/* Store Alerts & Updates Feed */}
-              <div className="lg:col-span-1">
+              <div>
                 <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-5 sm:p-6 shadow-sm h-full flex flex-col">
                   <div className="flex items-center justify-between mb-6 pb-3 border-b border-slate-100 dark:border-slate-800/60">
                     <div>
@@ -5447,7 +5447,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                         </div>
 
                         {lgaPlacesSuggestions.length > 0 && (
-                          <div className="absolute z-50 left-4 right-4 mt-2 bg-white dark:bg-zinc-900 rounded-xl border border-slate-200 dark:border-zinc-800 shadow-2xl max-h-56 overflow-y-auto divide-y divide-slate-100 dark:divide-zinc-805">
+                          <div className="absolute z-50 left-4 right-4 top-full mt-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-2xl max-h-56 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
                             {lgaPlacesSuggestions.map((item, index) => (
                               <button
                                 key={`lga-place-${index}`}
@@ -5508,7 +5508,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                       </div>
                       
                       {showCampusDropdown && (
-                        <div className="absolute z-50 left-0 right-0 mt-1 bg-white dark:bg-zinc-900 rounded-2xl border border-slate-250 dark:border-zinc-800 shadow-2xl max-h-56 overflow-y-auto divide-y divide-slate-100 dark:divide-zinc-800/80">
+                        <div className="absolute z-50 left-0 right-0 top-full mt-1.5 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl max-h-56 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
                           <button
                             type="button"
                             onMouseDown={() => {
@@ -5574,7 +5574,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
 
                     {/* Autocomplete Suggestions Menu Dropdown */}
                     {addrSuggestions.length > 0 && (
-                      <div className="absolute z-50 left-0 right-0 top-full mt-1.5 bg-white dark:bg-zinc-900 rounded-2xl border border-slate-200 dark:border-zinc-800 shadow-xl max-h-56 overflow-y-auto divide-y divide-slate-100 dark:divide-zinc-800">
+                      <div className="absolute z-50 left-0 right-0 top-full mt-1.5 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl max-h-56 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
                         {addrSuggestions.map((item, index) => (
                           <button
                             key={`addr-suggest-${item.place_id || index}-${index}`}

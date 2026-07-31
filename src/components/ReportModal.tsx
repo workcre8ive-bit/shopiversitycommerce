@@ -104,13 +104,13 @@ export default function ReportModal({ isOpen, onClose, vendorId, vendorName, pro
                       }}
                       className="w-full h-11 px-4 bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded-xl outline-none focus:ring-1 focus:ring-purple-500 text-slate-800 dark:text-zinc-100 font-semibold text-xs cursor-pointer"
                     >
-                      <option value="">Select a reason...</option>
-                      <option value="Inappropriate content / offensive behavior">Inappropriate content / offensive behavior</option>
-                      <option value="Counterfeit, fake, or scam listing">Counterfeit, fake, or scam listing</option>
-                      <option value="Incorrect category grouping">Incorrect category grouping</option>
-                      <option value="Illegal, dangerous or prohibited item">Illegal, dangerous or prohibited item</option>
-                      <option value="Misleading or false description">Misleading or false description</option>
-                      <option value="Other">Other (custom description)...</option>
+                      <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="">Select a reason...</option>
+                      <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="Inappropriate content / offensive behavior">Inappropriate content / offensive behavior</option>
+                      <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="Counterfeit, fake, or scam listing">Counterfeit, fake, or scam listing</option>
+                      <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="Incorrect category grouping">Incorrect category grouping</option>
+                      <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="Illegal, dangerous or prohibited item">Illegal, dangerous or prohibited item</option>
+                      <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="Misleading or false description">Misleading or false description</option>
+                      <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="Other">Other (custom description)...</option>
                     </select>
                   </div>
 

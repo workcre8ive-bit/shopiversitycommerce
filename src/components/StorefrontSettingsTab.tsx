@@ -412,7 +412,7 @@ export default function StorefrontSettingsTab({ user }: StorefrontSettingsTabPro
                 className="w-full h-13 px-5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 focus:bg-white focus:border-orange-500 rounded-2xl text-sm font-bold text-slate-800 dark:text-zinc-200 outline-none cursor-pointer"
               >
                 {PRESET_FONTS.map(font => (
-                  <option key={font.value} value={font.value}>{font.name}</option>
+                  <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" key={font.value} value={font.value}>{font.name}</option>
                 ))}
               </select>
               <div className="p-3 bg-slate-50 dark:bg-slate-850/60 rounded-xl border border-slate-200/50 dark:border-slate-800/60 text-slate-500">
