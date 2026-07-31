@@ -1062,67 +1062,69 @@ export default function SellerDashboard({
 
               {/* Store Alerts & Updates Feed */}
               <div className="lg:col-span-1">
-                <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 p-8 shadow-sm h-full flex flex-col">
-                  <div className="flex items-center justify-between mb-8">
+                <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-5 sm:p-6 shadow-sm h-full flex flex-col">
+                  <div className="flex items-center justify-between mb-6 pb-3 border-b border-slate-100 dark:border-slate-800/60">
                     <div>
-                      <h4 className="text-lg font-bold text-slate-900 dark:text-white">Store Alerts</h4>
+                      <h4 className="text-lg font-bold text-slate-900 dark:text-white leading-none mb-1.5">Store Alerts</h4>
                       <p className="text-[10px] text-slate-400 font-medium">Real-time status updates</p>
                     </div>
                     {notifications.filter(n => !n.isRead).length > 0 ? (
                       <button 
                         onClick={handleMarkAllNotifsRead}
-                        className="text-[10px] font-black text-indigo-600 dark:text-indigo-400 hover:underline uppercase tracking-widest"
+                        className="text-[10px] font-black text-indigo-600 dark:text-indigo-400 hover:underline uppercase tracking-widest cursor-pointer bg-transparent border-none p-0"
                       >
                         Clear ({notifications.filter(n => !n.isRead).length})
                       </button>
                     ) : (
-                      <span className="text-[10px] font-black text-slate-400 bg-slate-50 dark:bg-slate-800 px-3 py-1 rounded-full uppercase tracking-wider">
+                      <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 bg-slate-50 dark:bg-slate-800 px-2.5 py-0.5 rounded-full uppercase tracking-wider">
                         All clear
                       </span>
                     )}
                   </div>
 
-                  <div className="space-y-3 flex-1 overflow-y-auto max-h-[400px] scrollbar-hide">
+                  <div className="space-y-3 flex-1 overflow-y-auto max-h-[400px] scrollbar-hide pr-0.5">
                     {notifications.length === 0 ? (
                       <div className="py-12 text-center text-slate-400 flex flex-col items-center justify-center h-full">
                         <Bell className="w-8 h-8 mb-3 text-slate-200 dark:text-slate-800" />
-                        <span className="text-xs font-semibold text-slate-400">No recent store alerts</span>
+                        <span className="text-xs font-semibold text-slate-400 dark:text-slate-500">No recent store alerts</span>
                       </div>
                     ) : (
                       notifications.map((notif, idx) => {
                         const styleMap: any = {
-                          order: "bg-blue-50 dark:bg-blue-900/10 border-blue-100/50 dark:border-blue-950/50 text-blue-800 dark:text-blue-300",
-                          payout: "bg-emerald-50 dark:bg-emerald-900/10 border-emerald-100/50 dark:border-emerald-950/50 text-emerald-800 dark:text-emerald-300",
-                          welcome: "bg-purple-50 dark:bg-purple-900/10 border-purple-100/50 dark:border-purple-950/50 text-purple-705 dark:text-purple-355",
-                          system: "bg-amber-50 dark:bg-amber-900/10 border-amber-100/50 dark:border-amber-950/50 text-amber-800 dark:text-amber-300",
+                          order: "bg-blue-50 dark:bg-blue-950/60 border-blue-100 dark:border-blue-800/50 text-blue-700 dark:text-blue-300",
+                          payout: "bg-emerald-50 dark:bg-emerald-950/60 border-emerald-100 dark:border-emerald-800/50 text-emerald-700 dark:text-emerald-300",
+                          welcome: "bg-purple-50 dark:bg-purple-950/60 border-purple-100 dark:border-purple-800/50 text-purple-700 dark:text-purple-300",
+                          system: "bg-amber-50 dark:bg-amber-950/60 border-amber-100 dark:border-amber-800/50 text-amber-700 dark:text-amber-300",
                         };
 
                         return (
                           <div 
                             key={`seller-notif-${notif.id || idx}-${idx}`} 
                             className={cn(
-                              "p-4 rounded-3xl border text-left transition-all relative flex flex-col gap-1",
+                              "p-3.5 sm:p-4 rounded-2xl border text-left transition-all relative flex flex-col gap-1.5 min-w-0",
                               notif.isRead 
-                                ? "bg-slate-50/50 dark:bg-slate-800/10 border-slate-100/50 dark:border-slate-800/50 text-slate-500" 
-                                : "bg-white dark:bg-slate-900 border-indigo-100 dark:border-indigo-950/50 shadow-md shadow-indigo-50/30 dark:shadow-none"
+                                ? "bg-slate-50/60 dark:bg-slate-800/30 border-slate-200/60 dark:border-slate-800/60 text-slate-600 dark:text-slate-300" 
+                                : "bg-white dark:bg-slate-850 border-indigo-200 dark:border-indigo-800/60 shadow-sm text-slate-900 dark:text-white"
                             )}
                           >
                             {!notif.isRead && (
-                              <div className="absolute top-4 right-4 w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                              <div className="absolute top-3.5 right-3.5 w-2 h-2 bg-red-500 rounded-full animate-pulse" />
                             )}
-                            <div className="flex items-center gap-1.5 mb-0.5">
-                              <span className={cn("text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded-lg shrink-0", styleMap[notif.type] || "bg-slate-100 text-slate-700")}>
+                            <div className="flex flex-wrap items-center gap-1.5 pr-3">
+                              <span className={cn("text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md shrink-0 border", styleMap[notif.type] || "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700")}>
                                 {notif.type}
                               </span>
-                              <span className={cn("text-xs font-black truncate text-slate-900 dark:text-slate-100", notif.isRead && "opacity-75 font-bold")}>
+                              <span className={cn("text-xs font-black text-slate-900 dark:text-slate-100 leading-tight", notif.isRead && "opacity-80 font-bold")}>
                                 {notif.title}
                               </span>
                             </div>
-                            <p className="text-[10px] leading-relaxed select-none">{notif.message}</p>
+                            <p className="text-[11px] leading-snug font-medium text-slate-600 dark:text-slate-300 select-none break-words">
+                              {notif.message}
+                            </p>
                             {!notif.isRead && (
                               <button 
                                 onClick={() => handleMarkNotifRead(notif.id)}
-                                className="text-[9px] font-black text-indigo-600 dark:text-indigo-400 hover:underline text-left self-start mt-1"
+                                className="text-[9px] font-black text-indigo-600 dark:text-indigo-400 hover:underline text-left self-start mt-0.5 cursor-pointer bg-transparent border-none p-0"
                               >
                                 Mark Read
                               </button>
@@ -1965,11 +1967,11 @@ function StatCard({ label, value, icon: Icon, trend, color }: any) {
 
 function DashboardCard({ title, count, action, children }: any) {
   return (
-    <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800/90 p-8 shadow-[0_2px_12px_rgba(0,0,0,0.03)] dark:shadow-none hover:border-purple-200/50 dark:hover:border-purple-950/25 transition-all">
-      <div className="flex items-center justify-between mb-8 pb-3 border-b border-slate-50 dark:border-slate-800/40">
+    <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-5 sm:p-6 shadow-[0_2px_12px_rgba(0,0,0,0.03)] dark:shadow-none hover:border-purple-200/50 dark:hover:border-purple-950/25 transition-all">
+      <div className="flex items-center justify-between mb-6 pb-3 border-b border-slate-100 dark:border-slate-800/60">
         <div>
           <h4 className="text-lg font-bold text-slate-900 dark:text-white leading-none mb-1.5">{title}</h4>
-          <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 bg-slate-50 dark:bg-slate-800 px-2.5 py-0.5 rounded-full uppercase tracking-wider">
+          <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800/80 px-2.5 py-0.5 rounded-full uppercase tracking-wider">
             {count} Total
           </span>
         </div>
@@ -2226,29 +2228,29 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
 
   return (
     <div className={cn(
-      "flex flex-col p-4 rounded-2xl border border-slate-50 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-800/30 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all gap-4",
+      "flex flex-col p-4 sm:p-5 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-800/30 hover:bg-slate-100/50 dark:hover:bg-slate-800/50 transition-all gap-4 min-w-0",
       full && "p-6"
     )}>
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 min-w-0">
+        <div className="flex items-start gap-3.5 min-w-0 flex-1">
           <div className={cn(
-            "w-12 h-12 rounded-xl flex items-center justify-center",
-            (order.status === "pending" || order.status === "Pending Seller Acceptance") ? "bg-amber-100 dark:bg-amber-900/20 text-amber-600" :
-            effectiveStatus === "completed" || effectiveStatus === "accepted" ? "bg-emerald-100 dark:bg-emerald-900/20 text-emerald-600" : "bg-blue-100 dark:bg-blue-900/20 text-blue-600"
+            "w-11 h-11 rounded-xl flex items-center justify-center shrink-0 mt-0.5",
+            (order.status === "pending" || order.status === "Pending Seller Acceptance") ? "bg-amber-100 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-800/50" :
+            effectiveStatus === "completed" || effectiveStatus === "accepted" ? "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/50" : "bg-blue-100 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800/50"
           )}>
-            <ShoppingBag className="w-6 h-6" />
+            <ShoppingBag className="w-5 h-5" />
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <p className="text-sm font-bold text-slate-900 dark:text-white">{order.productName}</p>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-bold text-slate-900 dark:text-white break-words">{order.productName}</p>
               {order.status === "accepted" && (
-                <span className="flex items-center gap-1 text-[10px] bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 px-2 py-0.5 rounded-full font-bold">
+                <span className="flex items-center gap-1 text-[10px] bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/50 px-2 py-0.5 rounded-full font-bold">
                   <Clock className="w-3 h-3" />
                   {formatRemainingTime(order)}
                 </span>
               )}
             </div>
-            <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
+            <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mt-0.5">
               {order.buyerName} ({order.buyerEmail || "No Email"}) • ₦{order.totalPrice.toLocaleString()} 
               {order.measureType && ` • ${order.measureAmount} ${order.measureType} per unit`}
               {order.sellerEarnings && ` (You get: ₦${order.sellerEarnings.toLocaleString()})`}
@@ -2259,40 +2261,40 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
               </p>
             )}
             {order.formResponses?.target && (
-              <div className="mt-2 text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-100 dark:border-yellow-900/30 px-3 py-1.5 rounded-xl flex items-center gap-1.5 w-max max-w-full">
+              <div className="mt-2 text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800/50 px-3 py-1.5 rounded-xl flex flex-wrap items-center gap-1.5 w-max max-w-full">
                 <span>Target:</span>
                 <span className="font-mono text-slate-900 dark:text-white select-all">{order.formResponses.target}</span>
               </div>
             )}
-            <div className="flex items-center gap-2 mt-1">
+            <div className="flex flex-wrap items-center gap-1.5 mt-2">
               {order.uniqueProductId && (
-                <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-indigo-50 dark:bg-[#6366f1]/10 text-indigo-700 dark:text-[#a5b4fc]">
+                <span className="text-[9px] font-mono font-bold px-2 py-0.5 rounded-md uppercase tracking-wider bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/50 shrink-0">
                   Product ID: {order.uniqueProductId}
                 </span>
               )}
               {order.serialNumber && (
-                <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                <span className="text-[9px] font-mono font-bold px-2 py-0.5 rounded-md uppercase tracking-wider bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200/60 dark:border-slate-700/60 shrink-0">
                   SN: {order.serialNumber}
                 </span>
               )}
               <span className={cn(
-                "text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider",
-                order.deliveryType === "delivery" ? "bg-blue-50 dark:bg-blue-900/20 text-blue-600" : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400"
+                "text-[9px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wider shrink-0 border",
+                order.deliveryType === "delivery" ? "bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border-blue-200/60 dark:border-blue-800/50" : "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200/60 dark:border-slate-700/60"
               )}>
                 {order.deliveryType}
               </span>
               <span className={cn(
-                "text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider",
-                order.paymentMethod === "online" ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600" : 
-                order.paymentMethod === "transfer" ? "bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600" :
-                "bg-amber-50 dark:bg-amber-900/20 text-amber-600"
+                "text-[9px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wider shrink-0 border",
+                order.paymentMethod === "online" ? "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200/60 dark:border-emerald-800/50" : 
+                order.paymentMethod === "transfer" ? "bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border-indigo-200/60 dark:border-indigo-800/50" :
+                "bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-200/60 dark:border-amber-800/50"
               )}>
                 {order.paymentMethod === "online" ? "Paid Online" : 
                  order.paymentMethod === "transfer" ? "Bank Transfer" : "Pay on Delivery"}
               </span>
               {order.escrowStatus === "held" && (
-                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-amber-50 dark:bg-amber-900/20 text-amber-600 flex items-center gap-1">
-                  <ShieldCheck className="w-2 h-2" /> Escrow Held
+                <span className="text-[9px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wider bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/50 flex items-center gap-1 shrink-0">
+                  <ShieldCheck className="w-2.5 h-2.5" /> Escrow Held
                 </span>
               )}
             </div>
@@ -2501,7 +2503,7 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
           </div>
         </div>
         
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 shrink-0 justify-start sm:justify-end">
           {/* Receipt should only be generated after the buyer completes transaction for order/ complete order */}
           {(order.status === "completed" || effectiveStatus === "completed") && (
             <button 
@@ -3030,9 +3032,9 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
 
 function ProductRow({ product, onDelete, onEdit, onRestore, isRestoring, isDeletedView }: any) {
   return (
-    <div className="flex items-center justify-between p-4 rounded-2xl border border-slate-50 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-800/30 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all">
-      <div className="flex items-center gap-4">
-        <div className="w-12 h-12 rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 shrink-0">
+    <div className="flex items-center justify-between p-3.5 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-800/30 hover:bg-slate-100/50 dark:hover:bg-slate-800/50 transition-all gap-3 min-w-0">
+      <div className="flex items-center gap-3 min-w-0 flex-1">
+        <div className="w-11 h-11 rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 shrink-0 border border-slate-200/60 dark:border-slate-700/60">
           <img 
             src={product.imageUrl || `https://picsum.photos/seed/${product.id}/100/100`} 
             alt={product.name}
@@ -3040,19 +3042,27 @@ function ProductRow({ product, onDelete, onEdit, onRestore, isRestoring, isDelet
             referrerPolicy="no-referrer"
           />
         </div>
-        <div>
-          <p className="text-sm font-bold text-slate-900 dark:text-white line-clamp-1">{product.name}</p>
-          <div className="flex items-center gap-2">
-            <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate">{product.name}</p>
+          <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+            <span className="text-xs font-black text-indigo-600 dark:text-indigo-400">
               ₦{product.price.toLocaleString()}
-              {product.type === "service" && product.pricingType && product.pricingType !== "fixed" && ` / ${product.pricingType}`}
-              {product.category === "Food & Drinks" && " (Menu)"}
-              {product.type === "good" && product.category !== "Food & Drinks" && ` • ${product.stock} in stock`}
-            </p>
+            </span>
+            {product.type === "service" && product.pricingType && product.pricingType !== "fixed" && (
+              <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">/ {product.pricingType}</span>
+            )}
+            <span className="text-[9px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md shrink-0">
+              {product.category}
+            </span>
+            {product.type === "good" && product.category !== "Food & Drinks" && (
+              <span className="text-[9px] font-bold text-slate-500 dark:text-slate-400 shrink-0">
+                • {product.stock} in stock
+              </span>
+            )}
           </div>
         </div>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5 shrink-0">
         {isDeletedView ? (
           <div className="flex items-center gap-2">
             <button 
@@ -5903,14 +5913,14 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                         }}
                         className="w-full h-10 px-4 bg-slate-50 dark:bg-slate-850 border border-slate-250 dark:border-zinc-700 rounded-xl text-xs font-bold text-slate-905 dark:text-white outline-none focus:ring-2 focus:ring-purple-500 appearance-none"
                       >
-                        <option value="piece">Per Piece</option>
-                        <option value="spoon">Per Spoon</option>
-                        <option value="plate">Per Plate</option>
-                        <option value="cup">Per Cup</option>
-                        <option value="kg">Per KG</option>
-                        <option value="wrap">Per Wrap</option>
-                        <option value="bottle">Per Bottle</option>
-                        <option value="pack">Per Pack</option>
+                        <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="piece">Per Piece</option>
+                        <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="spoon">Per Spoon</option>
+                        <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="plate">Per Plate</option>
+                        <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="cup">Per Cup</option>
+                        <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="kg">Per KG</option>
+                        <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="wrap">Per Wrap</option>
+                        <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="bottle">Per Bottle</option>
+                        <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="pack">Per Pack</option>
                       </select>
                       <input 
                         type="number"
@@ -6164,12 +6174,12 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                         }}
                         className="w-full h-10 px-4 bg-slate-50 dark:bg-slate-855 border border-slate-250 dark:border-zinc-700 rounded-xl text-xs font-bold text-slate-950 dark:text-white outline-none focus:ring-2 focus:ring-purple-500 appearance-none"
                       >
-                        <option value="style">Per Style</option>
-                        <option value="session">Per Session</option>
-                        <option value="hour">Per Hour</option>
-                        <option value="person">Per Person</option>
-                        <option value="service">Per Service</option>
-                        <option value="package">Per Package</option>
+                        <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="style">Per Style</option>
+                        <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="session">Per Session</option>
+                        <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="hour">Per Hour</option>
+                        <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="person">Per Person</option>
+                        <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="service">Per Service</option>
+                        <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="package">Per Package</option>
                       </select>
                       <input 
                         type="number"
