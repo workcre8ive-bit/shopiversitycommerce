@@ -235,12 +235,19 @@ export default function App() {
   const [viewingSellerId, setViewingSellerId] = React.useState<string | null>(null);
 
   const handleGoBack = React.useCallback(() => {
+    const isSellerUser = activeRole === "seller" || currentUser?.role === "seller";
     if (viewingProduct) {
       setViewingProduct(null);
+      if (isSellerUser) {
+        setActiveTabState("dashboard");
+      }
       return;
     }
     if (viewingSellerId) {
       setViewingSellerId(null);
+      if (isSellerUser) {
+        setActiveTabState("dashboard");
+      }
       return;
     }
     setTabHistory((history) => {
@@ -249,10 +256,10 @@ export default function App() {
         setActiveTabState(prev);
         return history.slice(0, -1);
       }
-      setActiveTabState("market");
+      setActiveTabState(isSellerUser ? "dashboard" : "market");
       return [];
     });
-  }, [viewingProduct, viewingSellerId]);
+  }, [viewingProduct, viewingSellerId, activeRole, currentUser?.role]);
   const [chatWithUserId, setChatWithUserId] = React.useState<string | null>(null);
   const [isCartOpen, setIsCartOpen] = React.useState(false);
   const [notificationView, setNotificationView] = React.useState<"unread" | "read">("unread");
