@@ -136,13 +136,20 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
           </button>
           
           <div className="flex items-center justify-between relative z-10">
-            <div className="w-14 h-14 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center border border-white/30 shadow-xl overflow-hidden">
+            <button
+              onClick={() => {
+                setActiveTab("settings");
+                onClose();
+              }}
+              className="w-14 h-14 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center border border-white/30 shadow-xl overflow-hidden hover:scale-105 active:scale-95 transition-all cursor-pointer border-none outline-none group"
+              title="View Profile Settings"
+            >
               {user?.photoURL ? (
                 <img src={user.photoURL} alt="" className="w-full h-full object-cover" />
               ) : (
                 <User className="w-7 h-7 text-white" />
               )}
-            </div>
+            </button>
             
             <div className="flex items-center gap-2">
               {(user?.role === "both" || user?.role === "seller" || user?.role === "admin") && user?.state !== "Logistics Partner" && (
@@ -159,12 +166,20 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
             </div>
           </div>
           
-          <div className="relative z-10">
-            <p className="text-white/70 text-xs font-bold uppercase tracking-widest">
-              {user?.state === "Logistics Partner" ? "Logistics Partner Account" : (activeRole === "buyer" ? "Shopping Account" : "Seller Account")}
+          <button
+            onClick={() => {
+              setActiveTab("settings");
+              onClose();
+            }}
+            className="relative z-10 text-left hover:opacity-90 transition-opacity cursor-pointer border-none outline-none group"
+            title="View Profile Settings"
+          >
+            <p className="text-white/70 text-xs font-bold uppercase tracking-widest flex items-center gap-1.5">
+              <span>{user?.state === "Logistics Partner" ? "Logistics Partner Account" : (activeRole === "buyer" ? "Shopping Account" : "Seller Account")}</span>
+              <ChevronRight className="w-3.5 h-3.5 text-white/70 group-hover:translate-x-0.5 transition-transform" />
             </p>
-            <h2 className="text-2xl font-black !text-white tracking-tight">Hello, {user?.displayName?.split(' ')[0] || "Sign In"}</h2>
-          </div>
+            <h2 className="text-2xl font-black !text-white tracking-tight group-hover:underline">Hello, {user?.displayName?.split(' ')[0] || "Sign In"}</h2>
+          </button>
         </div>
 
         {/* Navigation */}

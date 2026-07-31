@@ -1040,24 +1040,24 @@ export default function App() {
 
         {/* Dynamic Title for sub-tabs */}
         {activeTab === "settings" && (
-          <span className="text-xs font-bold text-slate-700 dark:text-slate-300 font-sans">
+          <span className="hidden sm:inline-block text-xs font-bold text-slate-700 dark:text-slate-300 font-sans truncate max-w-[120px] sm:max-w-none">
             {settingsSubView === "edit" ? "Edit Profile" : "My Profile"}
           </span>
         )}
         {activeTab === "referrals" && (
-          <span className="text-xs font-bold text-slate-700 dark:text-slate-300 font-sans">Referral Network</span>
+          <span className="hidden sm:inline-block text-xs font-bold text-slate-700 dark:text-slate-300 font-sans">Referral Network</span>
         )}
         {activeTab === "orders" && (
-          <span className="text-xs font-bold text-slate-700 dark:text-slate-300 font-sans">
+          <span className="hidden sm:inline-block text-xs font-bold text-slate-700 dark:text-slate-300 font-sans">
             {activeRole === "seller" ? "Sales Orders" : "My Orders"}
           </span>
         )}
         {activeTab === "messages" && (
-          <span className="text-xs font-bold text-slate-700 dark:text-slate-300 font-sans">Inbox Chats</span>
+          <span className="hidden sm:inline-block text-xs font-bold text-slate-700 dark:text-slate-300 font-sans">Inbox Chats</span>
         )}
 
-        {/* Right actions: Theme toggle, Cart/Search, and Mini profile shortcut */}
-        <div className="flex items-center gap-1.5 sm:gap-3 md:gap-5">
+        {/* Right actions: Theme toggle and Cart */}
+        <div className="flex items-center gap-2 sm:gap-3 md:gap-4 shrink-0">
           {/* Cart with count (only in buyer explore tab) */}
           {activeRole === "buyer" && (
             <button 
@@ -1074,18 +1074,6 @@ export default function App() {
             </button>
           )}
 
-          {/* Mode switch helper in header if logged in (quick toggle with beautiful indicator) */}
-          {currentUser && (currentUser.role === "both" || currentUser.role === "seller" || currentUser.role === "admin") && currentUser.state !== "Logistics Partner" && (
-            <button
-              onClick={toggleRole}
-              className="px-2.5 py-1 bg-gradient-to-r from-orange-500/10 to-amber-500/10 border border-orange-500/20 text-[#ff6b00] rounded-full text-[9px] font-bold tracking-wider uppercase active:scale-95 transition-all cursor-pointer flex md:hidden items-center gap-1"
-              title="Toggle buyer/seller profile"
-            >
-              <ArrowLeftRight className="w-2.5 h-2.5" />
-              <span>{activeRole === "buyer" ? "Sell" : "Buy"}</span>
-            </button>
-          )}
-
           {/* Theme Mode toggle */}
           <button 
             onClick={toggleDarkMode}
@@ -1093,21 +1081,6 @@ export default function App() {
             title="Toggle theme mode"
           >
             {isDarkMode ? <Sun className="w-5 h-5 text-orange-500" /> : <Moon className="w-5 h-5 text-slate-600" />}
-          </button>
-
-          {/* Quick Profile picture button */}
-          <button
-            onClick={() => setActiveTab("settings")}
-            className="w-7 h-7 rounded-xl border border-orange-500/25 overflow-hidden shrink-0 shadow-sm active:scale-95 hover:scale-105 transition-all cursor-pointer md:hidden"
-            title="User menu"
-          >
-            {currentUser?.photoURL ? (
-              <img src={currentUser.photoURL} alt="" className="w-full h-full object-cover" />
-            ) : (
-              <div className="w-full h-full bg-orange-100 dark:bg-zinc-800 flex items-center justify-center text-[10px] font-black text-[#ff6b00]">
-                {currentUser?.displayName ? currentUser.displayName[0].toUpperCase() : "G"}
-              </div>
-            )}
           </button>
         </div>
         </motion.header>

@@ -127,65 +127,28 @@ interface HeroCarouselProps {
 
 export default function HeroCarousel({ onShopNow, onStartSelling, currentUser }: HeroCarouselProps) {
   const [slideIndex, setSlideIndex] = React.useState(0);
-  const [prefixTyped, setPrefixTyped] = React.useState("");
-  const [highlightTyped, setHighlightTyped] = React.useState("");
-  const [suffixTyped, setSuffixTyped] = React.useState("");
+  const [charIndex, setCharIndex] = React.useState(0);
   const [isDeleting, setIsDeleting] = React.useState(false);
-  const [isPaused, setIsPaused] = React.useState(false);
 
-  // Typewriter engine
-  React.useEffect(() => {
-    if (isPaused) return;
+  const currentSlide = slides[slideIndex];
+  const prefix = currentSlide.prefix;
+  const highlight = currentSlide.highlight;
+  const suffix = currentSlide.suffix;
+  const fullText = prefix + highlight + suffix;
 
-    const currentSlide = slides[slideIndex];
-    const prefix = currentSlide.prefix;
-    const highlight = currentSlide.highlight;
-    const suffix = currentSlide.suffix;
+  const prefixLen = prefix.length;
+  const highlightLen = highlight.length;
 
-    // Fast deleting, smooth typing
-    const delay = isDeleting ? 15 : 40;
-
-    const timer = setTimeout(() => {
-      if (!isDeleting) {
-        // Typing Phase
-        if (prefixTyped.length < prefix.length) {
-          setPrefixTyped(prefix.slice(0, prefixTyped.length + 1));
-        } else if (highlightTyped.length < highlight.length) {
-          setHighlightTyped(highlight.slice(0, highlightTyped.length + 1));
-        } else if (suffixTyped.length < suffix.length) {
-          setSuffixTyped(suffix.slice(0, suffixTyped.length + 1));
-        } else {
-          // Pause at completion
-          const pauseTimer = setTimeout(() => {
-            setIsDeleting(true);
-          }, 4500); // Wait 4.5 seconds so the user can read comfortably
-          return () => clearTimeout(pauseTimer);
-        }
-      } else {
-        // Deleting Phase (backspacing)
-        if (suffixTyped.length > 0) {
-          setSuffixTyped(suffixTyped.slice(0, -1));
-        } else if (highlightTyped.length > 0) {
-          setHighlightTyped(highlightTyped.slice(0, -1));
-        } else if (prefixTyped.length > 0) {
-          setPrefixTyped(prefixTyped.slice(0, -1));
-        } else {
-          // Finish deleting, move to next slide
-          setIsDeleting(false);
-          setSlideIndex((prev) => (prev + 1) % slides.length);
-        }
-      }
-    }, delay);
-
-    return () => clearTimeout(timer);
-  }, [slideIndex, prefixTyped, highlightTyped, suffixTyped, isDeleting, isPaused]);
+  // Derive typed slices from single integer charIndex to prevent race conditions & half-way halts
+  const currentTyped = fullText.slice(0, charIndex);
+  const prefixTyped = currentTyped.slice(0, Math.min(charIndex, prefixLen));
+  const highlightTyped = currentTyped.slice(prefixLen, Math.min(charIndex, prefixLen + highlightLen));
+  const suffixTyped = currentTyped.slice(prefixLen + highlightLen, charIndex);
 
   // Jump to specific slide
   const handleJumpToSlide = (idx: number) => {
     setSlideIndex(idx);
-    setPrefixTyped("");
-    setHighlightTyped("");
-    setSuffixTyped("");
+    setCharIndex(0);
     setIsDeleting(false);
   };
 
@@ -199,7 +162,38 @@ export default function HeroCarousel({ onShopNow, onStartSelling, currentUser }:
     handleJumpToSlide(nextIdx);
   };
 
-  const currentSlide = slides[slideIndex];
+  // Rock-solid continuous typewriter engine
+  React.useEffect(() => {
+    const isAtEnd = charIndex >= fullText.length;
+    const isAtStart = charIndex <= 0;
+
+    let delay = 22; // Fast typing speed
+    if (isDeleting) {
+      delay = 12; // Fast deleting speed
+    } else if (isAtEnd) {
+      delay = 2400; // Pause at end of slide text before backspacing
+    }
+
+    const timer = setTimeout(() => {
+      if (!isDeleting) {
+        if (isAtEnd) {
+          setIsDeleting(true);
+        } else {
+          setCharIndex((prev) => prev + 1);
+        }
+      } else {
+        if (isAtStart) {
+          setIsDeleting(false);
+          setSlideIndex((prev) => (prev + 1) % slides.length);
+          setCharIndex(0);
+        } else {
+          setCharIndex((prev) => prev - 1);
+        }
+      }
+    }, delay);
+
+    return () => clearTimeout(timer);
+  }, [charIndex, isDeleting, fullText, slides.length]);
 
   // Visual helper widgets corresponding to current typing slide
   const renderVisualInfographic = () => {
@@ -330,8 +324,6 @@ export default function HeroCarousel({ onShopNow, onStartSelling, currentUser }:
   return (
     <div 
       className="relative w-full h-full bg-[#0a0d14] select-none font-sans overflow-hidden group border border-slate-100 dark:border-zinc-800 rounded-3xl shadow-lg"
-      onMouseEnter={() => setIsPaused(true)}
-      onMouseLeave={() => setIsPaused(false)}
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
     >
@@ -437,23 +429,6 @@ export default function HeroCarousel({ onShopNow, onStartSelling, currentUser }:
           </AnimatePresence>
         </div>
       </div>
-
-      {/* Prev / Next Navigation Chevron Buttons (Desktop only - hidden on mobile view) */}
-      <button 
-        onClick={handlePrev}
-        aria-label="Previous Slide"
-        className="hidden sm:flex absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 z-30 w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-black/40 hover:bg-black/70 backdrop-blur-md text-white items-center justify-center border border-white/20 shadow-md transition-all active:scale-95 cursor-pointer"
-      >
-        <ChevronLeft className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
-      </button>
-
-      <button 
-        onClick={handleNext}
-        aria-label="Next Slide"
-        className="hidden sm:flex absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 z-30 w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-black/40 hover:bg-black/70 backdrop-blur-md text-white items-center justify-center border border-white/20 shadow-md transition-all active:scale-95 cursor-pointer"
-      >
-        <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
-      </button>
 
       {/* Slide Indicator Dots */}
       <div className="absolute bottom-2.5 sm:bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 bg-black/30 backdrop-blur-md px-3 py-1 rounded-full border border-white/10">
