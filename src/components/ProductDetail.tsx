@@ -746,7 +746,7 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
           className="mb-6 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-750 rounded-xl text-slate-750 dark:text-zinc-300 transition-all font-black text-xs uppercase tracking-wider cursor-pointer border-none flex items-center gap-1.5 shadow-sm"
         >
           <ArrowLeft className="w-4 h-4 text-[#ff6b00]" />
-          <span>{(currentUser?.role === "seller" || isOwner) ? "Back to Seller Dashboard" : "Back to marketplace"}</span>
+          <span>Back to marketplace</span>
         </button>
       ) : (
         <>
@@ -1154,7 +1154,7 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                           <div className="space-y-1">
                             <p className="text-[9px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Estimated Handover Time</p>
                             <p className="font-bold text-slate-700 dark:text-slate-300">
-                              Within {product.deliveryTime} {Number(product.deliveryTime) === 1 ? (product.deliveryTimeUnit ? product.deliveryTimeUnit.replace(/s$/i, '') : 'day') : (product.deliveryTimeUnit || 'days')}
+                              Within {product.deliveryTime} {product.deliveryTimeUnit || 'days'}
                             </p>
                           </div>
                         ) : null}

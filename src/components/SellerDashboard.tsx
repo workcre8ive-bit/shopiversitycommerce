@@ -1091,10 +1091,10 @@ export default function SellerDashboard({
                     ) : (
                       notifications.map((notif, idx) => {
                         const styleMap: any = {
-                          order: "bg-blue-50 dark:bg-blue-900/40 border-blue-200 dark:border-blue-700/60 text-blue-800 dark:text-blue-200 font-bold",
-                          payout: "bg-emerald-50 dark:bg-emerald-900/40 border-emerald-200 dark:border-emerald-700/60 text-emerald-800 dark:text-emerald-200 font-bold",
-                          welcome: "bg-purple-50 dark:bg-purple-900/40 border-purple-200 dark:border-purple-700/60 text-purple-800 dark:text-purple-200 font-bold",
-                          system: "bg-amber-50 dark:bg-amber-900/40 border-amber-200 dark:border-amber-700/60 text-amber-800 dark:text-amber-200 font-bold",
+                          order: "bg-blue-50 dark:bg-blue-950/60 border-blue-100 dark:border-blue-800/50 text-blue-700 dark:text-blue-300",
+                          payout: "bg-emerald-50 dark:bg-emerald-950/60 border-emerald-100 dark:border-emerald-800/50 text-emerald-700 dark:text-emerald-300",
+                          welcome: "bg-purple-50 dark:bg-purple-950/60 border-purple-100 dark:border-purple-800/50 text-purple-700 dark:text-purple-300",
+                          system: "bg-amber-50 dark:bg-amber-950/60 border-amber-100 dark:border-amber-800/50 text-amber-700 dark:text-amber-300",
                         };
 
                         return (
@@ -1103,22 +1103,22 @@ export default function SellerDashboard({
                             className={cn(
                               "p-3.5 sm:p-4 rounded-2xl border text-left transition-all relative flex flex-col gap-1.5 min-w-0",
                               notif.isRead 
-                                ? "bg-slate-50 dark:bg-slate-800/80 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200" 
-                                : "bg-white dark:bg-slate-800 border-indigo-300 dark:border-indigo-500/60 shadow-sm text-slate-900 dark:text-white"
+                                ? "bg-slate-50/60 dark:bg-slate-800/30 border-slate-200/60 dark:border-slate-800/60 text-slate-600 dark:text-slate-300" 
+                                : "bg-white dark:bg-slate-850 border-indigo-200 dark:border-indigo-800/60 shadow-sm text-slate-900 dark:text-white"
                             )}
                           >
                             {!notif.isRead && (
-                              <div className="absolute top-3.5 right-3.5 w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse shadow-sm" />
+                              <div className="absolute top-3.5 right-3.5 w-2 h-2 bg-red-500 rounded-full animate-pulse" />
                             )}
                             <div className="flex flex-wrap items-center gap-1.5 pr-3">
-                              <span className={cn("text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md shrink-0 border", styleMap[notif.type] || "bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border-slate-200 dark:border-slate-700")}>
+                              <span className={cn("text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md shrink-0 border", styleMap[notif.type] || "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700")}>
                                 {notif.type}
                               </span>
-                              <span className={cn("text-xs font-black text-slate-900 dark:text-white leading-tight", notif.isRead && "opacity-90 font-bold")}>
+                              <span className={cn("text-xs font-black text-slate-900 dark:text-slate-100 leading-tight", notif.isRead && "opacity-80 font-bold")}>
                                 {notif.title}
                               </span>
                             </div>
-                            <p className="text-xs leading-relaxed font-semibold text-slate-700 dark:text-slate-200 select-none break-words">
+                            <p className="text-[11px] leading-snug font-medium text-slate-600 dark:text-slate-300 select-none break-words">
                               {notif.message}
                             </p>
                             {!notif.isRead && (
@@ -4821,11 +4821,11 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                   <select 
                     value={deliveryTimeUnit}
                     onChange={(e) => setDeliveryTimeUnit(e.target.value as any)}
-                    className="flex-1 h-12 px-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm appearance-none text-slate-900 dark:text-white"
+                    className="flex-1 h-12 px-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm appearance-none"
                   >
-                    <option value="hours" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">{deliveryTime === "1" ? "Hour Notice" : "Hours Notice"}</option>
-                    <option value="days" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">{deliveryTime === "1" ? "Day Notice" : "Days Notice"}</option>
-                    <option value="weeks" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">{deliveryTime === "1" ? "Week Notice" : "Weeks Notice"}</option>
+                    <option value="hours">Hours Notice</option>
+                    <option value="days">Days Notice</option>
+                    <option value="weeks">Weeks Notice</option>
                   </select>
                 </div>
               </div>
@@ -5125,11 +5125,11 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
               <select 
                 value={deliveryTimeUnit}
                 onChange={(e) => setDeliveryTimeUnit(e.target.value as any)}
-                className="flex-1 h-14 px-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-indigo-500 outline-none transition-all appearance-none text-slate-900 dark:text-white font-semibold"
+                className="flex-1 h-14 px-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-indigo-500 outline-none transition-all appearance-none text-slate-900 dark:text-white"
               >
-                <option value="hours" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">{deliveryTime === "1" ? "Hour" : "Hours"}</option>
-                <option value="days" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">{deliveryTime === "1" ? "Day" : "Days"}</option>
-                <option value="weeks" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100">{deliveryTime === "1" ? "Week" : "Weeks"}</option>
+                <option value="hours" className="bg-white dark:bg-slate-900">Hours</option>
+                <option value="days" className="bg-white dark:bg-slate-900">Days</option>
+                <option value="weeks" className="bg-white dark:bg-slate-900">Weeks</option>
               </select>
             </div>
           </div>
