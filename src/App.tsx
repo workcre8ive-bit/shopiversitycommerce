@@ -959,7 +959,7 @@ export default function App() {
   }
 
   // Determine if we should show AuthPage based on selected tab for non-logged users
-  const restrictedTabs = ["settings", "orders", "notifications", "messages", "history", "referrals", "dashboard", "add-product", "products", "admin"];
+  const restrictedTabs = ["settings", "orders", "notifications", "messages", "history", "referrals", "dashboard", "analytics", "add-product", "products", "admin"];
   const isTabRestricted = restrictedTabs.includes(activeTab);
   
 
@@ -1013,25 +1013,20 @@ export default function App() {
                 >
                   <Menu className="w-5 h-5" />
                 </button>
-                {activeRole === "seller" ? (
-                  <>
-                    <div className="w-2 h-5 bg-gradient-to-b from-[#ff6b00] to-orange-500 rounded-full" />
-                    <span className="text-xs sm:text-sm font-black tracking-tight uppercase bg-gradient-to-r from-orange-600 to-amber-500 bg-clip-text text-transparent font-sans">
-                      Merchant Hub
-                    </span>
-                  </>
-                ) : (
-                  <Logo 
-                    onClick={() => {
+                <Logo 
+                  onClick={() => {
+                    if (activeRole === "seller") {
+                      setActiveTab("dashboard");
+                    } else {
                       setActiveTab("market");
-                      setViewingProduct(null);
-                      setViewingSellerId(null);
-                      setFilterCategory("All");
-                      setSearchQuery("");
-                    }} 
-                    className="ml-1 sm:ml-3" 
-                  />
-                )}
+                    }
+                    setViewingProduct(null);
+                    setViewingSellerId(null);
+                    setFilterCategory("All");
+                    setSearchQuery("");
+                  }} 
+                  className="ml-1 sm:ml-3" 
+                />
               </div>
             )}
           </div>
@@ -1617,7 +1612,7 @@ export default function App() {
               >
                 <BuyerDashboard user={currentUser} setActiveTab={setActiveTab} onBack={handleGoBack} />
               </motion.div>
-            ) : (activeTab === "dashboard" || activeTab === "overview" || activeTab === "add-product" || activeTab === "my-products" || (activeTab === "orders" && activeRole === "seller") || activeTab === "storefront" || activeTab === "referrals" || activeTab === "payouts") && activeRole === "seller" ? (
+            ) : (activeTab === "dashboard" || activeTab === "overview" || activeTab === "analytics" || activeTab === "add-product" || activeTab === "my-products" || (activeTab === "orders" && activeRole === "seller") || activeTab === "storefront" || activeTab === "referrals" || activeTab === "payouts") && activeRole === "seller" ? (
               <motion.div
                 key="dashboard"
                 initial={{ opacity: 0, x: 20 }}
@@ -1629,6 +1624,7 @@ export default function App() {
                   onClose={handleGoBack} 
                   onBack={handleGoBack}
                   initialSubTab={
+                    activeTab === "analytics" ? "analytics" :
                     activeTab === "add-product" ? "add-product" : 
                     activeTab === "my-products" ? "my-products" : 
                     activeTab === "orders" ? "orders" : 

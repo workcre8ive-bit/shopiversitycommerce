@@ -20,6 +20,7 @@ import { Product, Order, UserProfile } from "../types";
 import { NIGERIAN_CAMPUSES } from "../constants/campuses";
 import ReferralDashboard from "./ReferralDashboard";
 import LiveRiderTrackingModal from "./LiveRiderTrackingModal";
+import SalesAnalytics from "./SalesAnalytics";
 import { 
   LayoutDashboard, 
   LayoutGrid,
@@ -809,26 +810,7 @@ export default function SellerDashboard({
           <ArrowLeft className="w-4 h-4" /> 
           Back to Seller Hub
         </button>
-      ) : (
-        <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-hide">
-          {["overview", "add-product", "my-products", "orders", "storefront", "referrals", "payouts", "history", "settings"]
-            .filter(tab => tab !== "storefront" || currentUser?.state !== "Logistics Partner")
-            .map((tab) => (
-              <button
-                key={tab}
-                onClick={() => setActiveSubTab(tab)}
-                className={cn(
-                  "px-5 py-2.5 rounded-lg text-xs font-black whitespace-nowrap transition-all border uppercase tracking-wider cursor-pointer",
-                  activeSubTab === tab 
-                    ? "bg-purple-600 border-purple-600 text-white shadow-sm shadow-purple-100 dark:shadow-none" 
-                    : "bg-white dark:bg-slate-900 text-slate-600 dark:text-zinc-400 border-slate-200 dark:border-zinc-800/80 hover:bg-slate-50 dark:hover:bg-slate-850"
-                )}
-              >
-                {tab === "history" ? "Trash" : (tab === "referrals" ? "Referrals" : tab.split("-").map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(" "))}
-              </button>
-            ))}
-        </div>
-      )}
+      ) : null}
 
       <AnimatePresence mode="wait">
         {productToDelete && !showPermanentDeleteConfirm && (
@@ -932,17 +914,19 @@ export default function SellerDashboard({
                        Earn 1.3% of platform commission on every successful purchase made with your code.
                     </p>
                  </div>
-                 <div className="flex items-center gap-4">
-                    <div className="px-6 py-3 bg-white/20 backdrop-blur-md rounded-2xl border border-white/30 font-black font-mono tracking-tighter text-2xl uppercase">
-                      {currentUser?.referralCode || "---"}
+                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                    <div className="px-4 py-3 bg-white/10 backdrop-blur-md rounded-2xl border border-white/20 font-medium font-mono text-xs text-white/90 truncate max-w-xs sm:max-w-sm">
+                      {`${window.location.origin}/?ref=${(currentUser?.referralCode && currentUser.referralCode !== "---") ? currentUser.referralCode : "S3U8K9"}`}
                     </div>
                     <button 
+                      type="button"
                       onClick={() => {
-                        const link = `${window.location.origin}/?ref=${currentUser?.referralCode}`;
+                        const code = (currentUser?.referralCode && currentUser.referralCode !== "---") ? currentUser.referralCode : "S3U8K9";
+                        const link = `${window.location.origin}/?ref=${code}`;
                         navigator.clipboard.writeText(link);
                         alert("Referral link copied to clipboard!");
                       }}
-                      className="px-8 py-4 bg-white text-purple-600 rounded-2xl font-black text-xs uppercase tracking-[0.2em] shadow-xl hover:scale-105 active:scale-95 transition-all"
+                      className="px-6 py-3.5 bg-white text-purple-600 rounded-2xl font-black text-xs uppercase tracking-wider shadow-xl hover:scale-105 active:scale-95 transition-all shrink-0 cursor-pointer"
                     >
                       Copy Link
                     </button>
@@ -956,6 +940,7 @@ export default function SellerDashboard({
               <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 dark:text-zinc-500 ml-1">Shop Management Shortcuts</h3>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                  {[
+                  { id: "analytics", label: "Sales Analytics", icon: TrendingUp, desc: "Revenue & period trends", color: "from-blue-600 to-indigo-600" },
                   { id: "add-product", label: "List Item", icon: Plus, desc: "Publish new good/service", color: "from-orange-500 to-amber-500" },
                   { id: "my-products", label: "My Products", icon: Package, desc: "Edit & update catalogs", color: "from-purple-500 to-indigo-500" },
                   { id: "orders", label: "Customer Orders", icon: ShoppingBag, desc: "Track sales & escrow", color: "from-blue-500 to-teal-500" },
@@ -1150,6 +1135,22 @@ export default function SellerDashboard({
                 </div>
               </div>
             </div>
+
+            {/* Embedded Sales Analytics Section inside Store Overview */}
+            <div className="pt-4">
+              <SalesAnalytics orders={orders} products={products} />
+            </div>
+          </motion.div>
+        )}
+
+        {activeSubTab === "analytics" && (
+          <motion.div 
+            key="analytics"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+          >
+            <SalesAnalytics orders={orders} products={products} />
           </motion.div>
         )}
 
@@ -2045,6 +2046,10 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
   };
 
   const handleHireLocalLogistics = async (partner: any) => {
+    if (order.status === "pending" || order.status === "Pending Seller Acceptance") {
+      alert("You cannot dispatch this order to a registered logistics partner until you accept the order. Please accept the order first.");
+      return;
+    }
     setIsHiring(true);
     try {
       const deliveryPayload = {
@@ -2701,7 +2706,7 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                 </div>
                 <div className="text-left animate-in fade-in">
                   <h3 className="text-lg font-black text-slate-900 dark:text-white uppercase tracking-wider">Logistics & Delivery</h3>
-                  <p className="text-xs text-slate-400 dark:text-slate-500">Arrange campus partner dispatcher or external outsourcing</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-300 font-medium">Arrange campus partner dispatcher or external outsourcing</p>
                 </div>
               </div>
               <button 
@@ -2722,7 +2727,7 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                   "flex-1 pb-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all cursor-pointer bg-transparent",
                   deliveryTab === "registered"
                     ? "border-orange-500 text-orange-600 dark:text-orange-400"
-                    : "border-transparent text-slate-400 hover:text-slate-600 dark:text-slate-500"
+                    : "border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-300 dark:hover:text-white"
                 )}
               >
                 🎒 Registered Partners
@@ -2734,7 +2739,7 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                   "flex-1 pb-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all cursor-pointer bg-transparent",
                   deliveryTab === "outsource"
                     ? "border-orange-500 text-orange-600 dark:text-orange-400"
-                    : "border-transparent text-slate-400 hover:text-slate-600 dark:text-slate-500"
+                    : "border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-300 dark:hover:text-white"
                 )}
               >
                 🤝 Outsource Delivery
@@ -2745,61 +2750,80 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
               loadingLogistics ? (
                 <div className="py-12 text-center space-y-2">
                   <Loader2 className="w-8 h-8 animate-spin text-orange-600 mx-auto" />
-                  <p className="text-xs text-slate-400 font-medium">Scanning for active campus carriers...</p>
-                </div>
-              ) : logisticsPartners.length === 0 ? (
-                <div className="py-12 text-center space-y-2">
-                  <AlertCircle className="w-12 h-12 text-amber-500 mx-auto animate-bounce" />
-                  <h4 className="font-bold text-slate-700 dark:text-zinc-300 text-sm">No active dispatchers found</h4>
-                  <p className="text-xs text-slate-400 max-w-xs mx-auto leading-relaxed">No logistics partners are registered to cover your campus: <strong className="text-slate-600 dark:text-zinc-400">{order.pickupSchool || currentUser?.campus || "General"}</strong> yet.</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-300 font-medium">Scanning for active campus carriers...</p>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">Available Riders on your Campus</p>
-                  <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
-                    {logisticsPartners.map((partner) => (
-                      <div 
-                        key={partner.id}
-                        className="p-4 bg-slate-50 dark:bg-zinc-850 rounded-2xl border border-slate-150 dark:border-zinc-800 hover:border-orange-500/50 transition-all flex items-center justify-between gap-4"
-                      >
-                        <div className="space-y-1 text-left">
-                          <h4 className="font-bold text-slate-800 dark:text-zinc-100 text-sm">{partner.companyName}</h4>
-                          <div className="flex flex-wrap gap-1">
-                            {partner.vehicleTypes?.slice(0, 3).map((v: string, idx: number) => (
-                              <span key={`${v}-${idx}`} className="px-1.5 py-0.5 bg-slate-200 dark:bg-zinc-800 text-[10px] rounded text-slate-500 dark:text-zinc-400 font-bold">
-                                {v}
-                              </span>
-                            ))}
-                          </div>
-                          <p className="text-[10px] text-slate-400 mt-1">📞 {partner.phoneNumber}</p>
-                        </div>
+                  {(order.status === "pending" || order.status === "Pending Seller Acceptance") && (
+                    <div className="p-3.5 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 rounded-2xl text-amber-800 dark:text-amber-200 text-xs font-bold flex items-start gap-2.5">
+                      <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                      <p className="leading-relaxed">
+                        Order is not accepted yet. Please accept the order first before dispatching to a registered logistics partner.
+                      </p>
+                    </div>
+                  )}
 
-                        <div className="text-right shrink-0">
-                          <strong className="text-base font-black text-slate-900 dark:text-white block">₦{(partner.baseDeliveryPrice || 500).toLocaleString()}</strong>
-                          <button
-                            type="button"
-                            disabled={isHiring}
-                            onClick={() => handleHireLocalLogistics(partner)}
-                            className="mt-2 px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold rounded-xl transition-all cursor-pointer border-none shadow-sm shadow-orange-500/10"
+                  {logisticsPartners.length === 0 ? (
+                    <div className="py-12 text-center space-y-2">
+                      <AlertCircle className="w-12 h-12 text-amber-500 mx-auto animate-bounce" />
+                      <h4 className="font-bold text-slate-800 dark:text-white text-sm">No active dispatchers found</h4>
+                      <p className="text-xs text-slate-500 dark:text-slate-300 max-w-xs mx-auto leading-relaxed">No logistics partners are registered to cover your campus: <strong className="text-slate-700 dark:text-white font-bold">{order.pickupSchool || currentUser?.campus || "General"}</strong> yet.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <p className="text-xs text-slate-500 dark:text-slate-200 font-bold uppercase tracking-wider">Available Riders on your Campus</p>
+                      <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+                        {logisticsPartners.map((partner) => (
+                          <div 
+                            key={partner.id}
+                            className="p-4 bg-slate-50 dark:bg-slate-800/90 rounded-2xl border border-slate-200 dark:border-slate-700 hover:border-orange-500/50 transition-all flex items-center justify-between gap-4"
                           >
-                            {isHiring ? "Hiring..." : "Assign & Hire"}
-                          </button>
-                        </div>
+                            <div className="space-y-1 text-left">
+                              <h4 className="font-black text-slate-900 dark:text-white text-sm">{partner.companyName}</h4>
+                              <div className="flex flex-wrap gap-1">
+                                {partner.vehicleTypes?.slice(0, 3).map((v: string, idx: number) => (
+                                  <span key={`${v}-${idx}`} className="px-1.5 py-0.5 bg-slate-200 dark:bg-slate-700 text-[10px] rounded text-slate-700 dark:text-slate-200 font-bold">
+                                    {v}
+                                  </span>
+                                ))}
+                              </div>
+                              <p className="text-[10px] text-slate-500 dark:text-slate-300 font-semibold mt-1">📞 {partner.phoneNumber}</p>
+                            </div>
+
+                            <div className="text-right shrink-0">
+                              <strong className="text-base font-black text-slate-900 dark:text-white block">₦{(partner.baseDeliveryPrice || 500).toLocaleString()}</strong>
+                              <button
+                                type="button"
+                                disabled={isHiring || order.status === "pending" || order.status === "Pending Seller Acceptance"}
+                                onClick={() => handleHireLocalLogistics(partner)}
+                                className={cn(
+                                  "mt-2 px-4 py-2 text-white text-xs font-bold rounded-xl transition-all cursor-pointer border-none shadow-sm",
+                                  (order.status === "pending" || order.status === "Pending Seller Acceptance")
+                                    ? "bg-slate-300 dark:bg-slate-700 text-slate-500 cursor-not-allowed"
+                                    : "bg-orange-600 hover:bg-orange-700 shadow-orange-500/10"
+                                )}
+                                title={(order.status === "pending" || order.status === "Pending Seller Acceptance") ? "Accept order first before dispatching" : "Assign rider"}
+                              >
+                                {isHiring ? "Hiring..." : (order.status === "pending" || order.status === "Pending Seller Acceptance") ? "Accept Order First" : "Assign & Hire"}
+                              </button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
+                    </div>
+                  )}
                 </div>
               )
             ) : (
               <div className="space-y-4 text-left animate-in fade-in duration-300">
-                <div className="p-4 bg-orange-50/50 dark:bg-orange-950/10 border border-orange-100/30 rounded-2xl text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                  <p className="font-bold text-slate-800 dark:text-slate-200 mb-1">💡 What does Outsourcing mean?</p>
+                <div className="p-4 bg-orange-50/80 dark:bg-orange-950/40 border border-orange-200 dark:border-orange-800/50 rounded-2xl text-xs text-slate-700 dark:text-slate-200 leading-relaxed font-medium">
+                  <p className="font-bold text-slate-900 dark:text-white mb-1">💡 What does Outsourcing mean?</p>
                   Outsourcing allows you to deliver using any third-party logistics company (like DHL, GIG Logistics, custom student riders, etc.) that is not registered as an official partner on our website. Enter their information below to keep the buyer fully informed.
                 </div>
 
                 <div className="space-y-3">
                   <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Courier / Company Name *</label>
+                    <label className="block text-[10px] font-black text-slate-500 dark:text-slate-300 uppercase tracking-widest mb-1">Courier / Company Name *</label>
                     <input 
                       type="text"
                       value={outsourceCourierName}
@@ -3490,8 +3514,10 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
     
     setLocation(compiled);
 
-    // Pinpoint address details given EXCEPT the street or house address to specify general area on map
+    // Pinpoint exact requested pickup location address on map
     const pinpointParts = [];
+    if (addrStreet) pinpointParts.push(addrStreet);
+    if (manualBusinessAddress) pinpointParts.push(manualBusinessAddress);
     if (addrSchool) pinpointParts.push(addrSchool);
     if (addrCity) pinpointParts.push(addrCity);
     if (addrLga) pinpointParts.push(addrLga.endsWith("LGA") ? addrLga : `${addrLga} LGA`);
@@ -3506,7 +3532,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
     }, 1500);
 
     return () => clearTimeout(delayDebounceFn);
-  }, [addrCountry, addrState, addrLga, addrCity, addrStreet, addrSchool]);
+  }, [addrCountry, addrState, addrLga, addrCity, addrStreet, addrSchool, manualBusinessAddress]);
 
   React.useEffect(() => {
     if (!addrStreet || addrStreet.trim().length < 3) {
@@ -5580,7 +5606,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
 
                 <div className="space-y-2">
                   <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest block ml-1">
-                    {type === "service" ? "Search & Pinpoint Service Location on Google Map" : "Google Map Pinpoint (Drop a Pin)"}
+                    {type === "service" ? "Requested Service Location for Google Map Pinpoint" : "Requested Pickup / Delivery Location for Google Map Pinpoint"}
                   </span>
                   
                   <div className="flex gap-2">
@@ -5590,17 +5616,19 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                       onChange={(e) => setLocation(e.target.value)}
                       required={false}
                       className="flex-1 h-12 px-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:bg-white dark:focus:bg-slate-900 focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white"
-                      placeholder={type === "service" ? "e.g. Hostels Block A Room 204 or Campus Salon" : "e.g. Unilag Gate, Akoka"}
+                      placeholder={type === "service" ? "e.g. Hostels Block A Room 204 or Campus Salon" : "e.g. Block C Shop 4, Campus Shopping Complex, Unilag Gate"}
                     />
                     <button 
                       type="button"
                       onClick={() => {
                         const pinpointParts = [];
+                        if (manualBusinessAddress) pinpointParts.push(manualBusinessAddress);
+                        if (location && location !== manualBusinessAddress) pinpointParts.push(location);
                         if (addrSchool) pinpointParts.push(addrSchool);
                         if (addrCity) pinpointParts.push(addrCity);
                         if (addrLga) pinpointParts.push(addrLga.endsWith("LGA") ? addrLga : `${addrLga} LGA`);
                         if (addrState) pinpointParts.push(addrState.endsWith("State") ? addrState : `${addrState} State`);
-                        pinpointParts.push(addrCountry);
+                        if (addrCountry) pinpointParts.push(addrCountry);
                         const pinpointCompiled = pinpointParts.join(", ");
                         verifyLocationAddress(pinpointCompiled || location);
                       }}
@@ -5665,7 +5693,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                         </div>
                       )}
                     </div>
-                  ) : (
+                  ) : (pickupCoordinates || (location && location.trim() !== "")) ? (
                     <div className="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 h-64 relative mt-2 bg-slate-100 dark:bg-slate-900 shadow-inner">
                       <iframe
                         width="100%"
@@ -5677,7 +5705,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                         src={
                           pickupCoordinates 
                             ? `https://maps.google.com/maps?q=${pickupCoordinates.lat},${pickupCoordinates.lng}&z=15&output=embed`
-                            : `https://maps.google.com/maps?q=${encodeURIComponent(location || currentUser?.schoolName || currentUser?.city || "Campus")}&z=15&output=embed`
+                            : `https://maps.google.com/maps?q=${encodeURIComponent(location.trim())}&z=15&output=embed`
                         }
                       />
                       {pickupCoordinates ? (
@@ -5697,6 +5725,14 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                           📍 Showing Location Live on Map
                         </div>
                       )}
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 h-44 relative mt-2 bg-slate-50/50 dark:bg-slate-900/50 flex flex-col items-center justify-center p-6 text-center">
+                      <MapPin className="w-8 h-8 text-slate-400 dark:text-slate-500 mb-2" />
+                      <p className="text-xs font-bold text-slate-700 dark:text-slate-200">No Pickup / Delivery Address Set</p>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 max-w-xs">
+                        Enter a location address above or click "Pin Location on Map" to display a pin on Google Maps.
+                      </p>
                     </div>
                   )}
                 </div>

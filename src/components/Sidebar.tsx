@@ -72,6 +72,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
     { id: "settings", label: "Settings", icon: Settings },
   ] : activeRole === "seller" ? [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { id: "analytics", label: "Sales Analytics", icon: BarChart2 },
     { id: "search", label: "Search", icon: Search },
     { id: "logistics", label: "Campus Logistics", icon: Truck },
     { id: "add-product", label: "Add Product", icon: PlusCircle },
@@ -178,7 +179,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
               <span>{user?.state === "Logistics Partner" ? "Logistics Partner Account" : (activeRole === "buyer" ? "Shopping Account" : "Seller Account")}</span>
               <ChevronRight className="w-3.5 h-3.5 text-white/70 group-hover:translate-x-0.5 transition-transform" />
             </p>
-            <h2 className="text-2xl font-black !text-white tracking-tight group-hover:underline">Hello, {user?.displayName?.split(' ')[0] || "Sign In"}</h2>
+            <h2 className="text-2xl font-black !text-white tracking-tight no-underline">Hello, {user?.displayName?.split(' ')[0] || "Sign In"}</h2>
           </button>
         </div>
 

@@ -47,15 +47,15 @@ const slides = [
   },
   {
     id: 3,
-    badge: "The Ultimate Solution",
+    badge: "100% Campus Verified",
     prefix: "Welcome to ",
     highlight: "SHOPIVERSITY",
-    suffix: ", the campus standard marketplace.",
-    subtext: "Connecting student business owners, handmade crafts, and services with buyers in a trusted ecosystem.",
-    image: "https://images.unsplash.com/photo-1523050854058-8df90110c9f1?q=80&w=1600&auto=format&fit=crop",
-    icon: GraduationCap,
-    featureName: "Shopiversity",
-    featureDesc: "Trust & verification"
+    suffix: ", the campus verified marketplace.",
+    subtext: "Connecting verified student entrepreneurs, handmade crafts, and local services in a trusted campus ecosystem.",
+    image: "https://images.unsplash.com/photo-1523240795612-9a054b0db644?q=80&w=1600&auto=format&fit=crop",
+    icon: ShieldCheck,
+    featureName: "Campus Verified",
+    featureDesc: "100% Student Verified"
   },
   {
     id: 4,
@@ -76,7 +76,7 @@ const slides = [
     highlight: "escrow protection",
     suffix: " and secure campus payments.",
     subtext: "Your money is held in a secure lockbox and is only released after you inspect and confirm receipt.",
-    image: "https://images.unsplash.com/photo-1563013544-824ae1d704d3?q=80&w=1600&auto=format&fit=crop",
+    image: "https://images.unsplash.com/photo-1563986768609-322da13575f3?q=80&w=1600&auto=format&fit=crop",
     icon: ShieldCheck,
     featureName: "Escrow Shield",
     featureDesc: "100% fraud prevention"
@@ -229,14 +229,16 @@ export default function HeroCarousel({ onShopNow, onStartSelling, currentUser }:
             </div>
           </div>
         );
-      case 2: // Shopiversity
+      case 2: // Shopiversity / Campus Verified
         return (
-          <div className="flex flex-col items-center justify-center p-5 bg-white/10 backdrop-blur-md rounded-2xl border border-white/15 h-full min-h-[140px]">
-            <GraduationCap className={iconClass} />
-            <div className="text-center">
-              <span className="text-lg font-black text-white block uppercase tracking-wide">Campus Verified</span>
-              <span className="inline-flex items-center gap-1 mt-1 text-[9px] bg-orange-500/20 text-orange-400 px-2 py-0.5 rounded-full border border-orange-500/35">
-                <CheckCircle className="w-2.5 h-2.5" /> Approved Space
+          <div className="flex flex-col items-center justify-center p-5 bg-white/10 backdrop-blur-md rounded-2xl border border-white/15 h-full min-h-[140px] relative overflow-hidden group">
+            <div className="relative z-10 flex flex-col items-center text-center space-y-1">
+              <GraduationCap className={iconClass} />
+              <span className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-1 bg-orange-500/20 text-orange-400 px-3 py-1 rounded-full border border-orange-500/30 backdrop-blur-sm shadow-md">
+                <ShieldCheck className="w-3.5 h-3.5 text-orange-400 inline" /> Campus Verified
+              </span>
+              <span className="text-[10px] text-slate-200 font-semibold block mt-1">
+                100% Student Verified Marketplace
               </span>
             </div>
           </div>
@@ -254,13 +256,13 @@ export default function HeroCarousel({ onShopNow, onStartSelling, currentUser }:
         );
       case 4: // Escrow Shield
         return (
-          <div className="flex flex-col items-center justify-center p-5 bg-white/10 backdrop-blur-md rounded-2xl border border-white/15 h-full min-h-[140px]">
-            <ShieldCheck className={iconClass} />
-            <div className="text-center space-y-1">
-              <span className="text-xs uppercase font-black tracking-wider bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded border border-emerald-500/30">
-                Escrow Active
+          <div className="flex flex-col items-center justify-center p-5 bg-white/10 backdrop-blur-md rounded-2xl border border-white/15 h-full min-h-[140px] relative overflow-hidden group">
+            <div className="relative z-10 flex flex-col items-center text-center space-y-1">
+              <ShieldCheck className={iconClass} />
+              <span className="text-xs uppercase font-black tracking-wider bg-emerald-500/20 text-emerald-400 px-2.5 py-0.5 rounded-full border border-emerald-500/30 backdrop-blur-sm shadow-md">
+                Escrow Protected
               </span>
-              <p className="text-[9px] text-slate-200 block mt-1">Funds held securely until inspection</p>
+              <p className="text-[9px] text-slate-100 font-semibold block mt-1 max-w-[180px]">Funds held securely in lockbox until inspection</p>
             </div>
           </div>
         );

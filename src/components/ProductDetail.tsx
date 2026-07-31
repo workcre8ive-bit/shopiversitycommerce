@@ -1260,7 +1260,7 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                               <p className="text-xs font-bold">Free • At {product.location || "Seller's Location"}</p>
                             </div>
                           </div>
-                          {(product.pickupCoordinates || product.location) && (
+                          {(product.pickupCoordinates || (product.location && product.location.trim() !== "")) && (
                             <div className="rounded-[1.5rem] overflow-hidden border border-slate-200 dark:border-slate-700 relative mt-1 w-full flex flex-col bg-white dark:bg-slate-900 shadow-sm">
                               <div className="h-44 relative w-full bg-slate-50 dark:bg-slate-950">
                                 {GOOGLE_MAPS_API_KEY && product.pickupCoordinates ? (
@@ -1289,7 +1289,7 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                                     src={
                                       product.pickupCoordinates 
                                         ? `https://maps.google.com/maps?q=${product.pickupCoordinates.lat},${product.pickupCoordinates.lng}&z=15&output=embed`
-                                        : `https://maps.google.com/maps?q=${encodeURIComponent(product.location || "Campus")}&z=15&output=embed`
+                                        : `https://maps.google.com/maps?q=${encodeURIComponent(product.location!.trim())}&z=15&output=embed`
                                     }
                                   />
                                 )}
@@ -1298,7 +1298,7 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                                 href={
                                   product.pickupCoordinates
                                     ? `https://www.google.com/maps/dir/?api=1&destination=${product.pickupCoordinates.lat},${product.pickupCoordinates.lng}`
-                                    : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(product.location || "Campus")}`
+                                    : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(product.location!.trim())}`
                                 }
                                 target="_blank"
                                 rel="noopener noreferrer"

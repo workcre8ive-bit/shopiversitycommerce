@@ -6,6 +6,10 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function generateReferralCode(name?: string): string {
-  // Generate a random 6-digit number string
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // Clean 6-char alphanumeric code excluding confusing 0/O/1/I
+  let result = "";
+  for (let i = 0; i < 6; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
 }

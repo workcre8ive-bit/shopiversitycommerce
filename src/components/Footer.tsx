@@ -61,11 +61,11 @@ export default function Footer({ setActiveTab, activeTab }: FooterProps) {
               <li>
                 <button
                   onClick={() => {
-                    setActiveTab("history");
+                    setActiveTab("orders");
                     window.scrollTo({ top: 0, behavior: "smooth" });
                   }}
                   className={`hover:text-[#ff6b00] transition-colors bg-transparent border-none p-0 cursor-pointer text-left py-1 block ${
-                    activeTab === "history" ? "text-[#ff6b00]" : "text-slate-400"
+                    activeTab === "orders" ? "text-[#ff6b00]" : "text-slate-400"
                   }`}
                 >
                   Transaction History

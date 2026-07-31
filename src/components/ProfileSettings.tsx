@@ -987,21 +987,21 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
           {activeSection === "personal" && (
             <div className="space-y-6">
               <div className="space-y-2">
-                <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">Email Address (Read-only)</label>
+                <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Email Address (Read-only)</label>
                 <div className="relative">
                   <AtSign className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                   <input 
                     type="email"
                     value={user.email}
                     readOnly
-                    className="w-full h-14 pl-12 pr-6 bg-slate-50/50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-2xl outline-none transition-all text-slate-400 cursor-not-allowed italic"
+                    className="w-full h-14 pl-12 pr-6 bg-slate-50/50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-2xl outline-none transition-all text-slate-500 dark:text-slate-300 cursor-not-allowed italic font-medium"
                   />
                 </div>
               </div>
 
               {(displayRole === "seller" || displayRole === "both" || displayRole === "admin") && (
                 <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">Business / Store Name</label>
+                  <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Business / Store Name</label>
                   <div className="relative">
                     <Building className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                     <input 
@@ -1016,7 +1016,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
             <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">Full Name</label>
+              <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Full Name</label>
               <div className="relative">
                 <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                 <input 
@@ -1027,7 +1027,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
               </div>
             </div>
             <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">Username</label>
+              <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Username</label>
               <div className="relative">
                 <AtSign className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                 <input 
@@ -1040,7 +1040,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
           </div>
 
           <div className="space-y-2">
-            <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">Gender</label>
+            <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Gender</label>
             <div className="grid grid-cols-3 gap-2">
               {["male", "female", "other"].map((g, gIdx) => (
                 <button
@@ -1051,7 +1051,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                     "h-14 rounded-2xl text-xs font-bold capitalize transition-all border",
                     gender === g 
                       ? "bg-purple-600 text-white border-purple-600 shadow-md" 
-                      : "bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-purple-200"
+                      : "bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:border-purple-200"
                   )}
                 >
                   {g}
@@ -1062,7 +1062,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
             <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">Business Phone</label>
+              <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Business Phone</label>
               <div className="flex gap-2">
                 <select 
                   value={phonePrefix}
@@ -1085,7 +1085,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
               </div>
             </div>
             <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">Country</label>
+              <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Country</label>
               <div className="relative">
                 <Globe className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                 <input 
@@ -1097,7 +1097,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
               </div>
             </div>
             <div className="space-y-2 relative">
-              <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">State</label>
+              <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">State</label>
               <div className="relative">
                 <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                 <button
@@ -1159,7 +1159,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
               </AnimatePresence>
             </div>
             <div className="space-y-2 relative">
-              <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">City</label>
+              <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">City</label>
               <div className="relative">
                 <Building className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                 <button
@@ -1223,7 +1223,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
           </div>
 
           <div className="space-y-2">
-            <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">Location</label>
+            <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Location</label>
             <div className="relative">
               <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
               <input 
@@ -1250,7 +1250,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
         <div className="space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
             <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">
+              <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">
                 {displayRole === "seller" ? "Shop/Business Address" : "Delivery Address"}
               </label>
               <div className="relative">
@@ -1266,7 +1266,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
 
             {displayRole === "seller" && (
               <div className="space-y-2">
-                <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">
+                <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">
                   States & Places you deliver to
                 </label>
                 <div className="relative">
@@ -1283,7 +1283,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
           </div>
 
           <div className="space-y-2 relative">
-            <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">Tertiary Institution Type</label>
+            <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Tertiary Institution Type</label>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               {SCHOOL_TYPES.map((type) => (
                 <button
@@ -1297,7 +1297,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                     "h-14 rounded-2xl text-[10px] font-bold capitalize transition-all border",
                     schoolType === type 
                       ? "bg-purple-600 text-white border-purple-600 shadow-md" 
-                      : "bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:border-purple-200"
+                      : "bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:border-purple-200"
                   )}
                 >
                   {type}
@@ -1307,7 +1307,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
           </div>
 
           <div className="space-y-2 relative">
-            <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">School</label>
+            <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">School</label>
             <div className="relative">
               <School className={cn("absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 transition-colors", schoolType ? "text-slate-400" : "text-slate-200 dark:text-slate-700")} />
               <button
@@ -1473,7 +1473,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
 
               <div className="space-y-4">
                 <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">Bank Name</label>
+                  <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Bank Name</label>
                   <div className="relative">
                     <Building className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                     <div 
@@ -1546,7 +1546,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                   <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">Account Number</label>
+                    <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Account Number</label>
                     <div className="relative">
                       <Hash className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                       <input 
@@ -1561,7 +1561,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                     </div>
                   </div>
                   <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">Account Name</label>
+                    <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Account Name</label>
                     <div className="relative flex gap-2">
                       <div className="relative flex-1">
                         <UserCheck className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />

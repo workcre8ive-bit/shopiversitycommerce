@@ -27,7 +27,7 @@ import { UserProfile } from "../types";
 import { motion, AnimatePresence } from "motion/react";
 import { db } from "../firebase";
 import { collection, query, where, onSnapshot, doc, updateDoc, addDoc, increment } from "firebase/firestore";
-import { cn } from "../lib/utils";
+import { cn, generateReferralCode } from "../lib/utils";
 
 const FALLBACK_BANKS = [
   { name: "Access Bank", code: "044" },
@@ -60,9 +60,27 @@ interface ReferralDashboardProps {
 
 export default function ReferralDashboard({ user, onBack }: ReferralDashboardProps) {
   const [copied, setCopied] = React.useState(false);
-  const [isCodeVisible, setIsCodeVisible] = React.useState(false);
+  const [isCodeVisible, setIsCodeVisible] = React.useState(true);
+  
+  // Guarantee a valid 6-character alphanumeric referral code
+  const userReferralCode = React.useMemo(() => {
+    if (user?.referralCode && user.referralCode.trim().length >= 6 && user.referralCode !== "---") {
+      return user.referralCode.trim().toUpperCase();
+    }
+    return generateReferralCode();
+  }, [user?.referralCode]);
+
+  // Persist generated code to Firestore if missing
+  React.useEffect(() => {
+    if (user?.uid && (!user?.referralCode || user.referralCode === "---")) {
+      updateDoc(doc(db, "users", user.uid), {
+        referralCode: userReferralCode
+      }).catch(err => console.error("Error saving referral code:", err));
+    }
+  }, [user?.uid, user?.referralCode, userReferralCode]);
+
   const [referredUsers, setReferredUsers] = React.useState<UserProfile[]>([]);
-  const referralLink = typeof window !== "undefined" ? `${window.location.origin}/?ref=${user?.referralCode}` : "";
+  const referralLink = typeof window !== "undefined" ? `${window.location.origin}/?ref=${userReferralCode}` : "";
   const [showQRCode, setShowQRCode] = React.useState(false);
   const [downloadingQR, setDownloadingQR] = React.useState(false);
 
@@ -423,19 +441,21 @@ export default function ReferralDashboard({ user, onBack }: ReferralDashboardPro
               <div className="p-3 bg-white/10 backdrop-blur-md rounded-2xl border border-white/20 flex flex-col gap-1.5">
                 <p className="text-[9px] font-black uppercase tracking-widest opacity-70">Unique Code</p>
                 <div className="flex items-center justify-between gap-3">
-                  <span className="text-lg font-black font-mono tracking-tighter">
-                    {isCodeVisible ? (user?.referralCode || "---") : "••••••"}
+                  <span className="text-lg font-black font-mono tracking-widest uppercase">
+                    {isCodeVisible ? userReferralCode : "••••••"}
                   </span>
                   <div className="flex items-center gap-1.5">
                     <button 
                       onClick={() => setIsCodeVisible(!isCodeVisible)}
-                      className="p-1.5 bg-white/20 text-white rounded-lg hover:bg-white hover:text-purple-600 transition-all"
+                      title={isCodeVisible ? "Hide referral code" : "Show referral code"}
+                      className="p-1.5 bg-white/20 text-white rounded-lg hover:bg-white hover:text-purple-600 transition-all cursor-pointer"
                     >
                       {isCodeVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                     </button>
                     <button 
-                      onClick={() => copyToClipboard(user?.referralCode || "")}
-                      className="p-1.5 bg-white text-purple-600 rounded-lg hover:scale-110 active:scale-95 transition-all shrink-0 flex items-center"
+                      onClick={() => copyToClipboard(userReferralCode)}
+                      title="Copy referral code"
+                      className="p-1.5 bg-white text-purple-600 rounded-lg hover:scale-110 active:scale-95 transition-all shrink-0 flex items-center cursor-pointer"
                     >
                       {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                     </button>
