@@ -752,7 +752,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                           : effectiveStatus.replace(/_/g, ' ')}
                         {effectiveStatus === "out_for_delivery" && order.deliveryTime && (
                           <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 lowercase">
-                            (Estimated {order.deliveryTime} {order.deliveryTimeUnit} {order.deliveryType === "pickup" ? "pickup" : "delivery"})
+                            (Estimated {order.deliveryTime} {Number(order.deliveryTime) === 1 ? (order.deliveryTimeUnit?.toLowerCase().startsWith('hour') ? 'hour' : order.deliveryTimeUnit?.toLowerCase().startsWith('week') ? 'week' : 'day') : (order.deliveryTimeUnit || 'days')} {order.deliveryType === "pickup" ? "pickup" : "delivery"})
                           </span>
                         )}
                       </h4>
@@ -1074,7 +1074,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                         {order.deliveryType === "pickup" ? "Expected Pickup" : "Est. Delivery"}
                       </p>
                       <p className="text-sm font-bold text-slate-700 dark:text-slate-300 text-center sm:text-left">
-                        {order.deliveryTime ? `${order.deliveryTime} ${order.deliveryTimeUnit}` : "2-3 Business Days"}
+                        {order.deliveryTime ? `${order.deliveryTime} ${Number(order.deliveryTime) === 1 ? (order.deliveryTimeUnit?.toLowerCase().startsWith('hour') ? 'hour' : order.deliveryTimeUnit?.toLowerCase().startsWith('week') ? 'week' : 'day') : (order.deliveryTimeUnit || 'days')}` : "2-3 Business Days"}
                       </p>
                     </div>
                   </div>

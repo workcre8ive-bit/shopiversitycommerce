@@ -232,8 +232,12 @@ You MUST respond ONLY with a JSON object containing the exact fields below:
         ...result
       });
     } catch (error: any) {
-      console.error("Gemini validation endpoint error, using heuristic fallback:", error);
-      const isQuotaExhausted = error.message?.includes("quota") || error.message?.includes("RESOURCE_EXHAUSTED") || error.message?.includes("429");
+      const isQuotaExhausted = error?.message?.includes("quota") || error?.message?.includes("RESOURCE_EXHAUSTED") || error?.status === "RESOURCE_EXHAUSTED" || error?.code === 429;
+      if (isQuotaExhausted) {
+        console.warn("Gemini API quota reached. Bypassing AI verification and using heuristic fallback.");
+      } else {
+        console.warn("Gemini validation endpoint error, using heuristic fallback:", error?.message || error);
+      }
       const prefix = isQuotaExhausted ? "(Note: AI limit reached. Verified via backup check) " : "";
       return res.status(200).json(runHeuristicFallback(prefix));
     }

@@ -18,7 +18,7 @@ interface ProductCardProps {
 }
 
 export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, isOwner, currentUser, customColor }) => {
-  if (product.type === "service" || product.category === "Events & Lifestyle") {
+  if (product.type === "service") {
     return null;
   }
 
@@ -32,6 +32,12 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
     : [product.imageUrl || "/placeholder-product.png"];
 
   const brandColor = customColor || "#ff6b00";
+
+  const discountPct = product.discountPercent && product.discountPercent > 0
+    ? product.discountPercent
+    : (product.priceBefore && product.priceBefore > product.price
+        ? Math.round(((product.priceBefore - product.price) / product.priceBefore) * 100)
+        : 0);
 
   return (
     <>
@@ -85,7 +91,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                 </div>
               ) : null}
               
-              <div className="absolute top-3 right-3 flex flex-col gap-2 z-10">
+              <div className="absolute top-3 right-3 flex flex-col items-end gap-1.5 z-10">
+                {discountPct > 0 && (
+                  <div className="bg-gradient-to-r from-red-600 via-rose-600 to-pink-600 text-white px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider shadow-lg shadow-red-500/30 border border-white/20 flex items-center gap-1 animate-pulse">
+                    <Tag className="w-3 h-3" />
+                    <span>-{discountPct}% OFF</span>
+                  </div>
+                )}
                 {!isOwner && (
                   <button
                     onClick={(e) => {
@@ -109,34 +121,34 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
               </h3>
 
               {/* Condition Tag with soft minimal tint */}
-              <div className="mb-4">
+              <div className="mb-4 flex items-center justify-between gap-1 flex-wrap">
                 <span className="text-[9px] font-extrabold px-2.5 py-1 rounded-full uppercase tracking-wider bg-orange-50 dark:bg-orange-950/20 text-orange-600 dark:text-orange-400">
                   {product.condition}
                 </span>
+                {discountPct > 0 && (
+                  <span className="text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 border border-rose-200/60 dark:border-rose-900/40">
+                    -{discountPct}% SAVINGS
+                  </span>
+                )}
               </div>
 
               {/* Pricing and Action bottom block */}
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between mt-auto pt-3 border-t border-slate-100 dark:border-zinc-800">
                 <div className="flex flex-col">
-                  {product.discountPercent && product.discountPercent > 0 ? (
-                    <span className="text-[8px] font-black uppercase tracking-wide mb-1 text-red-600 dark:text-red-400">
-                      -{product.discountPercent}% OFF
-                    </span>
-                  ) : null}
-                  <div className="flex items-baseline font-bold font-sans flex-wrap gap-1">
+                  <div className="flex items-baseline font-bold font-sans flex-wrap gap-1.5">
                     <div className="flex items-start text-slate-900 dark:text-white">
                       <span className="text-xs mt-0.5 mr-0.5 font-black text-slate-800 dark:text-zinc-200">
                         ₦
                       </span>
-                      <span className="text-lg tracking-tight leading-none font-black">
+                      <span className="text-xl tracking-tight leading-none font-black">
                         {Math.floor(product.price).toLocaleString()}
                       </span>
                       <span className="text-xs font-medium text-slate-500 dark:text-zinc-400">
                         .00
                       </span>
                     </div>
-                    {product.priceBefore ? (
-                      <span className="text-[10px] line-through font-medium ml-1 text-slate-400 dark:text-zinc-500">
+                    {product.priceBefore && product.priceBefore > product.price ? (
+                      <span className="text-xs line-through font-bold text-slate-400 dark:text-zinc-400 decoration-red-500 decoration-2">
                         ₦{Math.floor(product.priceBefore).toLocaleString()}
                       </span>
                     ) : null}
@@ -148,10 +160,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (
-                        (product.category === "Food & Drinks" && product.menuItems && product.menuItems.length > 0) ||
-                        (product.category === "Data Subscriptions")
-                      ) {
+                      if (product.category === "Food & Drinks" && product.menuItems && product.menuItems.length > 0) {
                         window.dispatchEvent(new CustomEvent('view-product-detail', { detail: product }));
                       } else {
                         onAddToCart(product);
@@ -163,14 +172,12 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                       backgroundColor: brandColor,
                     }}
                     title={
-                      (product.category === "Food & Drinks" && product.menuItems && product.menuItems.length > 0) || 
-                      (product.category === "Data Subscriptions") ? "Explore options" : "Add to cart"
+                      product.category === "Food & Drinks" && product.menuItems && product.menuItems.length > 0 ? "Explore options" : "Add to cart"
                     }
                   >
                     <ShoppingCart className="w-3.5 h-3.5" />
                     <span>
-                      {(product.category === "Food & Drinks" && product.menuItems && product.menuItems.length > 0) || 
-                      (product.category === "Data Subscriptions") ? "Explore" : "Add"}
+                      {product.category === "Food & Drinks" && product.menuItems && product.menuItems.length > 0 ? "Explore" : "Add"}
                     </span>
                   </button>
                 ) : (

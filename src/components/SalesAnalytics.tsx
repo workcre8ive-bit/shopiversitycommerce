@@ -1113,7 +1113,7 @@ export default function SalesAnalytics({
                   </td>
                 </tr>
               ) : (
-                filteredRecentSales.map((order) => {
+                filteredRecentSales.map((order, oIdx) => {
                   const dateFormatted = order.createdAt 
                     ? new Date(order.createdAt).toLocaleDateString('en-US', {
                         month: 'short',
@@ -1126,7 +1126,7 @@ export default function SalesAnalytics({
 
                   return (
                     <tr 
-                      key={order.id} 
+                      key={`sale-${order.id || oIdx}-${oIdx}`} 
                       className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors"
                     >
                       {/* Date */}

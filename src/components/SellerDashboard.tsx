@@ -699,11 +699,6 @@ export default function SellerDashboard({
   };
 
   const handleEdit = (product: Product) => {
-    if (product.category === "Events & Lifestyle") {
-      const event = new CustomEvent('switch-to-event-planner', { detail: product.id });
-      window.dispatchEvent(event);
-      return;
-    }
     setEditingProduct(product);
     setActiveSubTab("add-product");
   };
@@ -781,15 +776,6 @@ export default function SellerDashboard({
   return (
     <div className="space-y-8 pb-20">
       <div className="flex items-center gap-4">
-        {onBack && (
-          <button 
-            onClick={onBack}
-            className="p-3 bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm hover:scale-105 transition-all text-slate-600 dark:text-slate-400 group"
-            title="Back"
-          >
-            <ArrowLeft className="w-5 h-5 group-hover:-translate-x-1 transition-transform" />
-          </button>
-        )}
         <div className="space-y-1">
           <h2 className="text-3xl font-black text-slate-900 dark:text-white tracking-tight">Seller Dashboard</h2>
           <p className="text-sm text-slate-500 font-medium tracking-tight">Manage your shop, products, and earnings</p>
@@ -999,9 +985,9 @@ export default function SellerDashboard({
                     {orders.length === 0 ? (
                       <EmptyState icon={ShoppingBag} message="No orders yet" />
                     ) : (
-                      orders.slice(0, 5).map((order) => (
+                      orders.slice(0, 5).map((order, oIdx) => (
                         <OrderRow 
-                          key={`recent-${order.id}`} 
+                          key={`recent-${order.id || oIdx}-${oIdx}`} 
                           order={order} 
                           onUpdate={(id, status) => updateOrderStatus(id, status, order)} 
                           currentTime={currentTime}
@@ -1039,9 +1025,9 @@ export default function SellerDashboard({
                     {products.filter(p => !p.isDeleted).length === 0 ? (
                       <EmptyState icon={Package} message="No products listed" />
                     ) : (
-                      products.filter(p => !p.isDeleted).slice(0, 3).map((product) => (
+                      products.filter(p => !p.isDeleted).slice(0, 3).map((product, pIdx) => (
                         <ProductRow 
-                          key={`recent-prod-${product.id}`} 
+                          key={`recent-prod-${product.id || pIdx}-${pIdx}`} 
                           product={product} 
                           onDelete={deleteProduct} 
                           onEdit={handleEdit} 
@@ -1091,10 +1077,10 @@ export default function SellerDashboard({
                     ) : (
                       notifications.map((notif, idx) => {
                         const styleMap: any = {
-                          order: "bg-blue-50 dark:bg-blue-950/60 border-blue-100 dark:border-blue-800/50 text-blue-700 dark:text-blue-300",
-                          payout: "bg-emerald-50 dark:bg-emerald-950/60 border-emerald-100 dark:border-emerald-800/50 text-emerald-700 dark:text-emerald-300",
-                          welcome: "bg-purple-50 dark:bg-purple-950/60 border-purple-100 dark:border-purple-800/50 text-purple-700 dark:text-purple-300",
-                          system: "bg-amber-50 dark:bg-amber-950/60 border-amber-100 dark:border-amber-800/50 text-amber-700 dark:text-amber-300",
+                          order: "bg-blue-50 dark:bg-blue-950/80 border-blue-200 dark:border-blue-700/60 text-blue-700 dark:text-blue-200 font-bold",
+                          payout: "bg-emerald-50 dark:bg-emerald-950/80 border-emerald-200 dark:border-emerald-700/60 text-emerald-700 dark:text-emerald-200 font-bold",
+                          welcome: "bg-purple-50 dark:bg-purple-950/80 border-purple-200 dark:border-purple-700/60 text-purple-700 dark:text-purple-200 font-bold",
+                          system: "bg-amber-50 dark:bg-amber-950/80 border-amber-200 dark:border-amber-700/60 text-amber-700 dark:text-amber-200 font-bold",
                         };
 
                         return (
@@ -1103,8 +1089,8 @@ export default function SellerDashboard({
                             className={cn(
                               "p-3.5 sm:p-4 rounded-2xl border text-left transition-all relative flex flex-col gap-1.5 min-w-0",
                               notif.isRead 
-                                ? "bg-slate-50/60 dark:bg-slate-800/30 border-slate-200/60 dark:border-slate-800/60 text-slate-600 dark:text-slate-300" 
-                                : "bg-white dark:bg-slate-850 border-indigo-200 dark:border-indigo-800/60 shadow-sm text-slate-900 dark:text-white"
+                                ? "bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700/60 text-slate-600 dark:text-slate-300" 
+                                : "bg-white dark:bg-slate-800 border-indigo-200 dark:border-indigo-500/50 shadow-sm text-slate-900 dark:text-white"
                             )}
                           >
                             {!notif.isRead && (
@@ -1118,13 +1104,13 @@ export default function SellerDashboard({
                                 {notif.title}
                               </span>
                             </div>
-                            <p className="text-[11px] leading-snug font-medium text-slate-600 dark:text-slate-300 select-none break-words">
+                            <p className="text-[11px] leading-snug font-semibold text-slate-600 dark:text-slate-200 select-none break-words">
                               {notif.message}
                             </p>
                             {!notif.isRead && (
                               <button 
                                 onClick={() => handleMarkNotifRead(notif.id)}
-                                className="text-[9px] font-black text-indigo-600 dark:text-indigo-400 hover:underline text-left self-start mt-0.5 cursor-pointer bg-transparent border-none p-0"
+                                className="text-[9px] font-black text-indigo-600 dark:text-indigo-300 hover:underline text-left self-start mt-0.5 cursor-pointer bg-transparent border-none p-0"
                               >
                                 Mark Read
                               </button>
@@ -1183,17 +1169,18 @@ export default function SellerDashboard({
             exit={{ opacity: 0, y: -10 }}
             className="space-y-8"
           >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 bg-slate-100 dark:bg-slate-800 p-1 rounded-2xl w-fit">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-2xl w-full sm:w-fit overflow-x-auto scrollbar-none">
                 {[
                   { id: "all", label: "All Items", icon: LayoutGrid },
-                  { id: "good", label: "Goods", icon: Package }
+                  { id: "good", label: "Goods", icon: Package },
+                  { id: "service", label: "Services", icon: Sparkles }
                 ].map(tab => (
                   <button
                     key={tab.id}
                     onClick={() => setProductActiveType(tab.id as any)}
                     className={cn(
-                      "flex items-center gap-2 px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+                      "flex items-center gap-2 px-4 sm:px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shrink-0 cursor-pointer",
                       productActiveType === tab.id 
                         ? "bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-lg" 
                         : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
@@ -1206,7 +1193,7 @@ export default function SellerDashboard({
               </div>
               <button 
                 onClick={() => setActiveSubTab("add-product")}
-                className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold text-xs uppercase tracking-widest flex items-center gap-2 shadow-lg shadow-indigo-100 dark:shadow-none"
+                className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg shadow-indigo-100 dark:shadow-none shrink-0"
               >
                 <Plus className="w-4 h-4" />
                 Add New
@@ -1218,9 +1205,8 @@ export default function SellerDashboard({
                 const isDeleted = p.isDeleted;
                 if (isDeleted) return false;
                 if (productActiveType === "all") return true;
-                if (productActiveType === "good") return p.type === "good" && p.category !== "Events & Lifestyle";
-                if (productActiveType === "service") return p.type === "service" && p.category !== "Events & Lifestyle";
-                if (productActiveType === "event") return p.category === "Events & Lifestyle";
+                if (productActiveType === "good") return p.type === "good";
+                if (productActiveType === "service") return p.type === "service";
                 return true;
               }).length === 0 ? (
                 <div className="col-span-full py-20 text-center bg-white dark:bg-slate-900 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 transition-colors">
@@ -1233,13 +1219,12 @@ export default function SellerDashboard({
                   const isDeleted = p.isDeleted;
                   if (isDeleted) return false;
                   if (productActiveType === "all") return true;
-                  if (productActiveType === "good") return p.type === "good" && p.category !== "Events & Lifestyle";
-                  if (productActiveType === "service") return p.type === "service" && p.category !== "Events & Lifestyle";
-                  if (productActiveType === "event") return p.category === "Events & Lifestyle";
+                  if (productActiveType === "good") return p.type === "good";
+                  if (productActiveType === "service") return p.type === "service";
                   return true;
-                }).map((product) => (
+                }).map((product, pIdx) => (
                   <ProductGridItem 
-                    key={`grid-${product.id}`} 
+                    key={`grid-${product.id || pIdx}-${pIdx}`} 
                     product={product} 
                     onDelete={deleteProduct} 
                     onEdit={handleEdit} 
@@ -1273,9 +1258,9 @@ export default function SellerDashboard({
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                {products.filter(p => p.isDeleted).map((product) => (
+                {products.filter(p => p.isDeleted).map((product, pIdx) => (
                   <ProductGridItem 
-                    key={`trash-${product.id}`} 
+                    key={`trash-${product.id || pIdx}-${pIdx}`} 
                     product={product} 
                     onDelete={(id: string) => {
                       setProductToDelete(id);
@@ -1323,9 +1308,9 @@ export default function SellerDashboard({
                 <h3 className="text-xl font-bold text-slate-900 dark:text-white">No orders yet</h3>
               </div>
             ) : (
-              orders.map((order) => (
+              orders.map((order, oIdx) => (
                 <OrderRow 
-                  key={`full-${order.id}`} 
+                  key={`full-${order.id || oIdx}-${oIdx}`} 
                   order={order} 
                   onUpdate={(id, status) => updateOrderStatus(id, status, order)} 
                   full 
@@ -2775,9 +2760,9 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                     <div className="space-y-3">
                       <p className="text-xs text-slate-500 dark:text-slate-200 font-bold uppercase tracking-wider">Available Riders on your Campus</p>
                       <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
-                        {logisticsPartners.map((partner) => (
+                        {logisticsPartners.map((partner, pIdx) => (
                           <div 
-                            key={partner.id}
+                            key={`partner-${partner.id || pIdx}-${pIdx}`}
                             className="p-4 bg-slate-50 dark:bg-slate-800/90 rounded-2xl border border-slate-200 dark:border-slate-700 hover:border-orange-500/50 transition-all flex items-center justify-between gap-4"
                           >
                             <div className="space-y-1 text-left">
@@ -3117,7 +3102,7 @@ function ProductGridItem({ product, onDelete, onEdit, onRestore, isRestoring, is
           className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
           referrerPolicy="no-referrer"
         />
-        <div className="absolute top-4 right-4 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="absolute top-4 right-4 flex flex-col gap-2 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity z-10">
           {isDeletedView ? (
             <>
               <button 
@@ -3303,14 +3288,6 @@ export const SERVICE_CATEGORY_MAPPING: Record<string, ServiceCategoryMapping> = 
       { id: "subjectTaught", label: "Main Subject(s) Offered", type: "text", placeholder: "e.g. Mathematics, Physics, Organic Chemistry", required: true }
     ]
   },
-  "Events & Lifestyle": {
-    title: "🎭 Event Planning & Entertainment Details",
-    fields: [
-      { id: "setupTime", label: "Event Setup & Buffer Time Required", type: "select", options: ["30 mins", "1 hour", "2 hours", "3 hours", "1 day"], required: true },
-      { id: "eventRadius", label: "Travel Radius Limit from Campus (km)", type: "select", options: ["5", "10", "25", "50", "unlimited"], required: true },
-      { id: "includesEquipment", label: "Setup Gear & Sound Equipment Included", type: "checkbox", required: false }
-    ]
-  },
   "Real Estate & Housing": {
     title: "🔑 Hostel & Housing Booking Details",
     fields: [
@@ -3406,6 +3383,20 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
       setSelectedLogisticsCompanyId(editingProduct.logisticsCompanyId || "");
     }
   }, [editingProduct]);
+
+  // Automatically calculate discount percentage from Price Now and Price Before
+  React.useEffect(() => {
+    const pNow = parseFloat(price);
+    const pBefore = parseFloat(priceBefore);
+    if (!isNaN(pNow) && !isNaN(pBefore) && pBefore > 0 && pNow < pBefore) {
+      const calcDiscount = Math.round(((pBefore - pNow) / pBefore) * 100);
+      if (calcDiscount > 0 && calcDiscount <= 100) {
+        setDiscountPercent(calcDiscount.toString());
+      }
+    } else {
+      setDiscountPercent("");
+    }
+  }, [price, priceBefore]);
 
   React.useEffect(() => {
     const fetchAllLogistics = async () => {
@@ -3572,7 +3563,8 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
           }
         }
       } catch (err) {
-        console.error("Error fetching address suggestions:", err);
+        // Quiet fallback when network or Nominatim fetch is blocked
+        setAddrSuggestions([]);
       } finally {
         setIsSearchingSuggestions(false);
       }
@@ -3661,7 +3653,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
         }
       }
     } catch (err) {
-      console.error("OSM Fallback error:", err);
+      setLgaPlacesSuggestions([]);
     } finally {
       setIsSearchingLgaPlaces(false);
     }
@@ -3827,7 +3819,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
           }
         }
       } catch (osmErr) {
-        console.error("OSM Nominatim geocoding fallback failed:", osmErr);
+        // Quiet fallback when network or Nominatim is unreachable
       }
       return false;
     };
@@ -4015,12 +4007,12 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
     "Electronics", "Textbooks", "Clothing", "Furniture", "Beauty & Health",
     "Shoes & Bags", "Phones & Accessories", "Computers & Gadgets", "Musical Instruments", 
     "Sports & Outdoors", "Stationery & Art Supplies", "Home Appliances", "Collectibles & Art",
-    "Data Subscriptions", "Other"
+    "Other"
   ];
 
   const SERVICE_CATEGORIES = [
     "Creative & Design", "Academic & Tutoring", "Home & Personal Care", "Tech & Digital", 
-    "Events & Lifestyle", "Logistics & Errands", "Real Estate & Housing", "Handyman Services",
+    "Logistics & Errands", "Real Estate & Housing", "Handyman Services",
     "Tailoring & Fashion", "Cleaning & Laundry", "Photography & Video", "Catering & Cooking",
     "Other"
   ];
@@ -4142,6 +4134,14 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
       return;
     }
 
+    const pNow = parseFloat(price);
+    const pBefore = parseFloat(priceBefore);
+    if (!isNaN(pBefore) && pBefore > 0 && !isNaN(pNow) && pBefore < pNow) {
+      setError(`Price Before (₦${priceBefore}) cannot be lower than Price Now (₦${price}). Original price must be higher than current price.`);
+      setLoading(false);
+      return;
+    }
+
     // Validation of pickup/meetup coordinates using geocoder if enabled on submit
     let addressToVerify = location.trim();
     if (type === "service" && !addressToVerify) {
@@ -4218,7 +4218,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
               }
             }
           } catch (osmErr) {
-            console.error("OSM background geocode failed:", osmErr);
+            // Quiet background fallback
           }
         }
       }
@@ -4339,7 +4339,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
         location: computedServiceType === "digital" ? "Online/Remote" : finalLocation,
         imageUrl: (type === "good" || isFoodAndDrinks || type === "service") ? (finalImages[0] || `https://picsum.photos/seed/${name.replace(/\s/g, '')}/400/400`) : "",
         imageUrls: (type === "good" || isFoodAndDrinks || type === "service") ? (finalImages.length > 0 ? finalImages : [`https://picsum.photos/seed/${name.replace(/\s/g, '')}/400/400`]) : [],
-        menuItems: (isFoodAndDrinks || category === "Data Subscriptions" || type === "service") ? menuItems : [],
+        menuItems: (isFoodAndDrinks || type === "service") ? menuItems : [],
         sellerId: auth.currentUser.uid,
         sellerName: currentUser?.displayName || auth.currentUser.displayName || "Anonymous",
         sellerVerified: currentUser?.isVerified || false,
@@ -4462,7 +4462,19 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
               >
                 {/* Header Banner - Brand Colors */}
                 <div className="bg-brand-gradient p-8 text-center text-white relative">
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-16 -mt-16" />
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      setSuccessMessage(null);
+                      setLastCreatedProduct(null);
+                      onSuccess();
+                    }}
+                    className="absolute top-4 right-4 z-20 p-2.5 bg-white/20 hover:bg-white/30 backdrop-blur-md text-white rounded-full transition-all cursor-pointer shadow-sm hover:scale-105 active:scale-95"
+                    title="Close"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-16 -mt-16 pointer-events-none" />
                   <div className="w-16 h-16 bg-white/20 backdrop-blur-md rounded-2xl flex items-center justify-center mx-auto mb-4 text-white font-black text-2xl shadow-md">
                     ✓
                   </div>
@@ -4632,7 +4644,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
         )}
 
         {/* Handcrafted Stepper for Mobile Form */}
-        <div className="flex items-center justify-between pb-6 mb-4 border-b border-slate-100 dark:border-zinc-800">
+        <div className="flex items-center justify-between pb-6 mb-4 border-b border-slate-100 dark:border-zinc-800 overflow-x-auto scrollbar-none px-1 gap-2">
           {[
             { id: "details", label: "Details", icon: "📝" },
             { id: "pricing", label: "Pricing", icon: "💰" },
@@ -4849,7 +4861,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
 
           <div className="space-y-2">
             <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">
-              {isFoodAndDrinks || type === "service" ? "Service/Main Item Name" : "Product Name"}
+              {isFoodAndDrinks ? "Menu / Food Item Name" : "Product Name"}
             </label>
             {isFoodAndDrinks ? (
               <div className="space-y-3">
@@ -4887,81 +4899,18 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                   />
                 )}
               </div>
-            ) : type === "good" ? (
-            <input 
-              required
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full h-14 px-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-indigo-500 outline-none transition-all text-slate-900 dark:text-white placeholder:text-slate-400"
-              placeholder="e.g. iPhone 13 Pro Max"
-            />
-          ) : (
-            <div className="space-y-3">
-              <select 
+            ) : (
+              <input 
                 required
                 value={name}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setName(val);
-                  
-                  // Auto-category mapping
-                  const categoryMap: Record<string, string> = {
-                    "Graphic Design": "Creative & Design",
-                    "Tutoring": "Academic & Tutoring",
-                    "Cleaning": "Cleaning & Laundry",
-                    "Delivery": "Logistics & Errands",
-                    "Repairs": "Handyman Services",
-                    "Hairdressing": "Home & Personal Care",
-                    "Makeup Artistry": "Home & Personal Care",
-                    "Photography": "Photography & Video",
-                    "Catering": "Catering & Cooking",
-                    "Food & Drinks": "Catering & Cooking",
-                    "Laundry": "Cleaning & Laundry",
-                    "Tailoring/Fashion Design": "Tailoring & Fashion",
-                    "Web Development": "Tech & Digital",
-                    "Content Writing": "Creative & Design",
-                    "Social Media Management": "Tech & Digital",
-                    "Printing/Photocopying": "Creative & Design",
-                    "Modeling": "Creative & Design",
-                    "Barbering": "Home & Personal Care",
-                    "Shoe Making/Repair": "Handyman Services"
-                  };
-                  
-                  if (categoryMap[val]) {
-                    setCategory(categoryMap[val]);
-                  } else if (val === "Other") {
-                    setCategory("Other");
-                    setShowOtherCategoryInput(true);
-                  }
-
-                  if (HOME_SERVICE_REQUIRED.includes(val)) {
-                    setDeliveryOptions(prev => ({ ...prev, delivery: true }));
-                  } else {
-                    setDeliveryOptions(prev => ({ ...prev, delivery: false }));
-                  }
-                }}
-                className="w-full h-14 px-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-indigo-500 outline-none transition-all appearance-none text-slate-900 dark:text-white"
-              >
-                <option value="" disabled className="text-slate-500">Select a service...</option>
-                {SERVICE_OPTIONS.map(s => (
-                  <option key={s} value={s} className="bg-slate-900">{s}</option>
-                ))}
-              </select>
-              {name === "Other" && (
-                <input 
-                  required
-                  type="text"
-                  value={customServiceName}
-                  onChange={(e) => setCustomServiceName(e.target.value)}
-                  className="w-full h-14 px-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-indigo-500 outline-none transition-all text-slate-900 dark:text-white font-medium placeholder:text-slate-400"
-                  placeholder="Enter your service name..."
-                />
-              )}
-            </div>
-          )}
+                onChange={(e) => setName(e.target.value)}
+                className="w-full h-14 px-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-indigo-500 outline-none transition-all text-slate-900 dark:text-white placeholder:text-slate-400"
+                placeholder="e.g. iPhone 13 Pro Max"
+              />
+            )}
+          </div>
         </div>
-      </div>
-      <div className="space-y-2">
+        <div className="space-y-2">
           <div className="flex items-center justify-between ml-1">
             <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Description</label>
           </div>
@@ -4971,9 +4920,9 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             className="w-full p-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-indigo-500 outline-none transition-all resize-none text-slate-900 dark:text-white placeholder:text-slate-400"
-            placeholder={type === "good" ? "Describe your product in detail..." : "Describe your service and what you offer..."}
+            placeholder="Describe your product in detail..."
           />
-      </div>
+        </div>
       </div>
 
       <div className={formStep === "pricing" ? "space-y-6" : "hidden"}>
@@ -5028,12 +4977,23 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                 type="number"
                 value={priceBefore}
                 onChange={(e) => setPriceBefore(e.target.value)}
-                className="w-full h-12 px-4 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:border-[#ff6b00] outline-none transition-all text-sm text-slate-900 dark:text-white placeholder:text-slate-400"
+                className={cn(
+                  "w-full h-12 px-4 bg-white dark:bg-slate-800 border rounded-xl focus:border-[#ff6b00] outline-none transition-all text-sm text-slate-900 dark:text-white placeholder:text-slate-400",
+                  parseFloat(priceBefore) > 0 && parseFloat(price) > 0 && parseFloat(priceBefore) < parseFloat(price)
+                    ? "border-red-500 text-red-600 dark:text-red-400 focus:border-red-500"
+                    : "border-slate-200 dark:border-slate-700"
+                )}
                 placeholder="e.g. 12000 (Shows a crossed-out comparison price to highlight discounts)"
               />
-              <p className="text-[9px] text-slate-400 dark:text-slate-500 font-bold ml-1">
-                Optional. If typed, buyers see this price crossed out next to the selling price to highlight a savings discount!
-              </p>
+              {parseFloat(priceBefore) > 0 && parseFloat(price) > 0 && parseFloat(priceBefore) < parseFloat(price) ? (
+                <p className="text-[10px] text-red-500 font-bold ml-1 flex items-center gap-1">
+                  ⚠️ Price Before (₦{priceBefore}) cannot be lower than Price Now (₦{price}).
+                </p>
+              ) : (
+                <p className="text-[9px] text-slate-400 dark:text-slate-500 font-bold ml-1">
+                  Optional. If typed, buyers see this price crossed out next to the selling price to highlight a savings discount!
+                </p>
+              )}
             </div>
           ) : null}
 
@@ -5949,142 +5909,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
         </div>
 
         <div className={formStep === "pricing" ? "space-y-6" : "hidden"}>
-        {category === "Data Subscriptions" && (
-          <div className="space-y-6 p-6 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-[2rem]">
-            <div className="flex items-center justify-between">
-              <div>
-                <h4 className="text-sm font-bold text-slate-900 dark:text-white">Subscription Packages / Plans</h4>
-                <p className="text-[10px] text-slate-500 font-medium tracking-tight">Add individual packages, data sizes or subscription options</p>
-              </div>
-              <button 
-                type="button"
-                onClick={() => setMenuItems([...menuItems, { id: Math.random().toString(36).substr(2, 9), name: "", price: 0, measureType: "30 Days", measureAmount: 1, imageUrl: "" }])}
-                className="flex items-center gap-2 px-4 py-2 bg-slate-900 dark:bg-slate-800 text-white dark:text-indigo-500 rounded-xl text-[10px] font-bold hover:bg-slate-800 transition-all shadow-sm"
-              >
-                <Plus className="w-3 h-3" />
-                Add Package / Option
-              </button>
-            </div>
 
-            <div className="space-y-4">
-              {menuItems.map((item, index) => (
-                <div key={`edit-subs-${item.id || ""}-${index}`} className="p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 flex flex-col gap-4 shadow-sm relative group">
-                  <button 
-                    type="button"
-                    onClick={() => setMenuItems(menuItems.filter((_, i) => i !== index))}
-                    className="absolute -top-2 -right-2 p-1.5 bg-red-100 dark:bg-red-900/20 text-red-600 rounded-lg opacity-0 group-hover:opacity-100 transition-all hover:bg-red-200"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1">Plan Name</label>
-                      <input 
-                        placeholder="e.g. MTN 10GB Data, Netflix Premium"
-                        value={item.name}
-                        onChange={(e) => {
-                          const updated = [...menuItems];
-                          updated[index].name = e.target.value;
-                          setMenuItems(updated);
-                        }}
-                        className="w-full h-10 px-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-950 dark:text-white placeholder:text-slate-500 outline-none focus:border-indigo-500"
-                      />
-                    </div>
-                    
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1">Price (₦)</label>
-                      <input 
-                        type="number"
-                        placeholder="Price"
-                        value={item.price || ""}
-                        onChange={(e) => {
-                          const updated = [...menuItems];
-                          updated[index].price = parseFloat(e.target.value) || 0;
-                          setMenuItems(updated);
-                        }}
-                        className="w-full h-10 px-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-950 dark:text-white placeholder:text-slate-500 outline-none focus:border-indigo-500"
-                      />
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1">Validity (e.g. 30 Days)</label>
-                      <input 
-                        placeholder="e.g. 30 Days, 7 Days, 1 Month"
-                        value={item.measureType || ""}
-                        onChange={(e) => {
-                          const updated = [...menuItems];
-                          updated[index].measureType = e.target.value;
-                          setMenuItems(updated);
-                        }}
-                        className="w-full h-10 px-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-950 dark:text-white placeholder:text-slate-500 outline-none focus:border-indigo-500"
-                      />
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1">Data Amount / Access Details</label>
-                      <input 
-                        placeholder="e.g. 10GB Data, Unlimited access"
-                        value={item.measureAmountDetail || ""}
-                        onChange={(e) => {
-                          const updated = [...menuItems];
-                          updated[index].measureAmountDetail = e.target.value;
-                          setMenuItems(updated);
-                        }}
-                        className="w-full h-10 px-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-950 dark:text-white placeholder:text-slate-500 outline-none focus:border-indigo-500"
-                      />
-                    </div>
-
-                    <div className="sm:col-span-2 border-t border-slate-100 dark:border-slate-800 pt-3 mt-1">
-                      <p className="text-[10px] font-black text-indigo-500 dark:text-indigo-400 uppercase tracking-widest mb-2 flex items-center gap-1">
-                        ⚡ CheapDataHub Automation Binding (Optional)
-                      </p>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div className="space-y-1">
-                          <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest pl-1">CheapDataHub Plan ID (e.g. 120)</label>
-                          <input 
-                            placeholder="e.g. 120"
-                            value={item.cheapDataHubPlanId || ""}
-                            onChange={(e) => {
-                              const updated = [...menuItems];
-                              updated[index].cheapDataHubPlanId = e.target.value;
-                              setMenuItems(updated);
-                            }}
-                            className="w-full h-10 px-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono font-bold text-slate-950 dark:text-white placeholder:text-slate-400 outline-none focus:border-indigo-500"
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest pl-1">Data Network Code</label>
-                          <select 
-                            value={item.cheapDataHubNetworkCode || ""}
-                            onChange={(e) => {
-                              const updated = [...menuItems];
-                              updated[index].cheapDataHubNetworkCode = e.target.value;
-                              setMenuItems(updated);
-                            }}
-                            className="w-full h-10 px-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-950 dark:text-white outline-none focus:border-indigo-500"
-                          >
-                            <option value="">-- No Auto-Topup / Select Network --</option>
-                            <option value="1">1 - MTN</option>
-                            <option value="2">2 - GLO</option>
-                            <option value="3">3 - 9mobile</option>
-                            <option value="4">4 - Airtel</option>
-                          </select>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-
-              {menuItems.length === 0 && (
-                <div className="py-6 text-center bg-white/50 dark:bg-slate-900/30 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800">
-                  <p className="text-[10px] font-bold text-slate-400">No packages added yet. Click 'Add Package / Option' above.</p>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
 
         {type === "service" && (
           <div className="space-y-6 p-6 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-[2rem]">
@@ -6262,7 +6087,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                   </span>
                 </div>
               ) : (
-                editingProduct ? "Update Listing" : (type === "service" ? "Publish Service" : "Publish Product")
+                editingProduct ? "Update Listing" : "Publish Product"
               )}
             </motion.button>
           )}

@@ -82,7 +82,7 @@ import { motion, AnimatePresence } from "motion/react";
 const ALL_CATEGORIES = [
   "Electronics", "Textbooks", "Clothing", "Furniture", "Food & Drinks", "Beauty & Health",
   "Creative & Design", "Academic & Tutoring", "Home & Personal Care", "Tech & Digital", 
-  "Logistics & Errands", "Data Subscriptions", "Sports & Outdoors", "Musical Instruments", 
+  "Logistics & Errands", "Sports & Outdoors", "Musical Instruments", 
   "Collectibles & Art", "Jobs & Internships", "Other"
 ];
 
@@ -100,7 +100,6 @@ const getCategoryEmoji = (category: string) => {
     case "Home & Personal Care": return "🧼 Home & Care";
     case "Tech & Digital": return "💻 Digital Services";
     case "Logistics & Errands": return "📦 Swift Logistics";
-    case "Data Subscriptions": return "📶 Data & Airtime";
     case "Sports & Outdoors": return "⚽ Sports Gear";
     case "Musical Instruments": return "🎸 Instruments";
     case "Collectibles & Art": return "🏺 Fine Art";
@@ -234,13 +233,27 @@ export default function App() {
   const [viewingProduct, setViewingProduct] = React.useState<Product | null>(null);
   const [viewingSellerId, setViewingSellerId] = React.useState<string | null>(null);
 
+  const [activeRole, setActiveRole] = React.useState<"buyer" | "seller">("buyer");
+  const [chatWithUserId, setChatWithUserId] = React.useState<string | null>(null);
+  const [isCartOpen, setIsCartOpen] = React.useState(false);
+  const [notificationView, setNotificationView] = React.useState<"unread" | "read">("unread");
+  const [connectionError, setConnectionError] = React.useState<string | null>(null);
+  const [needsProfile, setNeedsProfile] = React.useState(false);
+  const [hibernationMessage, setHibernationMessage] = React.useState<string | null>(null);
+
   const handleGoBack = React.useCallback(() => {
     if (viewingProduct) {
       setViewingProduct(null);
+      if (activeRole === "seller") {
+        setActiveTabState("dashboard");
+      }
       return;
     }
     if (viewingSellerId) {
       setViewingSellerId(null);
+      if (activeRole === "seller") {
+        setActiveTabState("dashboard");
+      }
       return;
     }
     setTabHistory((history) => {
@@ -249,17 +262,10 @@ export default function App() {
         setActiveTabState(prev);
         return history.slice(0, -1);
       }
-      setActiveTabState("market");
+      setActiveTabState(activeRole === "seller" ? "dashboard" : "market");
       return [];
     });
-  }, [viewingProduct, viewingSellerId]);
-  const [chatWithUserId, setChatWithUserId] = React.useState<string | null>(null);
-  const [isCartOpen, setIsCartOpen] = React.useState(false);
-  const [notificationView, setNotificationView] = React.useState<"unread" | "read">("unread");
-  const [connectionError, setConnectionError] = React.useState<string | null>(null);
-  const [needsProfile, setNeedsProfile] = React.useState(false);
-  const [hibernationMessage, setHibernationMessage] = React.useState<string | null>(null);
-  const [activeRole, setActiveRole] = React.useState<"buyer" | "seller">("buyer");
+  }, [viewingProduct, viewingSellerId, activeRole]);
   const [pendingEditProduct, setPendingEditProduct] = React.useState<any>(null);
   const [storefrontPreviewSettings, setStorefrontPreviewSettings] = React.useState<any>(null);
   const initialTabSet = React.useRef(false);
@@ -601,9 +607,6 @@ export default function App() {
 
   const filteredProducts = Array.from(new Map<string, Product>(products.filter((p) => {
     if (p.isDeleted || p.isHibernated || (p.stock !== undefined && p.stock <= 0)) return false;
-    
-    // Any events tickets should not be in general marketplace, only on Live Events tab
-    if (p.category === "Events & Lifestyle") return false;
     
     // Services should not be in general marketplace, only on Services tab
     if (p.type === "service") return false;
@@ -1260,7 +1263,7 @@ export default function App() {
 
                     {/* Horizontally Scrollable Category Pill Navigation */}
                     <div className="flex items-center gap-2.5 overflow-x-auto pb-4 pt-1 scrollbar-none -mx-4 px-4 sm:mx-0 sm:px-0">
-                      {["All", ...ALL_CATEGORIES.filter(c => !["Events & Lifestyle", "Creative & Design", "Academic & Tutoring", "Tech & Digital", "Logistics & Errands", "Jobs & Internships"].includes(c))].map((category, catIdx) => {
+                      {["All", ...ALL_CATEGORIES.filter(c => !["Creative & Design", "Academic & Tutoring", "Tech & Digital", "Logistics & Errands", "Jobs & Internships"].includes(c))].map((category, catIdx) => {
                         const isSelected = filterCategory === category;
                         return (
                           <button
@@ -1513,7 +1516,6 @@ export default function App() {
 
                     const searchResults = products.filter((p) => {
                       if (p.isDeleted || p.isHibernated || (p.stock !== undefined && p.stock <= 0)) return false;
-                      if (p.category === "Events & Lifestyle") return false;
                       if (p.type === "service") return false;
                       if (p.category === "Logistics & Errands" || p.category === "Logistics") return false;
                       

@@ -135,8 +135,8 @@ export default function SellerStorefront({ sellerId, currentUser, previewSetting
     const cats = Array.from(new Set(products
       .filter(p => {
         if (!isSeller && p.stock !== undefined && p.stock <= 0) return false;
-        // Strictly exclude services, events, and logistics in storefront
-        if (p.type === "service" || p.category === "Events & Lifestyle" || p.category === "Events" || p.category === "Logistics & Errands" || p.category === "Logistics") {
+        // Strictly exclude services and logistics in storefront
+        if (p.type === "service" || p.category === "Logistics & Errands" || p.category === "Logistics") {
           return false;
         }
         return p.type === "good";
@@ -151,8 +151,8 @@ export default function SellerStorefront({ sellerId, currentUser, previewSetting
     const isSeller = currentUser && currentUser.uid === sellerId;
     return products.filter(p => {
       if (!isSeller && p.stock !== undefined && p.stock <= 0) return false;
-      // Strictly exclude services, events, and logistics in storefront
-      if (p.type === "service" || p.category === "Events & Lifestyle" || p.category === "Events" || p.category === "Logistics & Errands" || p.category === "Logistics") {
+      // Strictly exclude services and logistics in storefront
+      if (p.type === "service" || p.category === "Logistics & Errands" || p.category === "Logistics") {
         return false;
       }
       if (p.type !== "good") return false;

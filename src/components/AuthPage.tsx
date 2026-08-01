@@ -205,7 +205,16 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
           if (!fullName.trim()) errors.fullName = "Full name is required";
           if (!username.trim()) errors.username = "Username is required";
           if (!email.trim()) errors.email = "Email is required";
-          if (!phone.trim()) errors.phone = "Phone number is required";
+          if (!phone.trim()) {
+            errors.phone = "Phone number is required";
+          } else if (phonePrefix === "+234") {
+            const cleanPhone = phone.replace(/\D/g, "");
+            if (cleanPhone.length !== 11) {
+              errors.phone = "Nigerian phone number must be 11 digits (e.g. 08012345678).";
+            } else if (!cleanPhone.startsWith("0")) {
+              errors.phone = "Nigerian 11-digit phone number must start with 0 (e.g. 08012345678).";
+            }
+          }
           if (!password) errors.password = "Password is required";
 
           // Validate passwords match
@@ -248,7 +257,7 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
             displayName: fullName || firebaseUser.displayName || "User",
             username: username.toLowerCase(),
             email: firebaseUser.email || email.toLowerCase(),
-            phoneNumber: `${phonePrefix}${phone}`,
+            phoneNumber: phonePrefix === "+234" && phone.startsWith("0") ? `+234${phone.replace(/\D/g, "").slice(1)}` : `${phonePrefix}${phone}`,
             gender: gender,
             role: role === "seller" ? "both" : "buyer",
             activeRole: role,
@@ -1306,12 +1315,20 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
                               required
                               type="tel"
                               value={phone}
-                              onChange={(e) => setPhone(e.target.value)}
+                              maxLength={phonePrefix === "+234" ? 11 : 15}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                if (phonePrefix === "+234") {
+                                  setPhone(val.replace(/\D/g, ""));
+                                } else {
+                                  setPhone(val);
+                                }
+                              }}
                               className={cn(
                                 "flex-1 h-[34px] px-3 bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 rounded text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-[#9333ea] focus:ring-1 focus:ring-[#9333ea] outline-none text-[13px] shadow-sm transition-all",
                                 fieldErrors.phone && "border-red-500"
                               )}
-                              placeholder="8012345678"
+                              placeholder={phonePrefix === "+234" ? "08012345678" : "8012345678"}
                             />
                           </div>
                           {fieldErrors.phone && (

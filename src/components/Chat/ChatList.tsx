@@ -504,14 +504,14 @@ export default function ChatList({ onSelectChat, selectedChatId }: ChatListProps
             <p className="text-[10px] text-slate-400 mt-0.5">Start one from any listing profile info page!</p>
           </div>
         ) : (
-          filteredChats.map((chat) => {
+          filteredChats.map((chat, cIdx) => {
             const isSelected = selectedChatId === chat.id;
             const isPinned = !!chat.pinnedBy?.[userId];
             const isEditingThisOne = editingChatId === chat.id;
 
             return (
               <div
-                key={`chat-item-wrapper-${chat.id}`}
+                key={`chat-item-wrapper-${chat.id || cIdx}-${cIdx}`}
                 onClick={() => {
                   if (!isEditingThisOne) {
                     onSelectChat(chat);

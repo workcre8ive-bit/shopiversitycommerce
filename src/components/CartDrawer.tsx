@@ -248,11 +248,12 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
           handleFirestoreError(error, OperationType.CREATE, "orders");
         }
 
-        const currentStock = productSnap.exists() ? (productSnap.data().stock || 0) : 0;
-        const initialStock = productSnap.exists() ? (productSnap.data().initialStock || currentStock || 0) : 0;
-        const newStock = currentStock - item.quantity;
+        const rawStock = productSnap.exists() ? productSnap.data().stock : undefined;
+        const currentStock = (rawStock !== undefined && rawStock !== null) ? Number(rawStock) : item.quantity;
+        const initialStock = productSnap.exists() ? Number(productSnap.data().initialStock || currentStock || 0) : currentStock;
+        const newStock = Math.max(0, currentStock - item.quantity);
 
-        if (newStock < 0) {
+        if (rawStock !== undefined && rawStock !== null && currentStock < item.quantity) {
           throw new Error(`Insufficient stock for ${item.name}`);
         }
 
