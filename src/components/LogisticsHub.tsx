@@ -1,9 +1,12 @@
 import React from "react";
-import { auth, db } from "../firebase";
+import { auth, db, googleProvider } from "../firebase";
+import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
 import { 
   createUserWithEmailAndPassword, 
   signInWithEmailAndPassword, 
-  signOut 
+  signOut,
+  signInWithPopup,
+  browserPopupRedirectResolver
 } from "firebase/auth";
 import { 
   doc, 
@@ -222,6 +225,71 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
     );
   }, [allDeliveries, companyProfile]);
 
+  // Handle Google Auth (Login or Signup)
+  const handleGoogleAuth = async () => {
+    setError("");
+    setLoading(true);
+    try {
+      const result = await signInWithPopup(auth, googleProvider, browserPopupRedirectResolver);
+      const user = result.user;
+
+      // Check if logistics company profile exists
+      const companyDoc = await getDoc(doc(db, "logistics_companies", user.uid));
+      
+      if (companyDoc.exists()) {
+        const profile = companyDoc.data() as LogisticsCompany;
+        setCompanyProfile(profile);
+        setView("dashboard");
+      } else {
+        // Create new company profile using Google account details or filled form inputs
+        const profile: LogisticsCompany = {
+          id: user.uid,
+          companyName: companyName.trim() || user.displayName || "Logistics Partner",
+          rcNumber: rcNumber.trim() || `RC-${user.uid.slice(0, 8).toUpperCase()}`,
+          email: user.email || "",
+          phoneNumber: phoneNumber.trim() || user.phoneNumber || "",
+          officeAddress: officeAddress.trim() || "Main Campus Office",
+          vehicleTypes: selectedVehicles.length > 0 ? selectedVehicles : ["Bike / Motorcycle"],
+          coveredCampuses: selectedCampuses.length > 0 ? selectedCampuses : ["University Main Campus"],
+          baseDeliveryPrice: Number(basePrice) > 0 ? Number(basePrice) : 500,
+          isVerified: true,
+          isActive: true,
+          createdAt: new Date().toISOString()
+        };
+
+        await setDoc(doc(db, "logistics_companies", user.uid), profile);
+
+        await setDoc(doc(db, "users", user.uid), {
+          uid: user.uid,
+          displayName: profile.companyName,
+          username: profile.companyName.toLowerCase().replace(/[^a-z0-9]/g, "") + "_logistics",
+          email: user.email,
+          phoneNumber: profile.phoneNumber,
+          role: "logistics",
+          isVerified: true,
+          isSuspended: false,
+          reportCount: 0,
+          createdAt: new Date().toISOString(),
+          businessName: profile.companyName,
+          location: profile.officeAddress,
+          state: "Logistics Partner"
+        }, { merge: true });
+
+        setCompanyProfile(profile);
+        setView("dashboard");
+      }
+    } catch (err: any) {
+      if (err.code === "auth/popup-closed-by-user") {
+        setError("Sign-in cancelled.");
+      } else {
+        console.error("Google Auth error in LogisticsHub:", err);
+        setError(getFirestoreErrorMessage(err) || "Failed to sign in with Google. Make sure popups are allowed.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Handle Login
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -322,7 +390,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
         username: companyName.toLowerCase().replace(/[^a-z0-9]/g, "") + "_logistics",
         email: email,
         phoneNumber: phoneNumber,
-        role: "seller", // keeps it compatible with standard sellers
+        role: "logistics",
         isVerified: true,
         isSuspended: false,
         reportCount: 0,
@@ -587,7 +655,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
               </div>
               <h2 className="text-3xl font-black text-slate-800 dark:text-zinc-100">Deliver and Earn on Campus</h2>
               <p className="text-sm text-slate-500 dark:text-slate-400 max-w-lg mx-auto">
-                Join our trusted student courier network. Partner with registered campus retail merchants and deliver packages securely to buyers inside your university campus.
+                Join our trusted student courier network. Deliver packages securely to buyers inside your university campus with real-time tracking and dispatch updates.
               </p>
             </div>
 
@@ -599,7 +667,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                 <div className="space-y-2">
                   <h3 className="font-bold text-slate-800 dark:text-zinc-100 text-lg">Account Conflicted</h3>
                   <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                    You are currently signed in as a student buyer or seller. A person registered as a buyer or seller cannot sign up or access logistics services until they sign out.
+                    You are currently signed in as a standard student user account. Standard student accounts cannot access logistics company operation tools directly. Please sign out first.
                   </p>
                 </div>
                 <div className="flex flex-col gap-2 pt-2">
@@ -674,6 +742,24 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
               <p className="text-xs text-slate-400">Manage dispatch and deliver goods across campus</p>
             </div>
 
+            {/* Google Sign In Option */}
+            <div className="mb-6 space-y-4">
+              <button
+                type="button"
+                onClick={handleGoogleAuth}
+                disabled={loading}
+                className="w-full h-13 bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-750 text-slate-700 dark:text-zinc-200 border border-slate-200/80 dark:border-zinc-700 rounded-2xl font-bold text-sm transition-all flex items-center justify-center gap-3 cursor-pointer shadow-sm hover:shadow-md"
+              >
+                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" alt="Google logo" />
+                <span>Log In with Google</span>
+              </button>
+
+              <div className="relative flex items-center justify-center">
+                <div className="border-t border-slate-200 dark:border-zinc-800 w-full"></div>
+                <span className="bg-white dark:bg-zinc-900 px-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest absolute">or login with email</span>
+              </div>
+            </div>
+
             <form onSubmit={handleLogin} className="space-y-5">
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-slate-400 uppercase tracking-wider ml-1">Email Address</label>
@@ -738,6 +824,24 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
             <div className="text-center space-y-1 mb-8">
               <h2 className="text-2xl font-black text-slate-800 dark:text-zinc-100 font-sans">Register Logistics Company</h2>
               <p className="text-xs text-slate-400">Set up your delivery details to receive high-demand dispatch jobs</p>
+            </div>
+
+            {/* Google Sign Up Option */}
+            <div className="mb-8 space-y-4 max-w-md mx-auto">
+              <button
+                type="button"
+                onClick={handleGoogleAuth}
+                disabled={loading}
+                className="w-full h-13 bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-750 text-slate-700 dark:text-zinc-200 border border-slate-200/80 dark:border-zinc-700 rounded-2xl font-bold text-sm transition-all flex items-center justify-center gap-3 cursor-pointer shadow-sm hover:shadow-md"
+              >
+                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" alt="Google logo" />
+                <span>Register with Google</span>
+              </button>
+
+              <div className="relative flex items-center justify-center">
+                <div className="border-t border-slate-200 dark:border-zinc-800 w-full"></div>
+                <span className="bg-white dark:bg-zinc-900 px-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest absolute">or register company details manually</span>
+              </div>
             </div>
 
             <form onSubmit={handleRegisterInit} className="space-y-6">
@@ -1096,7 +1200,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                         <span className="px-2 py-0.5 bg-orange-600 text-white rounded-full text-[9px] font-black">{directOffers.length} NEW</span>
                       </h4>
                       <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Sellers have booked your company specifically for delivery. Please accept or decline these contracts to notify the sellers of your availability.
+                        Dispatch contracts have been booked with your company specifically for delivery. Please accept or decline these requests to confirm availability.
                       </p>
                       {activeTab !== "available-jobs" && (
                         <div className="pt-2">
@@ -1128,7 +1232,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                     <div className="bg-white dark:bg-zinc-900 border border-dashed border-slate-200 dark:border-zinc-800 rounded-[2.5rem] p-12 text-center">
                       <Package className="w-16 h-16 text-slate-300 mx-auto mb-4" />
                       <h4 className="font-bold text-slate-700 dark:text-zinc-300">No unassigned orders found</h4>
-                      <p className="text-xs text-slate-400 mt-2 max-w-sm mx-auto">Sellers can request your dispatch riders when preparing client orders. Active jobs covering your campuses will display here.</p>
+                      <p className="text-xs text-slate-400 mt-2 max-w-sm mx-auto">Incoming delivery requests covering your campuses will display here for your riders to accept.</p>
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1157,7 +1261,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                               <div className="flex gap-2.5 items-start">
                                 <div className="w-5 h-5 rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-600 flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">A</div>
                                 <div className="space-y-0.5 text-xs">
-                                  <p className="font-bold text-slate-500 uppercase tracking-wide text-[10px]">Pickup (Seller)</p>
+                                  <p className="font-bold text-slate-500 uppercase tracking-wide text-[10px]">Pickup Location</p>
                                   <p className="font-black text-slate-700 dark:text-zinc-300">{job.sellerName}</p>
                                   <p className="text-slate-400 text-[11px] truncate">{job.sellerAddress}</p>
                                 </div>
@@ -1166,7 +1270,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                               <div className="flex gap-2.5 items-start">
                                 <div className="w-5 h-5 rounded-full bg-orange-100 dark:bg-orange-950/20 text-orange-600 flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">B</div>
                                 <div className="space-y-0.5 text-xs">
-                                  <p className="font-bold text-orange-500 uppercase tracking-wide text-[10px]">Deliver (Buyer)</p>
+                                  <p className="font-bold text-orange-500 uppercase tracking-wide text-[10px]">Destination (Buyer)</p>
                                   <p className="font-black text-slate-700 dark:text-zinc-300">{job.buyerName}</p>
                                   <p className="text-slate-400 text-[11px] truncate">{job.buyerAddress}</p>
                                 </div>
@@ -1248,7 +1352,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div className="space-y-3">
                               <div className="space-y-1">
-                                <span className="text-[10px] font-bold text-slate-400 uppercase">Pickup Location (Seller)</span>
+                                <span className="text-[10px] font-bold text-slate-400 uppercase">Pickup Location</span>
                                 <p className="text-xs font-bold text-slate-700 dark:text-zinc-300">{job.sellerName} ({job.campus})</p>
                                 <p className="text-xs text-slate-500 leading-relaxed">{job.sellerAddress}</p>
                               </div>
@@ -1277,7 +1381,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                               onClick={() => handleUpdateStatus(job.id, job.status)}
                               className="h-11 px-6 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-1.5 shadow-md shadow-orange-500/10 cursor-pointer"
                             >
-                              {job.status === "accepted" && "Picked Up from Merchant"}
+                              {job.status === "accepted" && "Confirm Package Picked Up"}
                               {job.status === "picked_up" && "Mark Out for Delivery"}
                               {job.status === "in_transit" && "Confirm Successful Delivery"}
                             </button>
@@ -1333,7 +1437,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                             <thead>
                               <tr className="bg-slate-50 dark:bg-zinc-850 text-[10px] font-black text-slate-400 uppercase border-b border-slate-100 dark:border-zinc-800">
                                 <th className="px-6 py-4">Item Details</th>
-                                <th className="px-6 py-4">Seller/Buyer</th>
+                                <th className="px-6 py-4">Pickup / Buyer</th>
                                 <th className="px-6 py-4">Fare Paid</th>
                                 <th className="px-6 py-4">Status</th>
                               </tr>
@@ -1346,7 +1450,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                                     <p className="text-[10px] text-slate-400 font-medium">Order: #{job.orderId.slice(-6).toUpperCase()}</p>
                                   </td>
                                   <td className="px-6 py-4">
-                                    <p className="font-bold text-slate-700 dark:text-zinc-300">Seller: {job.sellerName}</p>
+                                    <p className="font-bold text-slate-700 dark:text-zinc-300">Pickup: {job.sellerName}</p>
                                     <p className="text-[10px] text-slate-400 font-medium">Buyer: {job.buyerName}</p>
                                   </td>
                                   <td className="px-6 py-4 font-black text-slate-800 dark:text-zinc-100">

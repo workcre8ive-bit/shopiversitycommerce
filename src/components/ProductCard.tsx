@@ -104,10 +104,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                       e.stopPropagation();
                       setIsReportModalOpen(true);
                     }}
-                    className="w-8 h-8 bg-white/95 hover:bg-red-500 hover:text-white rounded-full text-slate-400 dark:text-zinc-400 dark:bg-zinc-900/95 transition-all shadow-sm opacity-0 group-hover:opacity-100 flex items-center justify-center border-none cursor-pointer"
-                    title="Report Seller"
+                    className="px-2.5 py-1 bg-rose-50/95 dark:bg-rose-950/90 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800 rounded-full text-[10px] font-extrabold transition-all shadow-md hover:bg-rose-600 hover:text-white flex items-center gap-1.5 cursor-pointer backdrop-blur-sm"
+                    title="Report Product or Seller"
                   >
                     <AlertTriangle className="w-3.5 h-3.5" />
+                    <span>Report</span>
                   </button>
                 )}
               </div>

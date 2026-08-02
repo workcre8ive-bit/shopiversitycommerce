@@ -142,8 +142,8 @@ service cloud.firestore {
              data.get('displayName', '') is string && data.get('displayName', '').size() <= 100 &&
              (!('username' in data) || data.get('username', '') == null || data.get('username', '') is string) &&
              (!('email' in data) || data.email == null || isValidEmail(data.email)) &&
-             data.get('role', 'buyer') in ['buyer', 'seller', 'admin', 'both'] &&
-             (!('activeRole' in data) || data.activeRole == null || data.activeRole in ['buyer', 'seller']) &&
+             data.get('role', 'buyer') in ['buyer', 'seller', 'admin', 'both', 'logistics'] &&
+             (!('activeRole' in data) || data.activeRole == null || data.activeRole in ['buyer', 'seller', 'logistics']) &&
              (!('isVerified' in data) || data.isVerified == null || data.isVerified is bool) &&
              (!('isSuspended' in data) || data.isSuspended == null || data.isSuspended is bool) &&
              (!('reportCount' in data) || data.reportCount == null || data.reportCount is number) &&
@@ -166,6 +166,8 @@ service cloud.firestore {
              (!('referralCount' in data) || data.referralCount == null || data.referralCount is number) &&
              (!('referralWalletBalance' in data) || data.referralWalletBalance == null || data.referralWalletBalance is number) &&
              (!('businessPhoneNumber' in data) || data.businessPhoneNumber == null || data.businessPhoneNumber is string) &&
+             (!('phoneNumber' in data) || data.phoneNumber == null || data.phoneNumber is string) &&
+             (!('businessName' in data) || data.businessName == null || data.businessName is string) &&
              (!('gender' in data) || data.gender == null || data.gender is string) &&
              (!('paystackConnected' in data) || data.paystackConnected == null || data.paystackConnected is bool) &&
              (!('photoURL' in data) || data.photoURL == null || data.photoURL is string) &&
@@ -365,7 +367,7 @@ service cloud.firestore {
       allow get: if true;
       allow list: if true;
       allow create: if isOwner(userId) && isValidUser(request.resource.data) && 
-                      request.resource.data.role in ['buyer', 'seller', 'both'] &&
+                      request.resource.data.role in ['buyer', 'seller', 'both', 'logistics'] &&
                       request.resource.data.isSuspended == false &&
                       request.resource.data.reportCount == 0;
       allow update: if ((isOwner(userId) || isAdmin()) && isValidUser(request.resource.data) &&

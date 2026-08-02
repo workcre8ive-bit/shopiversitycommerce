@@ -1,6 +1,6 @@
 import React from "react";
 import { CartItem, UserProfile } from "../types";
-import { X, ShoppingBag, Trash2, Plus, Minus, Send, CheckCircle, Truck, Package as PackageIcon, CreditCard, Wallet, ChevronRight, Loader2, Building, ShieldCheck } from "lucide-react";
+import { X, ShoppingBag, Trash2, Plus, Minus, Send, CheckCircle, Truck, Package as PackageIcon, CreditCard, Wallet, ChevronRight, Loader2, Building, ShieldCheck, Clock } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { auth, db } from "../firebase";
 import { collection, addDoc, doc, updateDoc, getDoc, query, where, getDocs, setDoc } from "firebase/firestore";
@@ -522,6 +522,14 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
             </div>
           ) : (
             <>
+              {/* 2-Day Cart Reservation Policy Banner */}
+              <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-900/40 p-3.5 rounded-2xl flex items-center gap-3">
+                <Clock className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0" />
+                <div className="text-xs text-amber-900 dark:text-amber-200">
+                  <span className="font-bold">2-Day Reservation Policy:</span> Items stay in your cart for 2 days (48 hours). After 2 days, unpurchased items automatically return to stock for other buyers to buy.
+                </div>
+              </div>
+
               {/* Product List */}
               <div className="space-y-4 sm:space-y-6">
                 <div className="flex items-center justify-between">

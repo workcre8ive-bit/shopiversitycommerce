@@ -171,23 +171,8 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
   const [customBankName, setCustomBankName] = React.useState("");
   const [accountNumber, setAccountNumber] = React.useState(user.bankDetails?.accountNumber || "");
   const [accountName, setAccountName] = React.useState(user.bankDetails?.accountName || "");
-  const [paystackConnected, setPaystackConnected] = React.useState(user.paystackConnected || false);
-
-  // Use platform account as default if seller hasn't set one
-  React.useEffect(() => {
-    if (user.role === "seller" && !user.bankDetails?.accountNumber && !accountNumber) {
-      setBankName("OPAY DIGITAL SERVICES LIMITED (OPAY)");
-      setAccountNumber("7044371385");
-      setAccountName("FASHINA MICHEAL");
-    }
-  }, [user.role, user.bankDetails?.accountNumber]);
-
-  React.useEffect(() => {
-    setPaystackConnected(user.paystackConnected || false);
-  }, [user.paystackConnected]);
 
   const [showPaystackInfo, setShowPaystackInfo] = React.useState(false);
-  const [isConnectingPaystack, setIsConnectingPaystack] = React.useState(false);
   const [banks, setBanks] = React.useState<{ name: string; code: string }[]>(FALLBACK_BANKS);
   const [bankSearchQuery, setBankSearchQuery] = React.useState("");
   const [isBankDropdownOpen, setIsBankDropdownOpen] = React.useState(false);
@@ -323,8 +308,13 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
       alert("Minimum payout amount is ₦1,000");
       return;
     }
-    if (!paystackConnected) {
-      alert("Please connect your bank account first");
+    const currentBank = user.bankDetails || {
+      bankName: bankName === "Other" ? customBankName : bankName,
+      accountNumber,
+      accountName
+    };
+    if (!currentBank.accountNumber) {
+      alert("Please enter and save your bank details first.");
       return;
     }
 
@@ -333,80 +323,12 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
         sellerId: user.uid,
         amount: availableBalance,
         status: "pending",
-        bankDetails: user.bankDetails,
+        bankDetails: currentBank,
         createdAt: new Date().toISOString()
       });
       alert("Payout request submitted successfully!");
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, "payoutRequests");
-    }
-  };
-
-  const handleConnectPaystack = async () => {
-    if (!accountNumber || !bankName || !accountName) {
-      alert("Please verify your bank details first.");
-      return;
-    }
-    if (accountNumber.length < 10 || accountNumber.length > 15) {
-      alert("Account number must be between 10 and 15 digits.");
-      return;
-    }
-    setIsConnectingPaystack(true);
-    try {
-      const selectedBankName = bankName === "Other" ? customBankName : bankName;
-      const res = await fetch("/api/paystack/connect-recipient", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          userId: user.uid,
-          bankName: selectedBankName,
-          accountNumber,
-          accountName
-        })
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        try {
-          await updateDoc(doc(db, "users", user.uid), {
-            paystackConnected: true,
-            recipientCode: data.recipientCode,
-            bankDetails: data.bankDetails
-          });
-        } catch (dbErr) {
-          console.warn("Could not write profile update client-side (may already be updated by server):", dbErr);
-        }
-        setPaystackConnected(true);
-        alert("Successfully connected your bank via Paystack! Transfer recipient created.");
-      } else {
-        throw new Error(data.error || "Failed to create transfer recipient");
-      }
-    } catch (error: any) {
-      alert(error.message || "Failed to connect bank details via Paystack.");
-    } finally {
-      setIsConnectingPaystack(false);
-    }
-  };
-
-  const handleDisconnectPaystack = async () => {
-    if (!confirm("Are you sure you want to disconnect your bank account? This will remove your saved payout details.")) return;
-    
-    setIsConnectingPaystack(true);
-    try {
-      await updateDoc(doc(db, "users", user.uid), {
-        paystackConnected: false,
-        bankDetails: null
-      });
-      setPaystackConnected(false);
-      setBankName("");
-      setAccountNumber("");
-      setAccountName("");
-      alert("Bank account disconnected successfully.");
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `users/${user.uid}`);
-    } finally {
-      setIsConnectingPaystack(false);
     }
   };
 
@@ -565,12 +487,6 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
     }
   };
 
-  const handleUsePlatformAccount = () => {
-    setBankName("OPAY DIGITAL SERVICES LIMITED (OPAY)");
-    setAccountNumber("7044371385");
-    setAccountName("FASHINA MICHEAL");
-  };
-
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -626,7 +542,6 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
           accountNumber,
           accountName
         };
-        updateData.paystackConnected = paystackConnected;
       }
 
       await updateDoc(doc(db, "users", user.uid), updateData);
@@ -1398,65 +1313,9 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                   <CreditCard className="w-5 h-5 text-purple-600" />
                   <h4 className="text-lg font-bold text-slate-900 dark:text-white">Payment Details</h4>
                 </div>
-                {paystackConnected ? (
-                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
-                    <div className="flex items-center gap-2 px-4 py-2 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 rounded-2xl border border-emerald-100 dark:border-emerald-800/50">
-                      <CheckCircle className="w-4 h-4" />
-                      <span className="text-xs font-bold uppercase tracking-wider">Paystack Connected</span>
-                    </div>
-                    <button 
-                      type="button"
-                      onClick={handleDisconnectPaystack}
-                      disabled={isConnectingPaystack}
-                      className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white rounded-xl font-bold text-xs hover:bg-red-600 transition-all shadow-lg shadow-red-100 dark:shadow-red-900/20 disabled:opacity-50"
-                    >
-                      {isConnectingPaystack ? <Loader2 className="w-3 h-3 animate-spin" /> : <LogOut className="w-3 h-3" />}
-                      Disconnect Account
-                    </button>
-                  </div>
-                ) : (
-                  <button 
-                    type="button"
-                    onClick={handleConnectPaystack}
-                    disabled={isConnectingPaystack}
-                    className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-xl font-bold text-xs hover:bg-purple-700 transition-all shadow-lg shadow-purple-100 dark:shadow-purple-900/20 disabled:opacity-50"
-                  >
-                    {isConnectingPaystack ? <Loader2 className="w-3 h-3 animate-spin" /> : "Connect Paystack"}
-                  </button>
-                )}
               </div>
               <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Provide your bank details to receive payments for your sales. We use Paystack to process all payouts securely.</p>
               
-              <div className="flex flex-col gap-4 p-4 bg-purple-50 dark:bg-purple-950/10 border border-purple-100 dark:border-purple-900/20 rounded-2xl">
-                <div className="flex items-center justify-between">
-                  <h5 className="text-xs font-bold text-purple-700 dark:text-purple-400 flex items-center gap-2">
-                    <Sparkles className="w-4 h-4" />
-                    Recommended Platform Account
-                  </h5>
-                  <button
-                    type="button"
-                    onClick={handleUsePlatformAccount}
-                    className="text-[10px] font-bold text-purple-600 hover:text-purple-700 underline"
-                  >
-                    Use this account
-                  </button>
-                </div>
-                <div className="grid grid-cols-2 gap-4 text-[10px]">
-                  <div>
-                    <p className="text-slate-400 uppercase tracking-widest mb-0.5">Account Number</p>
-                    <p className="font-bold text-slate-700 dark:text-slate-200">7044371385</p>
-                  </div>
-                  <div>
-                    <p className="text-slate-400 uppercase tracking-widest mb-0.5">Bank</p>
-                    <p className="font-bold text-slate-700 dark:text-slate-200">OPay</p>
-                  </div>
-                  <div className="col-span-2">
-                    <p className="text-slate-400 uppercase tracking-widest mb-0.5">Account Name</p>
-                    <p className="font-bold text-slate-700 dark:text-slate-200">FASHINA MICHEAL</p>
-                  </div>
-                </div>
-              </div>
-
               <div className="p-4 bg-blue-50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-900/20 rounded-2xl">
                 <h5 className="text-xs font-bold text-blue-700 dark:text-blue-400 mb-2 flex items-center gap-2">
                   <AlertCircle className="w-4 h-4" />
@@ -1585,7 +1444,6 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                 </div>
               </div>
 
-              {paystackConnected && (
                 <div className="pt-8 border-t border-slate-100 dark:border-slate-800 space-y-4">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
@@ -1637,7 +1495,6 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                     </div>
                   )}
                 </div>
-              )}
             </div>
           </div>
         )}

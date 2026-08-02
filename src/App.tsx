@@ -198,7 +198,46 @@ export default function App() {
   const [filterVendor, setFilterVendor] = React.useState("All");
   const [filterCondition, setFilterCondition] = React.useState("All");
   const [filterPriceRange, setFilterPriceRange] = React.useState("All");
-  const [cart, setCart] = React.useState<CartItem[]>([]);
+  const [cart, setCart] = React.useState<CartItem[]>(() => {
+    try {
+      const saved = localStorage.getItem("shopiversity_cart");
+      if (saved) {
+        const parsed: CartItem[] = JSON.parse(saved);
+        const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
+        const now = Date.now();
+        // Return only items added less than 48 hours ago
+        return parsed.filter(item => !item.addedAt || (now - item.addedAt) < TWO_DAYS_MS);
+      }
+    } catch (e) {
+      console.error("Failed to parse cart from localStorage", e);
+    }
+    return [];
+  });
+
+  // Save cart to localStorage whenever it changes
+  React.useEffect(() => {
+    try {
+      localStorage.setItem("shopiversity_cart", JSON.stringify(cart));
+    } catch (e) {
+      console.error("Failed to save cart to localStorage", e);
+    }
+  }, [cart]);
+
+  // Periodically clean up items older than 2 days (48 hours) so they are released back to stock for other buyers
+  React.useEffect(() => {
+    const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
+    const interval = setInterval(() => {
+      setCart((prev) => {
+        const now = Date.now();
+        const valid = prev.filter((item) => !item.addedAt || (now - item.addedAt) < TWO_DAYS_MS);
+        if (valid.length !== prev.length) {
+          triggerDynamicIsland("Expired cart items returned to available stock! 📦");
+        }
+        return valid;
+      });
+    }, 30000);
+    return () => clearInterval(interval);
+  }, []);
   const [pendingCartItem, setPendingCartItem] = React.useState<{
     product: Product;
     menuItem?: any;
@@ -729,7 +768,7 @@ export default function App() {
           (item.productId === product.id && 
            (menuItem ? (item.menuItemId === (menuItem.id || menuItem.name)) : !item.menuItemId) && 
            (ticketTier ? (item.ticketTierId === (ticketTier.id || ticketTier.name)) : !item.ticketTierId))
-            ? { ...item, quantity: item.quantity + itemQuantity, formResponses: formResponses || item.formResponses }
+            ? { ...item, quantity: item.quantity + itemQuantity, formResponses: formResponses || item.formResponses, addedAt: Date.now() }
             : item
         );
       }
@@ -753,6 +792,7 @@ export default function App() {
           cheapDataHubNetworkCode: menuItem?.cheapDataHubNetworkCode,
           formResponses: formResponses,
           type: product.type || "good",
+          addedAt: Date.now(),
         },
       ];
     });

@@ -266,6 +266,7 @@ export interface CartItem {
   cheapDataHubNetworkCode?: string;
   formResponses?: Record<string, string>;
   type?: "good" | "service";
+  addedAt?: number;
 }
 
 export interface EventPlan {

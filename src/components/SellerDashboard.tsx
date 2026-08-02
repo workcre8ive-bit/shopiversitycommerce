@@ -602,24 +602,6 @@ export default function SellerDashboard({
     }
   };
 
-  const handleDisconnectPaystack = async () => {
-    if (!currentUser) return;
-    if (!confirm("Are you sure you want to disconnect your bank account? This will remove your saved payout details.")) return;
-    
-    setLoading(true);
-    try {
-      await updateDoc(doc(db, "users", currentUser.uid), {
-        paystackConnected: false,
-        bankDetails: null
-      });
-      alert("Bank account disconnected successfully.");
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `users/${currentUser.uid}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const deleteProduct = async (productId: string) => {
     setProductToDelete(productId);
   };
@@ -1336,26 +1318,9 @@ export default function SellerDashboard({
                 <p className="text-sm text-slate-500 dark:text-slate-400">Track your earnings withdrawals and their status.</p>
               </div>
               <div className="flex items-center gap-3">
-                {currentUser?.paystackConnected ? (
-                  <button 
-                    onClick={handleDisconnectPaystack}
-                    className="flex items-center gap-2 px-6 py-3 bg-red-50 text-red-600 rounded-2xl font-bold text-sm hover:bg-red-100 transition-all active:scale-95 border border-red-100 dark:border-red-900/10"
-                  >
-                    <LogOut className="w-4 h-4" />
-                    Disconnect Account
-                  </button>
-                ) : (
-                  <button 
-                    onClick={() => setActiveSubTab("settings")}
-                    className="flex items-center gap-2 px-6 py-3 bg-indigo-50 text-indigo-600 rounded-2xl font-bold text-sm hover:bg-indigo-100 transition-all active:scale-95 border border-indigo-100 dark:border-indigo-900/10"
-                  >
-                    <CreditCard className="w-4 h-4" />
-                    Connect Paystack
-                  </button>
-                )}
                 <button 
                   onClick={handleRequestPayout}
-                  disabled={requestingPayout || stats.availablePayout <= 0 || !currentUser?.paystackConnected}
+                  disabled={requestingPayout || stats.availablePayout <= 0 || !currentUser?.bankDetails?.accountNumber}
                   className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold text-sm hover:bg-indigo-700 transition-all active:scale-95 disabled:opacity-50 shadow-lg shadow-indigo-200 dark:shadow-none"
                 >
                   {requestingPayout ? (
@@ -1368,18 +1333,18 @@ export default function SellerDashboard({
               </div>
             </div>
 
-            {currentUser?.paystackConnected ? (
+            {currentUser?.bankDetails?.accountNumber ? (
               <div className="p-4 bg-emerald-50 dark:bg-emerald-900/10 border border-emerald-100 dark:border-emerald-800/50 rounded-2xl flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 bg-emerald-100 dark:bg-emerald-800 rounded-xl flex items-center justify-center text-emerald-600">
                     <ShieldCheck className="w-5 h-5" />
                   </div>
                   <div>
-                    <p className="text-sm font-bold text-emerald-900 dark:text-emerald-400">Paystack Connected</p>
-                    <p className="text-[10px] text-emerald-600 dark:text-emerald-500 font-medium">{currentUser.bankDetails?.bankName} • {currentUser.bankDetails?.accountNumber}</p>
+                    <p className="text-sm font-bold text-emerald-900 dark:text-emerald-400">Payout Bank Details Saved</p>
+                    <p className="text-[10px] text-emerald-600 dark:text-emerald-500 font-medium">{currentUser.bankDetails?.bankName} • {currentUser.bankDetails?.accountNumber} ({currentUser.bankDetails?.accountName})</p>
                   </div>
                 </div>
-                <div className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Active</div>
+                <div className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Saved</div>
               </div>
             ) : (
               <div className="p-6 bg-amber-50 dark:bg-amber-900/10 border border-amber-100 dark:border-amber-800/50 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -1388,15 +1353,15 @@ export default function SellerDashboard({
                     <AlertCircle className="w-6 h-6" />
                   </div>
                   <div>
-                    <p className="font-bold text-amber-900 dark:text-amber-400">Bank Account Not Connected</p>
-                    <p className="text-xs text-amber-600 dark:text-amber-500 font-medium">You need to connect your Paystack account to withdraw your earnings.</p>
+                    <p className="font-bold text-amber-900 dark:text-amber-400">No Bank Details Added</p>
+                    <p className="text-xs text-amber-600 dark:text-amber-500 font-medium">Add your bank account in Settings to receive payouts.</p>
                   </div>
                 </div>
                 <button 
                   onClick={() => setActiveSubTab("settings")}
                   className="px-6 py-3 bg-amber-600 text-white rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-amber-700 transition-all shadow-lg shadow-amber-100 dark:shadow-none whitespace-nowrap"
                 >
-                  Setup Payout Account
+                  Setup Bank Account
                 </button>
               </div>
             )}
