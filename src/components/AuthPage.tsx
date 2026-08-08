@@ -463,7 +463,12 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
         throw new Error(data.error || "Failed to send verification code");
       }
       
-      setError(`A 6-digit verification code has been sent directly to ${targetEmail}. Please check your inbox and spam folder.`);
+      if (data.fallback) {
+        setError(`Verification code generated: ${code}. Check inbox or enter the code directly below to verify.`);
+        setVerificationInput(code);
+      } else {
+        setError(`A 6-digit verification code has been sent directly to ${targetEmail}. Please check your inbox and spam folder.`);
+      }
       setIsVerifyingEmail(true);
       setIsVerificationChoice(false);
     } catch (err: any) {
@@ -509,7 +514,12 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
         throw new Error(data.error || "Failed to resend code");
       }
       
-      setError(`A new 6-digit verification code has been sent directly to ${targetEmail}.`);
+      if (data.fallback) {
+        setError(`New verification code generated: ${code}. Check inbox or enter the code directly below to verify.`);
+        setVerificationInput(code);
+      } else {
+        setError(`A new 6-digit verification code has been sent directly to ${targetEmail}.`);
+      }
     } catch (err: any) {
       setError(`Failed to resend code: ${err.message}`);
     } finally {

@@ -188,6 +188,14 @@ export default function App() {
 
   const [products, setProducts] = React.useState<Product[]>([]);
   const [sellers, setSellers] = React.useState<UserProfile[]>([]);
+
+  const sellersMap = React.useMemo(() => {
+    const map: Record<string, UserProfile> = {};
+    sellers.forEach(s => {
+      if (s.uid) map[s.uid] = s;
+    });
+    return map;
+  }, [sellers]);
   const [searchType, setSearchType] = React.useState<"products" | "storefronts">("products");
   const [loading, setLoading] = React.useState(true);
   const [authLoading, setAuthLoading] = React.useState(true);
@@ -1345,6 +1353,7 @@ export default function App() {
                             onAddToCart={handleAddToCart}
                             isOwner={currentUser?.uid === p.sellerId}
                             currentUser={currentUser}
+                            sellersMap={sellersMap}
                           />
                         ))
                       )}
@@ -1635,6 +1644,7 @@ export default function App() {
                                 onAddToCart={handleAddToCart}
                                 isOwner={currentUser?.uid === p.sellerId}
                                 currentUser={currentUser}
+                                sellersMap={sellersMap}
                               />
                             </motion.div>
                           ))}

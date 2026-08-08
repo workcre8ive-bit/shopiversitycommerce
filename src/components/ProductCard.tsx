@@ -15,9 +15,10 @@ interface ProductCardProps {
   isOwner: boolean;
   currentUser: UserProfile | null;
   customColor?: string;
+  sellersMap?: Record<string, UserProfile>;
 }
 
-export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, isOwner, currentUser, customColor }) => {
+export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, isOwner, currentUser, customColor, sellersMap }) => {
   if (product.type === "service") {
     return null;
   }
@@ -31,7 +32,9 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
     ? product.imageUrls 
     : [product.imageUrl || "/placeholder-product.png"];
 
-  const brandColor = customColor || "#ff6b00";
+  // Look up seller's custom storefront primary color if not explicitly provided
+  const sellerProfile = sellersMap?.[product.sellerId];
+  const brandColor = customColor || sellerProfile?.storefrontSettings?.primaryColor || (product as any).sellerPrimaryColor || "#ff6b00";
 
   const discountPct = product.discountPercent && product.discountPercent > 0
     ? product.discountPercent
@@ -70,11 +73,12 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                 referrerPolicy="no-referrer"
               />
 
-              {/* Floating Category Badge (top left) */}
+              {/* Floating Category Badge (top left) with seller's custom color theme */}
               <div 
-                className="absolute top-3 left-3 bg-white/95 dark:bg-zinc-900/95 px-2.5 py-1 rounded-lg text-[8px] font-black uppercase tracking-wider shadow-sm z-10 transition-colors"
+                className="absolute top-3 left-3 bg-white/95 dark:bg-zinc-900/95 px-2.5 py-1 rounded-lg text-[8px] font-black uppercase tracking-wider shadow-sm z-10 transition-colors border"
                 style={{
                   color: brandColor,
+                  borderColor: `${brandColor}35`
                 }}
               >
                 {product.category}
@@ -121,9 +125,16 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                 {product.category === "Food & Drinks" ? product.businessName : product.name}
               </h3>
 
-              {/* Condition Tag with soft minimal tint */}
+              {/* Condition Tag styled dynamically using seller's custom storefront primary color */}
               <div className="mb-4 flex items-center justify-between gap-1 flex-wrap">
-                <span className="text-[9px] font-extrabold px-2.5 py-1 rounded-full uppercase tracking-wider bg-orange-50 dark:bg-orange-950/20 text-orange-600 dark:text-orange-400">
+                <span 
+                  className="text-[9px] font-extrabold px-2.5 py-1 rounded-full uppercase tracking-wider border"
+                  style={{
+                    color: brandColor,
+                    backgroundColor: `${brandColor}15`,
+                    borderColor: `${brandColor}30`
+                  }}
+                >
                   {product.condition}
                 </span>
                 {discountPct > 0 && (
@@ -156,7 +167,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                   </div>
                 </div>
 
-                {/* Quick action button inside the card bottom-right */}
+                {/* Quick action button inside the card bottom-right styled with seller's storefront primary color */}
                 {!isOwner ? (
                   <button
                     onClick={(e) => {
@@ -199,14 +210,25 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                   }}
                   className={cn(
                     "flex items-center gap-1.5 min-w-0 text-slate-700 dark:text-zinc-300 transition-colors",
-                    (product.category !== "Logistics & Errands" && product.category !== "Logistics") ? "cursor-pointer group/seller hover:text-[#ff6b00] dark:hover:text-[#ff6b00]" : "cursor-default"
+                    (product.category !== "Logistics & Errands" && product.category !== "Logistics") ? "cursor-pointer group/seller" : "cursor-default"
                   )}
                   title={(product.category !== "Logistics & Errands" && product.category !== "Logistics") ? `View ${product.sellerName}'s store` : undefined}
                 >
-                  <div className="w-4 h-4 rounded-full flex items-center justify-center shrink-0 bg-slate-100 dark:bg-zinc-800 group-hover/seller:bg-orange-50 dark:group-hover/seller:bg-zinc-800 transition-colors">
-                    <UserIcon className="w-2.5 h-2.5 text-slate-500 dark:text-zinc-400 group-hover/seller:text-[#ff6b00]" />
+                  <div 
+                    className="w-4 h-4 rounded-full flex items-center justify-center shrink-0 transition-colors"
+                    style={{
+                      backgroundColor: `${brandColor}15`,
+                      color: brandColor
+                    }}
+                  >
+                    <UserIcon className="w-2.5 h-2.5" style={{ color: brandColor }} />
                   </div>
-                  <span className={cn("truncate max-w-[75px] font-bold transition-colors", (product.category !== "Logistics & Errands" && product.category !== "Logistics") && "group-hover/seller:text-[#ff6b00]")}>
+                  <span 
+                    className="truncate max-w-[75px] font-bold transition-colors"
+                    style={{
+                      color: isHovered ? brandColor : undefined
+                    }}
+                  >
                     {product.sellerName}
                   </span>
                 </div>
@@ -231,7 +253,12 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                         e.stopPropagation();
                         window.dispatchEvent(new CustomEvent('view-seller-store', { detail: product.sellerId }));
                       }}
-                      className="text-[9px] font-black px-2 py-0.5 rounded-full border border-slate-200 dark:border-zinc-700 bg-slate-50 hover:bg-slate-100 dark:bg-zinc-800 dark:hover:bg-zinc-750 text-slate-700 dark:text-zinc-300 transition-colors duration-300 cursor-pointer"
+                      className="text-[9px] font-black px-2 py-0.5 rounded-full border transition-colors duration-300 cursor-pointer"
+                      style={{
+                        color: brandColor,
+                        borderColor: `${brandColor}35`,
+                        backgroundColor: `${brandColor}10`
+                      }}
                     >
                       STORE
                     </button>

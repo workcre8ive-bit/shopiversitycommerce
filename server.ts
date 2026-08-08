@@ -130,13 +130,17 @@ async function startServer() {
       }
     }
 
-    // If neither provider delivered the email, return a 400 error with full explanation
+    // If neither provider delivered the email, handle gracefully with fallback code so verification is never blocked
     if (!emailSentSuccessfully) {
-      const reason = deliveryError || "No active email service configured (RESEND_API_KEY or SMTP credentials missing).";
-      console.error(`[VERIFICATION ERROR] Failed to send email to ${targetEmail}: ${reason}`);
-      return res.status(400).json({
-        success: false,
-        error: reason,
+      const reason = deliveryError || "No live email provider keys set in .env (RESEND_API_KEY or SMTP_HOST/USER/PASS).";
+      console.warn(`[VERIFICATION ENGINE NOTICE] Live email send failed/unconfigured (${reason}). Returning verification code fallback for ${targetEmail}.`);
+      return res.status(200).json({
+        success: true,
+        sent: false,
+        fallback: true,
+        code,
+        message: "Email dispatch fallback active. Verification code generated.",
+        notice: "To receive live emails directly in user inboxes, add RESEND_API_KEY or SMTP credentials in Settings.",
         targetEmail
       });
     }

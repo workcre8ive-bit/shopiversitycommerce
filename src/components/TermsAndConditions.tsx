@@ -76,7 +76,7 @@ export default function TermsAndConditions({ onBack }: TermsAndConditionsProps) 
         <h2 className="text-2xl font-bold font-display">SHOPIVERSITY Escrow, Delivery & Dispute Terms</h2>
         
         <div className="space-y-8 text-slate-300 dark:text-slate-600 text-sm leading-relaxed font-medium">
-          <p className="border-l-4 border-purple-500 pl-4 py-2 bg-slate-800/50 dark:bg-slate-50 rounded-r-xl font-bold">
+          <p className="border border-orange-500/30 px-4 py-3 bg-slate-800/50 dark:bg-slate-50 rounded-2xl font-bold">
             By buying or selling on SHOPIVERSITY, you agree to these terms.
           </p>
 

@@ -1353,7 +1353,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                       className={cn(
                         "w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl text-xs font-bold tracking-tight transition-all text-left cursor-pointer border-none",
                         isActive
-                          ? "bg-orange-50 dark:bg-orange-950/20 text-orange-700 dark:text-orange-400 border-l-4 border-orange-600"
+                          ? "bg-orange-50 dark:bg-orange-950/20 text-orange-700 dark:text-orange-400 border border-orange-500/30 font-extrabold shadow-sm"
                           : "text-slate-600 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-850"
                       )}
                     >
