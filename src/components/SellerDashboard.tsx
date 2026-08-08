@@ -21,6 +21,7 @@ import { NIGERIAN_CAMPUSES } from "../constants/campuses";
 import ReferralDashboard from "./ReferralDashboard";
 import LiveRiderTrackingModal from "./LiveRiderTrackingModal";
 import SalesAnalytics from "./SalesAnalytics";
+import DashboardSlideshow from "./DashboardSlideshow";
 import { 
   LayoutDashboard, 
   LayoutGrid,
@@ -90,7 +91,6 @@ import {
   Pie,
   Legend
 } from 'recharts';
-import { GoogleGenAI } from "@google/genai";
 import { APIProvider, Map as GoogleMap, AdvancedMarker, Pin } from '@vis.gl/react-google-maps';
 
 const GOOGLE_MAPS_API_KEY =
@@ -764,6 +764,24 @@ export default function SellerDashboard({
         </div>
       </div>
       
+      {/* Slideshow Banner on Overview */}
+      {activeSubTab === "overview" && (
+        <DashboardSlideshow 
+          role="seller"
+          onCtaClick={(slideId) => {
+            if (slideId === "seller-payouts") {
+              setActiveSubTab("payouts");
+            } else if (slideId === "seller-analytics") {
+              setActiveSubTab("orders");
+            } else if (slideId === "seller-couriers") {
+              setActiveSubTab("my-products");
+            } else {
+              setActiveSubTab("add-product");
+            }
+          }}
+        />
+      )}
+
       {/* Sub Navigation / Back to Hub */}
       {activeSubTab !== "overview" ? (
         <button 
@@ -4055,18 +4073,14 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
     setAiLoading(true);
     setError(null);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      const prompt = `Generate a professional, engaging, and concise product description for a ${type} named "${name}" in the "${category}" category. 
-      Focus on benefits and key features. Keep it under 150 words. 
-      Do not use markdown formatting like bold or bullet points, just plain text.`;
-
-      const response = await ai.models.generateContent({
-        model: "gemini-flash-latest",
-        contents: prompt,
+      const res = await fetch("/api/gemini/generate-description", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, type, category })
       });
-
-      if (response.text) {
-        setDescription(response.text.trim());
+      const data = await res.json();
+      if (data.description) {
+        setDescription(data.description);
       }
     } catch (err: any) {
       console.error("AI Generation Error:", err);

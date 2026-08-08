@@ -1,9 +1,12 @@
 import React from "react";
 import { auth, db, googleProvider } from "../firebase";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
+import { generateReferralCode, cn } from "../lib/utils";
 import { 
   createUserWithEmailAndPassword, 
   signInWithEmailAndPassword, 
+  sendPasswordResetEmail,
+  sendEmailVerification,
   signOut,
   signInWithPopup,
   browserPopupRedirectResolver
@@ -48,10 +51,13 @@ import {
   UserCheck,
   X,
   Eye,
-  EyeOff
+  EyeOff,
+  Tag,
+  CheckCircle2
 } from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
 import { NIGERIAN_CAMPUSES } from "../constants/campuses";
-import { cn } from "../lib/utils";
+import DashboardSlideshow from "./DashboardSlideshow";
 
 interface LogisticsCompany {
   id: string;
@@ -103,6 +109,40 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
   const [loginEmail, setLoginEmail] = React.useState("");
   const [loginPassword, setLoginPassword] = React.useState("");
 
+  // Forgot Password states
+  const [showForgotPassword, setShowForgotPassword] = React.useState(false);
+  const [resetEmail, setResetEmail] = React.useState("");
+  const [resetEmailSent, setResetEmailSent] = React.useState(false);
+  const [resetLoading, setResetLoading] = React.useState(false);
+  const [resetError, setResetError] = React.useState("");
+
+  const handlePasswordReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetEmail || !resetEmail.trim()) {
+      setResetError("Please enter your account email address.");
+      return;
+    }
+    setResetLoading(true);
+    setResetError("");
+    try {
+      await sendPasswordResetEmail(auth, resetEmail.trim());
+      setResetEmailSent(true);
+    } catch (err: any) {
+      console.error("Password reset error:", err);
+      if (err.code === "auth/user-not-found") {
+        setResetError("No account found with this email address.");
+      } else if (err.code === "auth/invalid-email") {
+        setResetError("Please enter a valid email address.");
+      } else if (err.code === "auth/too-many-requests") {
+        setResetError("Too many password reset requests. Please wait a moment and try again.");
+      } else {
+        setResetError(err.message || "Failed to send password reset email. Please try again.");
+      }
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
   // Signup form states
   const [companyName, setCompanyName] = React.useState("");
   const [rcNumber, setRcNumber] = React.useState("");
@@ -126,6 +166,21 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
   // Verification code states
   const [verificationCode, setVerificationCode] = React.useState("");
   const [generatedOtp, setGeneratedOtp] = React.useState("");
+
+  // Referral code state
+  const [referralCodeInput, setReferralCodeInput] = React.useState("");
+
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const ref = params.get('ref');
+    if (ref) {
+      localStorage.setItem('referredBy', ref);
+      setReferralCodeInput(ref);
+    } else {
+      const storedRef = localStorage.getItem('referredBy');
+      if (storedRef) setReferralCodeInput(storedRef);
+    }
+  }, []);
 
   // Dashboard Tab state
   const [activeTab, setActiveTab] = React.useState<"available-jobs" | "active-deliveries" | "history" | "profile">("available-jobs");
@@ -233,6 +288,15 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
       const result = await signInWithPopup(auth, googleProvider, browserPopupRedirectResolver);
       const user = result.user;
 
+      // Check if user is already registered as a Buyer/Seller account
+      const userDocSnap = await getDoc(doc(db, "users", user.uid));
+      if (userDocSnap.exists() && userDocSnap.data()?.role !== "logistics") {
+        await signOut(auth);
+        setError("This account is registered as a Buyer or Seller. Logistics partners must use a separate email address.");
+        setLoading(false);
+        return;
+      }
+
       // Check if logistics company profile exists
       const companyDoc = await getDoc(doc(db, "logistics_companies", user.uid));
       
@@ -257,6 +321,9 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
           createdAt: new Date().toISOString()
         };
 
+        const referralCode = generateReferralCode(profile.companyName || user.displayName || "LOGISTICS");
+        const referredBy = referralCodeInput.trim() || localStorage.getItem('referredBy');
+
         await setDoc(doc(db, "logistics_companies", user.uid), profile);
 
         await setDoc(doc(db, "users", user.uid), {
@@ -266,6 +333,10 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
           email: user.email,
           phoneNumber: profile.phoneNumber,
           role: "logistics",
+          referralCode,
+          referredBy: referredBy || "",
+          referralEarnings: 0,
+          referralCount: 0,
           isVerified: true,
           isSuspended: false,
           reportCount: 0,
@@ -275,12 +346,31 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
           state: "Logistics Partner"
         }, { merge: true });
 
+        // If referred by someone, increment their referral count
+        if (referredBy) {
+          try {
+            const referrersQ = query(collection(db, "users"), where("referralCode", "==", referredBy));
+            const referrersSnap = await getDocs(referrersQ);
+            if (!referrersSnap.empty) {
+              const referrerDoc = referrersSnap.docs[0];
+              const currentCount = referrerDoc.data().referralCount || 0;
+              await updateDoc(referrerDoc.ref, { referralCount: currentCount + 1 });
+            }
+          } catch (refErr) {
+            console.warn("Error processing referral in LogisticsHub:", refErr);
+          }
+        }
+        localStorage.removeItem('referredBy');
+
         setCompanyProfile(profile);
         setView("dashboard");
       }
     } catch (err: any) {
-      if (err.code === "auth/popup-closed-by-user") {
+      const errorCode = err.code || "";
+      if (errorCode === "auth/popup-closed-by-user" || errorCode === "auth/cancelled-popup-request") {
         setError("Sign-in cancelled.");
+      } else if (errorCode === "auth/internal-error" || errorCode === "auth/popup-blocked") {
+        setError("Google Sign-In popup could not complete (often due to browser iframe constraints). Please click 'Open in New Tab' at the top right of the screen to sign in.");
       } else {
         console.error("Google Auth error in LogisticsHub:", err);
         setError(getFirestoreErrorMessage(err) || "Failed to sign in with Google. Make sure popups are allowed.");
@@ -300,10 +390,18 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
       const userCredential = await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
       const user = userCredential.user;
       
+      const userDocSnap = await getDoc(doc(db, "users", user.uid));
+      if (userDocSnap.exists() && userDocSnap.data()?.role !== "logistics") {
+        await signOut(auth);
+        setError("This account is registered as a Buyer/Seller account. Please log in through the main user portal or use a dedicated logistics email.");
+        setLoading(false);
+        return;
+      }
+
       const docSnap = await getDoc(doc(db, "logistics_companies", user.uid));
       if (!docSnap.exists()) {
         await signOut(auth);
-        setError("This account is not registered as a Logistics Partner. Please register a new logistics account.");
+        setError("This account is not registered as a Logistics Partner. Please register a new logistics account with a separate email.");
         setLoading(false);
         return;
       }
@@ -326,7 +424,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
   };
 
   // Handle Register Initiate (Triggers verification view)
-  const handleRegisterInit = (e: React.FormEvent) => {
+  const handleRegisterInit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
 
@@ -343,6 +441,29 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
       return setError("Password must be at least 6 characters long and contain at least one uppercase letter, one lowercase letter, one number, and one special character.");
     }
     if (password !== confirmPassword) return setError("Passwords do not match.");
+
+    setLoading(true);
+    try {
+      const usersRef = collection(db, "users");
+      const q = query(usersRef, where("email", "==", email.trim().toLowerCase()));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const existingData = snap.docs[0].data();
+        if (existingData.role !== "logistics") {
+          setError("This email address is already registered as a Buyer or Seller account. Logistics partners must use a separate email address.");
+          setLoading(false);
+          return;
+        } else {
+          setError("An account with this email address is already registered as a Logistics Partner. Please log in instead.");
+          setLoading(false);
+          return;
+        }
+      }
+    } catch (checkErr) {
+      console.warn("Email pre-check failed, proceeding to verification", checkErr);
+    } finally {
+      setLoading(false);
+    }
 
     // Generate random OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -365,6 +486,13 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
+      try {
+        await sendEmailVerification(user);
+        console.log(`[FIREBASE AUTH] Logistics signup verification email sent to ${email}`);
+      } catch (evErr) {
+        console.warn("Logistics sendEmailVerification notice:", evErr);
+      }
+
       const profile: LogisticsCompany = {
         id: user.uid,
         companyName,
@@ -383,6 +511,9 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
       // Save logistics company profile
       await setDoc(doc(db, "logistics_companies", user.uid), profile);
 
+      const referralCode = generateReferralCode(companyName || "LOGISTICS");
+      const referredBy = referralCodeInput.trim() || localStorage.getItem('referredBy');
+
       // Create a matching standard user record with a 'logistics' identifier
       await setDoc(doc(db, "users", user.uid), {
         uid: user.uid,
@@ -391,6 +522,10 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
         email: email,
         phoneNumber: phoneNumber,
         role: "logistics",
+        referralCode,
+        referredBy: referredBy || "",
+        referralEarnings: 0,
+        referralCount: 0,
         isVerified: true,
         isSuspended: false,
         reportCount: 0,
@@ -399,6 +534,22 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
         location: officeAddress,
         state: "Logistics Partner"
       });
+
+      // If referred by someone, increment their referral count
+      if (referredBy) {
+        try {
+          const referrersQ = query(collection(db, "users"), where("referralCode", "==", referredBy));
+          const referrersSnap = await getDocs(referrersQ);
+          if (!referrersSnap.empty) {
+            const referrerDoc = referrersSnap.docs[0];
+            const currentCount = referrerDoc.data().referralCount || 0;
+            await updateDoc(referrerDoc.ref, { referralCount: currentCount + 1 });
+          }
+        } catch (refErr) {
+          console.warn("Error processing referral in LogisticsHub:", refErr);
+        }
+      }
+      localStorage.removeItem('referredBy');
 
       // Explicitly sign out the newly created user so they can log in cleanly on the Login screen
       await signOut(auth);
@@ -777,7 +928,21 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider ml-1">Password</label>
+                <div className="flex justify-between items-center">
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider ml-1">Password</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setResetEmail(loginEmail || "");
+                      setResetEmailSent(false);
+                      setResetError("");
+                      setShowForgotPassword(true);
+                    }}
+                    className="text-xs font-bold text-orange-600 dark:text-orange-400 hover:underline cursor-pointer bg-transparent border-none p-0"
+                  >
+                    Forgot Password?
+                  </button>
+                </div>
                 <div className="relative">
                   <Lock className="absolute left-4 top-4 w-5 h-5 text-slate-400" />
                   <input
@@ -826,8 +991,22 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
               <p className="text-xs text-slate-400">Set up your delivery details to receive high-demand dispatch jobs</p>
             </div>
 
-            {/* Google Sign Up Option */}
+            {/* Google Sign Up & Referral Option */}
             <div className="mb-8 space-y-4 max-w-md mx-auto">
+              <div className="space-y-1 text-left">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">Referral Code (Optional)</label>
+                <div className="relative">
+                  <Tag className="absolute left-4 top-3.5 w-4 h-4 text-slate-400" />
+                  <input
+                    type="text"
+                    value={referralCodeInput}
+                    onChange={(e) => setReferralCodeInput(e.target.value)}
+                    placeholder="e.g. REF123 (Enter code if invited)"
+                    className="w-full h-11 pl-11 pr-4 bg-slate-50 dark:bg-zinc-800/60 border border-slate-200 dark:border-zinc-800 rounded-xl outline-none focus:border-orange-500 text-xs font-semibold"
+                  />
+                </div>
+              </div>
+
               <button
                 type="button"
                 onClick={handleGoogleAuth}
@@ -1188,6 +1367,22 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
 
             {/* Right Column: Dynamic Subview Panel */}
             <div className="lg:col-span-3 space-y-6">
+              {/* Slideshow Banner for Logistics Partners */}
+              <DashboardSlideshow 
+                role="logistics"
+                onCtaClick={(slideId) => {
+                  if (slideId === "logistics-active") {
+                    setActiveTab("active-deliveries");
+                  } else if (slideId === "logistics-earnings") {
+                    setActiveTab("history");
+                  } else if (slideId === "logistics-profile") {
+                    setActiveTab("profile");
+                  } else {
+                    setActiveTab("available-jobs");
+                  }
+                }}
+              />
+
               {directOffers.length > 0 && (
                 <div className="p-5 bg-gradient-to-r from-orange-500/10 to-amber-500/10 dark:from-orange-950/20 dark:to-amber-950/20 border-2 border-orange-500/30 dark:border-orange-500/50 rounded-3xl animate-pulse">
                   <div className="flex items-start gap-4">
@@ -1544,6 +1739,101 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
             </div>
           </div>
         )}
+
+        {/* Forgot Password Modal */}
+        <AnimatePresence>
+          {showForgotPassword && (
+            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                className="bg-white dark:bg-zinc-900 rounded-[2.5rem] p-6 sm:p-8 max-w-md w-full shadow-2xl border border-slate-100 dark:border-zinc-800 space-y-5"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-orange-100 dark:bg-orange-950/40 flex items-center justify-center text-orange-600 dark:text-orange-400">
+                      <Lock className="w-5 h-5" />
+                    </div>
+                    <div className="text-left">
+                      <h3 className="text-xl font-extrabold text-slate-900 dark:text-white">Reset Password</h3>
+                      <p className="text-xs text-slate-500 dark:text-zinc-400 font-medium">Reset your logistics account password</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowForgotPassword(false)}
+                    className="w-8 h-8 rounded-full bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 flex items-center justify-center text-slate-500 dark:text-zinc-400 transition-colors cursor-pointer text-sm font-bold"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {resetEmailSent ? (
+                  <div className="space-y-4 text-center py-2">
+                    <div className="w-16 h-16 rounded-full bg-emerald-100 dark:bg-emerald-950/50 flex items-center justify-center text-emerald-600 dark:text-emerald-400 mx-auto">
+                      <CheckCircle2 className="w-8 h-8" />
+                    </div>
+                    <div className="space-y-1">
+                      <h4 className="text-base font-bold text-slate-900 dark:text-white">Reset Email Sent!</h4>
+                      <p className="text-xs text-slate-600 dark:text-zinc-300 font-medium leading-relaxed">
+                        We've sent a password reset link to <span className="font-bold text-slate-900 dark:text-white">{resetEmail}</span>. Please check your email inbox and follow the instructions to reset your password.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowForgotPassword(false)}
+                      className="w-full h-11 bg-orange-600 hover:bg-orange-700 text-white rounded-2xl font-bold text-xs uppercase tracking-wider transition-all cursor-pointer shadow-md shadow-orange-500/15"
+                    >
+                      Back to Login
+                    </button>
+                  </div>
+                ) : (
+                  <form onSubmit={handlePasswordReset} className="space-y-4 text-left">
+                    <p className="text-xs text-slate-600 dark:text-zinc-300 font-medium leading-relaxed">
+                      Enter your registered partner email address below, and we will send you a password reset link.
+                    </p>
+
+                    {resetError && (
+                      <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 rounded-xl text-red-600 dark:text-red-400 text-xs font-semibold">
+                        {resetError}
+                      </div>
+                    )}
+
+                    <div className="space-y-1">
+                      <label className="block text-xs font-bold text-slate-700 dark:text-zinc-300">Partner Email Address</label>
+                      <input
+                        type="email"
+                        required
+                        value={resetEmail}
+                        onChange={(e) => setResetEmail(e.target.value)}
+                        placeholder="partner@logistics.com"
+                        className="w-full h-11 px-3.5 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-orange-500 focus:ring-1 focus:ring-orange-500 outline-none text-xs transition-all"
+                      />
+                    </div>
+
+                    <div className="flex items-center gap-3 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowForgotPassword(false)}
+                        className="flex-1 h-11 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300 rounded-xl font-bold text-xs transition-all cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={resetLoading}
+                        className="flex-1 h-11 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md shadow-orange-500/15"
+                      >
+                        {resetLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Send Reset Link"}
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );

@@ -42,7 +42,6 @@ import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from ".
 import { compressImage } from "../lib/imageUtils";
 import { auth } from "../firebase";
 import { deleteUser, signOut } from "firebase/auth";
-import { GoogleGenAI, Type } from "@google/genai";
 import { cn } from "../lib/utils";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -397,51 +396,20 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
       try {
         const base64 = await compressImage(file, 800, 800, 0.7);
         
-        // Gemini Verification
-        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-        const prompt = `This is an identity card (Student ID, National ID, or Driver's License). 
-        You are a cautious but fair identity verification assistant for SHOPIVERSITY, a student marketplace.
-        
-        Verify if the information on this ID matches the following profile:
-        - Full Name: "${fullName}"
-        - School/Institution: "${schoolName}"
-        - State: "${state}"
-        - City: "${city}"
-
-        Verification Criteria:
-        1. Name Match: The name on the ID must be substantially similar to "${fullName}". 
-           - Allow for middle names appearing or missing.
-           - Allow for common abbreviations or shortening (e.g., "Samuel" vs "Sam").
-           - Allow for different ordering (Surname first vs Surname last).
-           - BE LENIENT as long as it's clearly the same person.
-        2. Visual Integrity: The document should look like a valid ID card.
-        3. Institution/Location: If it's a student ID, check for "${schoolName}". If it's a government ID, it should be from Nigeria or consistent with a resident in "${state}, ${city}".
-        
-        Return the result in JSON format.`;
-        
-        const response = await ai.models.generateContent({
-          model: "gemini-flash-latest",
-          contents: {
-            parts: [
-              { inlineData: { data: base64.split(',')[1], mimeType: "image/jpeg" } },
-              { text: prompt }
-            ]
-          },
-          config: { 
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                matches: { type: Type.BOOLEAN },
-                nameOnId: { type: Type.STRING },
-                reason: { type: Type.STRING }
-              },
-              required: ["matches", "nameOnId", "reason"]
-            }
-          }
+        // Gemini Verification via Server Endpoint
+        const response = await fetch("/api/gemini/verify-id", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            imageBase64: base64,
+            fullName,
+            schoolName,
+            state,
+            city
+          })
         });
-        
-        const result = JSON.parse(response.text.trim().replace(/```json|```/g, ""));
+
+        const result = await response.json();
         if (result.matches) {
           setVerificationIdUrl(base64);
           setIdVerificationError("");
@@ -461,6 +429,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
   };
 
   const [showCongratsModal, setShowCongratsModal] = React.useState(false);
+  const [showSaveSuccessModal, setShowSaveSuccessModal] = React.useState(false);
 
   const handleRemoveId = async () => {
     if (!verificationIdUrl) return;
@@ -549,6 +518,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
       if (isNowComplete && (wasIncomplete || !user.profileCompleted)) {
         setShowCongratsModal(true);
       } else {
+        setShowSaveSuccessModal(true);
         setSuccess(true);
         setTimeout(() => setSuccess(false), 3000);
       }
@@ -850,6 +820,33 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
       {/* Settings Form */}
       <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 p-8 shadow-sm">
         <AnimatePresence>
+          {showSaveSuccessModal && (
+            <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 max-w-sm w-full shadow-2xl border border-slate-100 dark:border-slate-800 relative overflow-hidden text-center"
+              >
+                <div className="w-16 h-16 bg-emerald-100 dark:bg-emerald-900/20 rounded-2xl flex items-center justify-center text-emerald-600 dark:text-emerald-400 mx-auto mb-4 shadow-lg shadow-emerald-100 dark:shadow-none">
+                  <CheckCircle className="w-8 h-8" />
+                </div>
+                
+                <h3 className="text-xl font-black text-slate-900 dark:text-white mb-2 tracking-tight">Changes Saved!</h3>
+                <p className="text-slate-500 dark:text-slate-400 mb-6 font-medium text-sm">
+                  Your profile details have been successfully saved.
+                </p>
+                
+                <button 
+                  onClick={() => setShowSaveSuccessModal(false)}
+                  className="w-full py-3.5 bg-purple-600 hover:bg-purple-700 text-white rounded-2xl font-bold text-sm shadow-lg shadow-purple-200 dark:shadow-purple-900/20 transition-all active:scale-[0.98]"
+                >
+                  Awesome, Got it
+                </button>
+              </motion.div>
+            </div>
+          )}
+
           {showCongratsModal && (
             <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
               <motion.div 

@@ -76,7 +76,6 @@ import {
   Paintbrush,
   Truck
 } from "lucide-react";
-import { GoogleGenAI } from "@google/genai";
 import { motion, AnimatePresence } from "motion/react";
 
 const ALL_CATEGORIES = [

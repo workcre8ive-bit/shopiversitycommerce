@@ -18,7 +18,14 @@ import {
   Plus, CheckCheck, Smile, Download, Maximize2, Copy
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { filterContent, hasSensitiveContent } from '../../lib/contentFilter';
+import { 
+  detectContactSharing, 
+  detectMultiMessageContactSharing, 
+  CONTACT_WARNING_MESSAGE, 
+  filterContent, 
+  hasSensitiveContent 
+} from '../../lib/contentFilter';
+import { logBlockedAttempt } from '../../lib/moderationLogger';
 import { handleFirestoreError, OperationType } from '../../lib/firebase-errors';
 import { cn } from '../../lib/utils';
 
@@ -95,6 +102,8 @@ export default function ChatBox({ chatId, recipientId, recipientName, onBack }: 
   const [loading, setLoading] = React.useState(true);
   const [sending, setSending] = React.useState(false);
   const [showWarning, setShowWarning] = React.useState(false);
+  const [warningText, setWarningText] = React.useState<string>(CONTACT_WARNING_MESSAGE);
+  const [scanningImage, setScanningImage] = React.useState(false);
   const scrollRef = React.useRef<HTMLDivElement>(null);
 
   const [editingMessageId, setEditingMessageId] = React.useState<string | null>(null);
@@ -211,14 +220,36 @@ export default function ChatBox({ chatId, recipientId, recipientName, onBack }: 
   const handleSaveEdit = async (messageId: string) => {
     if (!editingText.trim() || savingEdit) return;
 
-    if (hasSensitiveContent(editingText)) {
+    const currentUserId = auth.currentUser?.uid || 'anonymous';
+    const senderName = auth.currentUser?.displayName || 'User';
+
+    const senderRecentMessages = messages
+      .filter(m => m.senderId === currentUserId && m.id !== messageId && m.text && m.mediaType !== 'call')
+      .map(m => m.text);
+
+    const localDetection = detectMultiMessageContactSharing(editingText, senderRecentMessages);
+    if (localDetection.isBlocked) {
+      setWarningText(CONTACT_WARNING_MESSAGE);
       setShowWarning(true);
-      setTimeout(() => setShowWarning(false), 3000);
+      setTimeout(() => setShowWarning(false), 5000);
+
+      await logBlockedAttempt({
+        senderId: currentUserId,
+        senderName,
+        recipientId,
+        chatId,
+        messageType: 'text',
+        contentSnippet: editingText,
+        detectedTypes: localDetection.detectedTypes,
+        reason: localDetection.reason || 'Contact information detected during edit',
+        status: 'blocked'
+      });
+
       return;
     }
 
     setSavingEdit(true);
-    const textToSend = filterContent(editingText);
+    const textToSend = editingText;
 
     try {
       const messageRef = doc(db, 'chats', chatId, 'messages', messageId);
@@ -392,8 +423,53 @@ export default function ChatBox({ chatId, recipientId, recipientName, onBack }: 
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onloadend = () => {
-      setSelectedImage(reader.result as string);
+    reader.onloadend = async () => {
+      const base64Data = reader.result as string;
+      const currentUserId = auth.currentUser?.uid || 'anonymous';
+      const senderName = auth.currentUser?.displayName || 'User';
+
+      setScanningImage(true);
+
+      try {
+        const res = await fetch('/api/moderate-chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            image: base64Data,
+            senderId: currentUserId
+          })
+        });
+
+        const data = await res.json();
+        if (data.isBlocked) {
+          setWarningText(data.warningMessage || CONTACT_WARNING_MESSAGE);
+          setShowWarning(true);
+          setTimeout(() => setShowWarning(false), 5000);
+
+          await logBlockedAttempt({
+            senderId: currentUserId,
+            senderName,
+            recipientId,
+            chatId,
+            messageType: 'image',
+            contentSnippet: '[Image attachment containing contact details]',
+            detectedTypes: data.detectedTypes || ['ocr_contact_info'],
+            reason: data.reason || 'Contact information detected in image OCR scan',
+            status: 'blocked'
+          });
+
+          setSelectedImage(null);
+          setScanningImage(false);
+          return;
+        }
+
+        setSelectedImage(base64Data);
+      } catch (err) {
+        console.warn("OCR image scan error, proceeding with attachment:", err);
+        setSelectedImage(base64Data);
+      } finally {
+        setScanningImage(false);
+      }
     };
     reader.readAsDataURL(file);
     e.target.value = '';
@@ -405,10 +481,12 @@ export default function ChatBox({ chatId, recipientId, recipientName, onBack }: 
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if ((!newMessage.trim() && !selectedImage) || sending) return;
+    if ((!newMessage.trim() && !selectedImage) || sending || scanningImage) return;
 
     const currentUserId = auth.currentUser?.uid;
     if (!currentUserId) return;
+
+    const senderName = auth.currentUser?.displayName || 'User';
 
     // Buyer safety policy: a buyer can initiate, but must wait for response to continue
     try {
@@ -429,14 +507,72 @@ export default function ChatBox({ chatId, recipientId, recipientName, onBack }: 
       console.error("Error checking user role for chat restriction:", err);
     }
 
-    if (newMessage && hasSensitiveContent(newMessage)) {
-      setShowWarning(true);
-      setTimeout(() => setShowWarning(false), 3000);
-      return;
+    // 1. Local Regex, Bank Account & Multi-Message Sequential Contact Protection Check
+    if (newMessage.trim()) {
+      const senderRecentMessages = messages
+        .filter(m => m.senderId === currentUserId && m.text && m.mediaType !== 'call')
+        .map(m => m.text);
+
+      const localDetection = detectMultiMessageContactSharing(newMessage, senderRecentMessages);
+      if (localDetection.isBlocked) {
+        setWarningText(CONTACT_WARNING_MESSAGE);
+        setShowWarning(true);
+        setTimeout(() => setShowWarning(false), 5000);
+
+        await logBlockedAttempt({
+          senderId: currentUserId,
+          senderName,
+          recipientId,
+          chatId,
+          messageType: 'text',
+          contentSnippet: newMessage,
+          detectedTypes: localDetection.detectedTypes,
+          reason: localDetection.reason || 'Contact/bank information or split digit sequence detected',
+          status: 'blocked'
+        });
+
+        return;
+      }
+
+      // 2. AI Server-Side Moderation Check with Message History Context
+      try {
+        const modRes = await fetch('/api/moderate-chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: newMessage,
+            senderId: currentUserId,
+            historyMessages: senderRecentMessages.slice(-10)
+          })
+        });
+
+        const modData = await modRes.json();
+        if (modData.isBlocked) {
+          setWarningText(modData.warningMessage || CONTACT_WARNING_MESSAGE);
+          setShowWarning(true);
+          setTimeout(() => setShowWarning(false), 5000);
+
+          await logBlockedAttempt({
+            senderId: currentUserId,
+            senderName,
+            recipientId,
+            chatId,
+            messageType: 'text',
+            contentSnippet: newMessage,
+            detectedTypes: modData.detectedTypes || ['disguised_contact_attempt'],
+            reason: modData.reason || 'Disguised contact attempt detected by AI',
+            status: 'blocked'
+          });
+
+          return;
+        }
+      } catch (err) {
+        console.warn("AI chat moderation error:", err);
+      }
     }
 
     setSending(true);
-    const textToSend = filterContent(newMessage);
+    const textToSend = newMessage.trim();
 
     try {
       if (selectedImage) {
@@ -777,6 +913,16 @@ export default function ChatBox({ chatId, recipientId, recipientName, onBack }: 
         )}
       </div>
 
+      {/* Image scanning state indicator */}
+      {scanningImage && (
+        <div className="px-4 pb-2 z-20">
+          <div className="p-3 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 rounded-xl flex items-center gap-3 text-blue-700 dark:text-blue-300 shadow-sm animate-pulse">
+            <Loader2 className="w-4 h-4 animate-spin text-blue-600 dark:text-blue-400 shrink-0" />
+            <p className="text-xs font-semibold">Scanning image for contact safety compliance...</p>
+          </div>
+        </div>
+      )}
+
       {/* Sensitive block warning */}
       <AnimatePresence>
         {showWarning && (
@@ -786,9 +932,9 @@ export default function ChatBox({ chatId, recipientId, recipientName, onBack }: 
             exit={{ opacity: 0, y: 16 }}
             className="px-4 pb-2 z-20"
           >
-            <div className="p-3 bg-red-50 dark:bg-red-950/30 border border-red-150 dark:border-red-950/40 rounded-xl flex items-center gap-3 text-red-600 dark:text-red-450 shadow-sm">
-              <ShieldAlert className="w-5 h-5 flex-shrink-0 animate-ping" />
-              <p className="text-[11px] font-bold">Sharing personal contact lines or emails is monitored to prevent external escort trade fraud.</p>
+            <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-xl flex items-center gap-3 text-red-600 dark:text-red-400 shadow-sm">
+              <ShieldAlert className="w-5 h-5 flex-shrink-0 animate-bounce" />
+              <p className="text-xs font-bold leading-tight">{warningText || CONTACT_WARNING_MESSAGE}</p>
             </div>
           </motion.div>
         )}
@@ -817,16 +963,6 @@ export default function ChatBox({ chatId, recipientId, recipientName, onBack }: 
       {/* Chat Footer Input Area */}
       <div className="p-4 bg-transparent shrink-0 select-none">
         <form onSubmit={handleSendMessage} className="flex gap-2.5 items-center bg-white/95 dark:bg-slate-900/95 backdrop-blur-md hover:bg-white dark:hover:bg-slate-900 shadow-xl shadow-slate-200/40 dark:shadow-none border border-slate-150 dark:border-slate-800/80 rounded-2xl p-2 transition-all">
-          {/* Attachment Button */}
-          <button
-            type="button"
-            onClick={handleTriggerFileInput}
-            className="w-10 h-10 text-slate-400 hover:text-[#ff6b00] dark:text-slate-550 dark:hover:text-[#ff6b00] hover:bg-slate-50 dark:hover:bg-slate-800/60 rounded-xl flex items-center justify-center transition-all shrink-0 cursor-pointer"
-            title="Attach File/Image"
-          >
-            <Paperclip className="w-5 h-5" />
-          </button>
-
           {/* Input Rounded Box */}
           <div className="flex-1 flex items-center bg-slate-50 dark:bg-slate-950/50 rounded-xl px-3.5 h-10 border-none transition-all select-text">
             <input
@@ -984,21 +1120,9 @@ export default function ChatBox({ chatId, recipientId, recipientName, onBack }: 
               <img 
                 src={lightboxImage} 
                 alt="Enlarged" 
-                className="max-h-[75vh] max-w-full rounded-2xl object-contain shadow-2xl animate-in zoom-in-95 duration-200"
+                className="max-h-[85vh] max-w-full rounded-2xl object-contain shadow-2xl animate-in zoom-in-95 duration-200"
                 referrerPolicy="no-referrer"
               />
-            </div>
-
-            {/* Bottom download representation helper */}
-            <div className="flex justify-center mb-4 z-10">
-              <a
-                href={lightboxImage}
-                download={`Shopiversity-Attachment-${Date.now()}.png`}
-                className="px-5 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 transition-all"
-              >
-                <Download className="w-4 h-4" />
-                Download Original
-              </a>
             </div>
           </motion.div>
         )}

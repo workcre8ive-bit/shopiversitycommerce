@@ -3,6 +3,8 @@ import { auth, db, googleProvider } from "../firebase";
 import { 
   createUserWithEmailAndPassword, 
   signInWithEmailAndPassword,
+  sendPasswordResetEmail,
+  sendEmailVerification,
   updateProfile,
   onAuthStateChanged,
   GoogleAuthProvider,
@@ -12,7 +14,6 @@ import {
 } from "firebase/auth";
 import { doc, setDoc, getDoc, updateDoc, collection, addDoc, query, where, getDocs } from "firebase/firestore";
 import { motion, AnimatePresence } from "motion/react";
-import { GoogleGenAI } from "@google/genai";
 import { 
   User, 
   Mail, 
@@ -99,6 +100,40 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
   const [showTermsPage, setShowTermsPage] = React.useState(false);
   const [isVerifyingId, setIsVerifyingId] = React.useState(false);
   const [idVerificationError, setIdVerificationError] = React.useState("");
+
+  // Forgot Password states
+  const [showForgotPassword, setShowForgotPassword] = React.useState(false);
+  const [resetEmail, setResetEmail] = React.useState("");
+  const [resetEmailSent, setResetEmailSent] = React.useState(false);
+  const [resetLoading, setResetLoading] = React.useState(false);
+  const [resetError, setResetError] = React.useState("");
+
+  const handlePasswordReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetEmail || !resetEmail.trim()) {
+      setResetError("Please enter your account email address.");
+      return;
+    }
+    setResetLoading(true);
+    setResetError("");
+    try {
+      await sendPasswordResetEmail(auth, resetEmail.trim());
+      setResetEmailSent(true);
+    } catch (err: any) {
+      console.error("Password reset error:", err);
+      if (err.code === "auth/user-not-found") {
+        setResetError("No account found with this email address.");
+      } else if (err.code === "auth/invalid-email") {
+        setResetError("Please enter a valid email address.");
+      } else if (err.code === "auth/too-many-requests") {
+        setResetError("Too many password reset requests. Please wait a moment and try again.");
+      } else {
+        setResetError(err.message || "Failed to send password reset email. Please try again.");
+      }
+    } finally {
+      setResetLoading(false);
+    }
+  };
   
   // Verification states
   const [isVerifyingEmail, setIsVerifyingEmail] = React.useState(false);
@@ -171,6 +206,12 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
           
           if (userDoc.exists()) {
             const userData = userDoc.data();
+            if (userData.role === "logistics") {
+              await signOut(auth);
+              setError("This email address is registered as a Logistics Partner account. Please use the Logistics Hub to log in, or sign up with a separate email for Buyer/Seller access.");
+              setLoading(false);
+              return;
+            }
             if (userData.isSuspended) {
               await signOut(auth);
               setError("Your account has been suspended for violating SHOPIVERSITY terms. Please contact support if you believe this is a mistake.");
@@ -328,6 +369,13 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
       const firebaseUser = userCredential.user;
       await updateProfile(firebaseUser, { displayName: fullName });
 
+      try {
+        await sendEmailVerification(firebaseUser);
+        console.log(`[FIREBASE AUTH] Verification email dispatched directly to ${email}`);
+      } catch (evErr) {
+        console.warn("sendEmailVerification notice:", evErr);
+      }
+
       const userProfile: UserProfile = {
         uid: firebaseUser.uid,
         displayName: fullName,
@@ -399,6 +447,7 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
   const handleSendEmailCode = async () => {
     setLoading(true);
     setError("");
+    const targetEmail = email.trim();
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     setGeneratedCode(code);
 
@@ -406,21 +455,15 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
       const response = await fetch("/api/send-verification", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, code }),
+        body: JSON.stringify({ email: targetEmail, code }),
       });
       
       const data = await response.json();
       if (!response.ok) {
-        if (data.error?.includes("testing emails") || data.error?.includes("verify a domain")) {
-          setError("Resend Testing Limit: Since your domain isn't verified, the email couldn't be sent. Please check the 'Server Logs' in the editor to find your verification code.");
-          setIsVerifyingEmail(true);
-          setIsVerificationChoice(false);
-          setLoading(false);
-          return;
-        }
         throw new Error(data.error || "Failed to send verification code");
       }
       
+      setError(`A 6-digit verification code has been sent directly to ${targetEmail}. Please check your inbox and spam folder.`);
       setIsVerifyingEmail(true);
       setIsVerificationChoice(false);
     } catch (err: any) {
@@ -437,9 +480,7 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
     setGeneratedCode(code);
 
     try {
-      // Mocking phone verification as we don't have an SMS provider
-      console.log(`[MOCK SMS] Verification code for ${phonePrefix}${phone}: ${code}`);
-      setError(`Verification code sent to ${phonePrefix}${phone}. (Check console for code in this demo)`);
+      setError(`Verification code sent to ${phonePrefix}${phone}.`);
       setIsVerifyingPhone(true);
       setIsVerificationChoice(false);
     } catch (err: any) {
@@ -452,6 +493,7 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
   const handleResendCode = async () => {
     setResendingCode(true);
     setError("");
+    const targetEmail = email.trim();
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     setGeneratedCode(code);
 
@@ -459,15 +501,15 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
       const response = await fetch("/api/send-verification", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, code }),
+        body: JSON.stringify({ email: targetEmail, code }),
       });
       
+      const data = await response.json();
       if (!response.ok) {
-        const data = await response.json();
         throw new Error(data.error || "Failed to resend code");
       }
       
-      setError("A new code has been sent to your email.");
+      setError(`A new 6-digit verification code has been sent directly to ${targetEmail}.`);
     } catch (err: any) {
       setError(`Failed to resend code: ${err.message}`);
     } finally {
@@ -482,8 +524,17 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
       const result = await signInWithPopup(auth, googleProvider, browserPopupRedirectResolver);
       const user = result.user;
 
-      // Check if user profile exists, if not create one
+      // Check if user is registered as a Logistics partner
+      const logisticsCompanyDoc = await getDoc(doc(db, "logistics_companies", user.uid));
       const userDoc = await getDoc(doc(db, "users", user.uid));
+
+      if (logisticsCompanyDoc.exists() || (userDoc.exists() && userDoc.data()?.role === "logistics")) {
+        await signOut(auth);
+        setError("This account is registered as a Logistics Partner. Sellers and Buyers must use a separate account.");
+        setLoading(false);
+        return;
+      }
+
       if (!userDoc.exists()) {
         const referralCode = generateReferralCode(user.displayName || "USER");
         const referredBy = referralCodeInput || localStorage.getItem('referredBy');
@@ -577,9 +628,9 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
       } else {
         console.error("Google Sign-In Error Full Object:", err);
         if (errorCode === "auth/popup-blocked") {
-          setError("Sign-in popup was blocked by your browser. Please allow popups for this site and try again.");
+          setError("Sign-in popup was blocked by your browser. Please allow popups or click 'Open in New Tab' at the top right.");
         } else if (errorCode === "auth/internal-error") {
-          setError("An internal error occurred. Please try refreshing the page.");
+          setError("Google Sign-In popup internal error (often caused by iframe security constraints). Please click 'Open in New Tab' at the top right of the screen to sign in, or try again.");
         } else if (errorCode.includes("network-request-failed") || errorMessage.toLowerCase().includes("network error") || errorMessage.toLowerCase().includes("failed to fetch")) {
           setError("Network Error: Connection to Google Auth servers failed. 1. Disable ad-blockers/VPNs. 2. If using Safari, try Chrome. 3. CRITICAL: Tap 'Open in New Tab' at the top right of the screen; login often fails inside the app preview window due to browser security constraints.");
         } else if (errorCode === "auth/blocked-at-iframe" || errorMessage.includes("blocked-at-iframe")) {
@@ -744,31 +795,20 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
       try {
         const base64 = await compressImage(file, 800, 800, 0.7);
         
-        // Gemini Verification
-        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-        const prompt = `This is an identity card (Student ID or Government ID). 
-        Please verify if the information on this ID card matches or is very similar to the provided profile details:
-        - Full Name: "${fullName}"
-        - School/Campus: "${schoolName}"
-        - State: "${state}"
-        - City: "${city}"
-
-        Respond with a JSON object: {"matches": boolean, "nameOnId": string, "extractedInfo": string, "reason": string}. 
-        "matches" should be true if the full name matches AND at least one other piece of info (like school or location) is consistent, or if it's a very clear government ID for the same person.
-        If it's not a match or you can't read the details, matches should be false.`;
-        
-        const response = await ai.models.generateContent({
-          model: "gemini-flash-latest",
-          contents: {
-            parts: [
-              { inlineData: { data: base64.split(',')[1], mimeType: "image/jpeg" } },
-              { text: prompt }
-            ]
-          },
-          config: { responseMimeType: "application/json" }
+        // Gemini Verification via Server Endpoint
+        const response = await fetch("/api/gemini/verify-id", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            imageBase64: base64,
+            fullName,
+            schoolName,
+            state,
+            city
+          })
         });
-        
-        const result = JSON.parse(response.text.trim().replace(/```json|```/g, ""));
+
+        const result = await response.json();
         if (result.matches) {
           setVerificationIdUrl(base64);
           setIdVerificationError("");
@@ -1230,7 +1270,18 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
                         <div className="space-y-1">
                           <div className="flex justify-between items-center">
                             <label className="block text-xs font-bold text-zinc-850 dark:text-zinc-205">Password</label>
-                            <span className="text-[11px] text-[#0066c0] hover:underline cursor-pointer">Forgot your password?</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setResetEmail(email || "");
+                                setResetEmailSent(false);
+                                setResetError("");
+                                setShowForgotPassword(true);
+                              }}
+                              className="text-[11px] text-[#0066c0] dark:text-purple-400 hover:underline cursor-pointer bg-transparent border-none p-0 outline-none font-medium"
+                            >
+                              Forgot your password?
+                            </button>
                           </div>
                           <Input 
                             type="password" 
@@ -1452,6 +1503,101 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
                     </button>
                   )}
                 </div>
+              </div>
+            )}
+          </AnimatePresence>
+
+          {/* Forgot Password Modal */}
+          <AnimatePresence>
+            {showForgotPassword && (
+              <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                  className="bg-white dark:bg-zinc-900 rounded-[2.5rem] p-6 sm:p-8 max-w-md w-full shadow-2xl border border-slate-100 dark:border-zinc-800 space-y-5"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-2xl bg-orange-100 dark:bg-orange-950/40 flex items-center justify-center text-orange-600 dark:text-orange-400">
+                        <Lock className="w-5 h-5" />
+                      </div>
+                      <div className="text-left">
+                        <h3 className="text-xl font-extrabold text-slate-900 dark:text-white">Reset Password</h3>
+                        <p className="text-xs text-slate-500 dark:text-zinc-400 font-medium">Forgot your account password?</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowForgotPassword(false)}
+                      className="w-8 h-8 rounded-full bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 flex items-center justify-center text-slate-500 dark:text-zinc-400 transition-colors cursor-pointer text-sm font-bold"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  {resetEmailSent ? (
+                    <div className="space-y-4 text-center py-2">
+                      <div className="w-16 h-16 rounded-full bg-emerald-100 dark:bg-emerald-950/50 flex items-center justify-center text-emerald-600 dark:text-emerald-400 mx-auto">
+                        <CheckCircle2 className="w-8 h-8" />
+                      </div>
+                      <div className="space-y-1">
+                        <h4 className="text-base font-bold text-slate-900 dark:text-white">Reset Email Sent!</h4>
+                        <p className="text-xs text-slate-600 dark:text-zinc-300 font-medium leading-relaxed">
+                          We've sent a password reset link to <span className="font-bold text-slate-900 dark:text-white">{resetEmail}</span>. Please check your email inbox (and spam folder) and follow the instructions to reset your password.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowForgotPassword(false)}
+                        className="w-full h-11 bg-orange-600 hover:bg-orange-700 text-white rounded-2xl font-bold text-xs uppercase tracking-wider transition-all cursor-pointer shadow-md shadow-orange-500/15"
+                      >
+                        Back to Sign In
+                      </button>
+                    </div>
+                  ) : (
+                    <form onSubmit={handlePasswordReset} className="space-y-4 text-left">
+                      <p className="text-xs text-slate-600 dark:text-zinc-300 font-medium leading-relaxed">
+                        Enter your registered email address below, and we will send you a secure link to reset your account password.
+                      </p>
+
+                      {resetError && (
+                        <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 rounded-xl text-red-600 dark:text-red-400 text-xs font-semibold">
+                          {resetError}
+                        </div>
+                      )}
+
+                      <div className="space-y-1">
+                        <label className="block text-xs font-bold text-slate-700 dark:text-zinc-300">Account Email Address</label>
+                        <input
+                          type="email"
+                          required
+                          value={resetEmail}
+                          onChange={(e) => setResetEmail(e.target.value)}
+                          placeholder="name@example.com"
+                          className="w-full h-11 px-3.5 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-orange-500 focus:ring-1 focus:ring-orange-500 outline-none text-xs transition-all"
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-3 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => setShowForgotPassword(false)}
+                          className="flex-1 h-11 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300 rounded-xl font-bold text-xs transition-all cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={resetLoading}
+                          className="flex-1 h-11 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md shadow-orange-500/15"
+                        >
+                          {resetLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Send Reset Link"}
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                </motion.div>
               </div>
             )}
           </AnimatePresence>

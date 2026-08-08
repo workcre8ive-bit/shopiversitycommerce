@@ -21,6 +21,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/utils";
 import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
+import DashboardSlideshow from "./DashboardSlideshow";
 
 interface BuyerDashboardProps {
   user: UserProfile;
@@ -172,6 +173,18 @@ export default function BuyerDashboard({ user, setActiveTab, onBack }: BuyerDash
           </div>
         </div>
       </motion.div>
+
+      {/* Dashboard Hero Slideshow */}
+      <DashboardSlideshow 
+        role="buyer"
+        onCtaClick={(slideId) => {
+          if (slideId === "buyer-escrow" || slideId === "buyer-dispatch") {
+            setActiveTab("orders");
+          } else {
+            setActiveTab("market");
+          }
+        }} 
+      />
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">

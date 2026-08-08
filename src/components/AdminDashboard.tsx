@@ -15,6 +15,7 @@ import {
 } from "firebase/firestore";
 import { 
   ShieldCheck, 
+  ShieldAlert,
   Wallet, 
   CheckCircle, 
   XCircle, 
@@ -79,7 +80,8 @@ export default function AdminDashboard({ currentUser, onBack }: { currentUser: a
   const [loading, setLoading] = React.useState(true);
   const [processingId, setProcessingId] = React.useState<string | null>(null);
   const [filter, setFilter] = React.useState<"all" | "pending" | "approved" | "paid" | "rejected">("pending");
-  const [activeTab, setActiveTab] = React.useState<"overview" | "payouts" | "users" | "products" | "reports">("overview");
+  const [activeTab, setActiveTab] = React.useState<"overview" | "payouts" | "users" | "products" | "reports" | "moderation">("overview");
+  const [moderationLogs, setModerationLogs] = React.useState<any[]>([]);
   const [users, setUsers] = React.useState<any[]>([]);
   const [allProducts, setAllProducts] = React.useState<any[]>([]);
   const [reports, setReports] = React.useState<any[]>([]);
@@ -117,10 +119,18 @@ export default function AdminDashboard({ currentUser, onBack }: { currentUser: a
         console.error("AdminDashboard orders subscription failed:", error);
       });
 
+      const unsubModeration = onSnapshot(query(collection(db, "contact_moderation_logs"), orderBy("createdAt", "desc"), limit(50)), (snap) => {
+        const logs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setModerationLogs(logs);
+      }, (err) => {
+        console.error("Moderation logs subscription error:", err);
+      });
+
     return () => {
       unsubUsers();
       unsubProducts();
       unsubOrders();
+      unsubModeration();
     };
   }, []);
 
@@ -408,7 +418,8 @@ export default function AdminDashboard({ currentUser, onBack }: { currentUser: a
           { id: "overview", label: "Overview", icon: TrendingUp },
           { id: "payouts", label: "Payouts", icon: Wallet },
           { id: "users", label: "User Management", icon: User },
-          { id: "products", label: "Moderation", icon: ShieldCheck },
+          { id: "products", label: "Product Moderation", icon: ShieldCheck },
+          { id: "moderation", label: "Contact Protection Logs", icon: ShieldAlert },
           { id: "reports", label: "Reports", icon: AlertCircle }
         ].map((tab) => (
           <button
@@ -814,6 +825,90 @@ export default function AdminDashboard({ currentUser, onBack }: { currentUser: a
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {activeTab === "moderation" && (
+        <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 sm:p-8 border border-slate-100 dark:border-slate-800 shadow-xl space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-6">
+            <div>
+              <h2 className="text-xl font-black text-slate-900 dark:text-white flex items-center gap-2">
+                <ShieldAlert className="w-5 h-5 text-red-500" />
+                Contact Information Protection Logs
+              </h2>
+              <p className="text-sm text-slate-500 font-medium mt-1">
+                Real-time review of messages and image uploads blocked for sharing off-platform contact details.
+              </p>
+            </div>
+            <span className="px-4 py-1.5 bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded-full text-xs font-black self-start sm:self-auto">
+              {moderationLogs.length} Blocked Attempt{moderationLogs.length === 1 ? "" : "s"}
+            </span>
+          </div>
+
+          {moderationLogs.length === 0 ? (
+            <div className="text-center py-16 text-slate-400 space-y-3">
+              <ShieldCheck className="w-12 h-12 text-emerald-500 mx-auto opacity-40" />
+              <p className="font-bold text-slate-600 dark:text-slate-300">No blocked contact attempts logged yet.</p>
+              <p className="text-xs text-slate-400">The Contact Protection System actively monitors text messages and images 24/7.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-100 dark:border-slate-800 text-[11px] font-black text-slate-400 uppercase tracking-widest">
+                    <th className="pb-4 px-4">User / Sender</th>
+                    <th className="pb-4 px-4">Type</th>
+                    <th className="pb-4 px-4">Content / Snippet</th>
+                    <th className="pb-4 px-4">Detected Violations</th>
+                    <th className="pb-4 px-4">Reason</th>
+                    <th className="pb-4 px-4 text-right">Date & Time</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-sm">
+                  {moderationLogs.map((log) => (
+                    <tr key={log.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition-colors">
+                      <td className="py-4 px-4">
+                        <div className="font-bold text-slate-900 dark:text-white">{log.senderName || "Unknown User"}</div>
+                        <div className="text-[11px] text-slate-400 font-mono mt-0.5">{log.senderId}</div>
+                      </td>
+                      <td className="py-4 px-4">
+                        <span className={cn(
+                          "px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider",
+                          log.messageType === "image" 
+                            ? "bg-purple-100 text-purple-700 dark:bg-purple-950/40 dark:text-purple-300"
+                            : "bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300"
+                        )}>
+                          {log.messageType === "image" ? "📷 Image OCR" : "💬 Text"}
+                        </span>
+                      </td>
+                      <td className="py-4 px-4 max-w-xs">
+                        <p className="font-mono text-xs bg-slate-100 dark:bg-slate-800 p-2 rounded-xl text-slate-700 dark:text-slate-300 break-words line-clamp-2">
+                          {log.contentSnippet}
+                        </p>
+                      </td>
+                      <td className="py-4 px-4">
+                        <div className="flex flex-wrap gap-1">
+                          {log.detectedTypes?.map((t: string) => (
+                            <span key={t} className="px-2 py-0.5 bg-red-100 dark:bg-red-950/50 text-red-700 dark:text-red-300 rounded text-[10px] font-bold">
+                              {t}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="py-4 px-4 text-xs font-medium text-slate-600 dark:text-slate-300">
+                        {log.reason || "Contact info blocked"}
+                      </td>
+                      <td className="py-4 px-4 text-right text-xs text-slate-400 font-mono whitespace-nowrap">
+                        {log.createdAt?.seconds 
+                          ? new Date(log.createdAt.seconds * 1000).toLocaleString() 
+                          : "Just now"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 

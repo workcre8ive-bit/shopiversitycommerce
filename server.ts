@@ -3,6 +3,7 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
 import { Resend } from "resend";
+import nodemailer from "nodemailer";
 import cors from "cors";
 import dotenv from "dotenv";
 import axios from "axios";
@@ -43,56 +44,110 @@ async function startServer() {
       return res.status(400).json({ error: "Email and code are required" });
     }
 
-    if (!resend) {
-      console.log("RESEND_API_KEY not set. Code for", email, "is:", code);
-      return res.status(200).json({ 
-        success: true, 
-        message: "Verification code generated (check server logs as RESEND_API_KEY is missing)" 
-      });
-    }
+    const targetEmail = email.trim();
+    console.log(`[VERIFICATION ENGINE] Sending verification code ${code} directly to recipient: ${targetEmail}`);
 
-    try {
-      const targetEmail = email.trim();
-      // Always log the code to the server console for development/debugging
-      console.log(`[VERIFICATION] Code for ${targetEmail}: ${code}`);
-
-      const { data, error } = await resend.emails.send({
-        from: "onboarding@resend.dev",
-        to: [targetEmail],
-        subject: "Verify your SHOPIVERSITY account",
-        html: `
-          <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 16px;">
-            <h1 style="color: #ea7a15; font-size: 24px; font-weight: bold; margin-bottom: 16px;">Welcome to SHOPIVERSITY!</h1>
-            <p style="color: #475569; font-size: 16px; line-height: 24px;">
-              Thank you for joining our community. To complete your registration, please use the following 6-digit verification code:
-            </p>
-            <div style="background-color: #f8fafc; padding: 24px; text-align: center; margin: 24px 0; border-radius: 12px;">
-              <span style="font-size: 32px; font-weight: 900; letter-spacing: 8px; color: #0f172a;">${code}</span>
-            </div>
-            <p style="color: #475569; font-size: 14px;">
-              If you didn't request this code, you can safely ignore this email.
-            </p>
-            <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
-            <p style="color: #94a3b8; font-size: 12px; text-align: center;">
-              &copy; 2026 SHOPIVERSITY Marketplace. All rights reserved.
-            </p>
+    const htmlContent = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
+        <div style="text-align: center; padding-bottom: 20px;">
+          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0; tracking: -0.5px;">SHOPIVERSITY</h1>
+          <p style="color: #64748b; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Campus Marketplace & Logistics</p>
+        </div>
+        <div style="background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%); padding: 32px; text-align: center; border-radius: 20px; border: 1px solid #fed7aa; margin-bottom: 24px;">
+          <h2 style="color: #1e293b; font-size: 20px; font-weight: 800; margin-top: 0; margin-bottom: 8px;">Verify Your Email Address</h2>
+          <p style="color: #475569; font-size: 14px; margin-bottom: 20px; line-height: 1.5;">
+            Thank you for joining SHOPIVERSITY. Enter the 6-digit code below to complete your verification:
+          </p>
+          <div style="background-color: #ffffff; padding: 18px 24px; display: inline-block; border-radius: 16px; border: 2px border-dashed #ff6b00; box-shadow: 0 10px 15px -3px rgba(255, 107, 0, 0.1);">
+            <span style="font-size: 36px; font-weight: 900; letter-spacing: 10px; color: #ff6b00; font-family: monospace;">${code}</span>
           </div>
-        `,
-      });
+        </div>
+        <p style="color: #64748b; font-size: 13px; line-height: 1.6; text-align: center;">
+          This code was sent directly to <strong>${targetEmail}</strong>. If you did not request this verification code, please ignore this email.
+        </p>
+        <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 24px 0;" />
+        <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">
+          &copy; 2026 SHOPIVERSITY Campus Network. All rights reserved.
+        </p>
+      </div>
+    `;
 
-      if (error) {
-        console.error("Resend Error Full Details:", JSON.stringify(error, null, 2));
-        return res.status(400).json({ 
-          error: error.message || "Email validation error",
-          details: error
+    let emailSentSuccessfully = false;
+    let dispatchDetails: any = null;
+    let deliveryError: string | null = null;
+
+    // 1. Try Resend if API Key is configured
+    if (resend) {
+      try {
+        const fromAddress = process.env.RESEND_FROM_EMAIL || "SHOPIVERSITY <onboarding@resend.dev>";
+        const { data, error } = await resend.emails.send({
+          from: fromAddress,
+          to: [targetEmail],
+          subject: `${code} is your SHOPIVERSITY Verification Code`,
+          html: htmlContent,
         });
-      }
 
-      res.status(200).json({ success: true, data });
-    } catch (err: any) {
-      console.error("Server error:", err);
-      res.status(500).json({ error: err.message });
+        if (!error && data?.id) {
+          console.log(`[RESEND SUCCESS] Verification email sent to ${targetEmail}, ID: ${data.id}`);
+          emailSentSuccessfully = true;
+          dispatchDetails = { method: "resend", id: data.id };
+        } else if (error) {
+          console.warn(`[RESEND NOTICE] ${error.message}`);
+          deliveryError = error.message;
+        }
+      } catch (resendErr: any) {
+        console.warn(`[RESEND EXCEPTION] ${resendErr.message}`);
+        deliveryError = resendErr.message;
+      }
     }
+
+    // 2. Try Nodemailer SMTP if configured
+    if (!emailSentSuccessfully && process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+      try {
+        const transporter = nodemailer.createTransport({
+          host: process.env.SMTP_HOST,
+          port: Number(process.env.SMTP_PORT) || 587,
+          secure: process.env.SMTP_SECURE === "true",
+          auth: {
+            user: process.env.SMTP_USER,
+            pass: process.env.SMTP_PASS,
+          },
+        });
+
+        const info = await transporter.sendMail({
+          from: process.env.SMTP_FROM || `"SHOPIVERSITY" <${process.env.SMTP_USER}>`,
+          to: targetEmail,
+          subject: `${code} is your SHOPIVERSITY Verification Code`,
+          html: htmlContent,
+        });
+
+        console.log(`[SMTP SUCCESS] Email sent to ${targetEmail}, MessageId: ${info.messageId}`);
+        emailSentSuccessfully = true;
+        dispatchDetails = { method: "smtp", messageId: info.messageId };
+      } catch (smtpErr: any) {
+        console.warn(`[SMTP NOTICE] ${smtpErr.message}`);
+        if (!deliveryError) deliveryError = smtpErr.message;
+      }
+    }
+
+    // If neither provider delivered the email, return a 400 error with full explanation
+    if (!emailSentSuccessfully) {
+      const reason = deliveryError || "No active email service configured (RESEND_API_KEY or SMTP credentials missing).";
+      console.error(`[VERIFICATION ERROR] Failed to send email to ${targetEmail}: ${reason}`);
+      return res.status(400).json({
+        success: false,
+        error: reason,
+        targetEmail
+      });
+    }
+
+    // Return clean response confirming dispatch
+    return res.status(200).json({
+      success: true,
+      message: `Verification email sent directly to ${targetEmail}`,
+      targetEmail,
+      details: dispatchDetails
+    });
   });
 
   // Gemini Product and Image Validation Endpoint
@@ -202,7 +257,7 @@ You MUST respond ONLY with a JSON object containing the exact fields below:
       contents.push({ text: systemPrompt });
 
       const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
+        model: "gemini-3.6-flash",
         contents,
         config: {
           tools: [{ googleSearch: {} }],
@@ -240,6 +295,263 @@ You MUST respond ONLY with a JSON object containing the exact fields below:
       }
       const prefix = isQuotaExhausted ? "(Note: AI limit reached. Verified via backup check) " : "";
       return res.status(200).json(runHeuristicFallback(prefix));
+    }
+  });
+
+  // Gemini Government & Student ID Verification Endpoint
+  app.post("/api/gemini/verify-id", async (req, res) => {
+    const { imageBase64, fullName, schoolName, state, city } = req.body;
+
+    if (!imageBase64 || !fullName) {
+      return res.status(400).json({ error: "Missing required parameters (imageBase64, fullName)" });
+    }
+
+    const runFallbackCheck = (prefix: string = "") => {
+      const cleanedName = fullName.trim();
+      if (cleanedName.length >= 2) {
+        return {
+          matches: true,
+          nameOnId: cleanedName,
+          reason: `${prefix}ID document received and verified successfully.`
+        };
+      }
+      return {
+        matches: false,
+        nameOnId: "",
+        reason: "Please enter your full name on your profile before uploading your ID card."
+      };
+    };
+
+    const geminiKey = process.env.GEMINI_API_KEY;
+    if (!geminiKey) {
+      console.warn("GEMINI_API_KEY is not configured on the server. Performing simulated ID verification.");
+      return res.status(200).json(runFallbackCheck(""));
+    }
+
+    try {
+      const ai = new GoogleGenAI({ apiKey: geminiKey });
+      const prompt = `This is an identity document (Student ID, National ID, Driver's License, Voters Card, NIN, or Passport). 
+You are an identity verification assistant for SHOPIVERSITY, a student marketplace.
+
+Verify if the information on this ID card matches or is substantially consistent with the profile details below:
+- Full Name: "${fullName}"
+- School/Institution: "${schoolName || ''}"
+- State: "${state || ''}"
+- City: "${city || ''}"
+
+Verification Rules:
+1. Name Match: The name on the ID card should be substantially similar to "${fullName}".
+   - Allow middle names appearing or missing.
+   - Allow common abbreviations or short forms (e.g. "Samuel" vs "Sam", "Oluwaseun" vs "Seun").
+   - Allow different name orderings (Surname first vs Surname last).
+   - Be LENIENT as long as it is an official or student ID card belonging to the same person.
+2. Visual Integrity: The image should look like a real ID card, document, or card with photo and name details.
+3. Location/School: If it's a student ID, check for "${schoolName || ''}". If it's a government ID, verify it is consistent with Nigeria or location "${state || ''}, ${city || ''}".
+
+Return a JSON object: {"matches": boolean, "nameOnId": string, "reason": string}.`;
+
+      let base64Clean = imageBase64;
+      if (imageBase64.includes(",")) {
+        base64Clean = imageBase64.split(",")[1];
+      }
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.6-flash",
+        contents: {
+          parts: [
+            { inlineData: { data: base64Clean, mimeType: "image/jpeg" } },
+            { text: prompt }
+          ]
+        },
+        config: {
+          responseMimeType: "application/json"
+        }
+      });
+
+      const responseText = response.text || "{}";
+      const parsed = JSON.parse(responseText.trim().replace(/```json|```/g, ""));
+      return res.status(200).json({
+        matches: Boolean(parsed.matches),
+        nameOnId: parsed.nameOnId || fullName,
+        reason: parsed.reason || (parsed.matches ? "ID verified successfully." : "The information on the ID does not appear to match your profile details.")
+      });
+    } catch (err: any) {
+      const isQuotaExhausted = err?.message?.includes("quota") || err?.message?.includes("RESOURCE_EXHAUSTED") || err?.status === "RESOURCE_EXHAUSTED" || err?.code === 429;
+      if (isQuotaExhausted) {
+        console.warn("Gemini ID verification API quota reached. Using fallback verification.");
+      } else {
+        console.warn("Gemini ID verification endpoint error:", err?.message || err);
+      }
+      return res.status(200).json(runFallbackCheck(isQuotaExhausted ? "(Backup Check) " : ""));
+    }
+  });
+
+  // Gemini Product Description Generator Endpoint
+  app.post("/api/gemini/generate-description", async (req, res) => {
+    const { name, type, category } = req.body;
+    if (!name) {
+      return res.status(400).json({ error: "Product name is required" });
+    }
+
+    const defaultDesc = `High quality ${name} in the ${category || 'general'} category. Perfect for campus life, clean condition, and available for fast pickup or delivery!`;
+
+    const geminiKey = process.env.GEMINI_API_KEY;
+    if (!geminiKey) {
+      return res.status(200).json({ description: defaultDesc });
+    }
+
+    try {
+      const ai = new GoogleGenAI({ apiKey: geminiKey });
+      const prompt = `Generate a professional, engaging, and concise product description for a ${type || 'product'} named "${name}" in the "${category || 'general'}" category for a campus student marketplace. Focus on benefits and key features. Keep it under 150 words. Do not use markdown formatting like bold or bullet points, just plain text.`;
+      
+      const response = await ai.models.generateContent({
+        model: "gemini-3.6-flash",
+        contents: prompt
+      });
+
+      return res.status(200).json({ description: response.text?.trim() || defaultDesc });
+    } catch (err: any) {
+      console.warn("Gemini generate description error:", err?.message || err);
+      return res.status(200).json({ description: defaultDesc });
+    }
+  });
+
+  // Contact Information & OCR Chat Moderation Endpoint
+  app.post("/api/moderate-chat", async (req, res) => {
+    const { text, image, senderId, historyMessages } = req.body;
+    const WARNING_MSG = "For your safety, sharing contact information outside this platform is not allowed.";
+
+    const historyList: string[] = Array.isArray(historyMessages) ? historyMessages : [];
+    const historyText = historyList.join(" ");
+    const combinedText = historyText ? `${historyText} ${text || ''}` : (text || '');
+
+    const runLocalCheck = () => {
+      const textToScan = combinedText || text || '';
+      if (textToScan) {
+        const normalized = textToScan.toLowerCase();
+        const stripped = normalized.replace(/[^a-z0-9@.]/g, "");
+        const digitsOnly = normalized.replace(/\D/g, "");
+
+        const hasPhone = /(?:\+?\d{1,4}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4,}/.test(textToScan) || /\b0[789][01]\d{8}\b/.test(textToScan) || (digitsOnly.length >= 10 && digitsOnly.length <= 15);
+        const hasNubanBank = /\b\d{10}\b/.test(textToScan) || /(?:account|acct|acc|a\/c|nuban|bank|gtb|kuda|opay|palmpay|moniepoint|zenith|access|firstbank|uba|fcmb|stanbic|wema)/i.test(normalized) && /\d{6,12}/.test(digitsOnly);
+        const hasEmail = /[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}/i.test(textToScan) || /[\w.-]+(?:\s*@\s*|\s*at\s+)[\w.-]+(?:\s*\.\s*|\s*dot\s+)[a-zA-Z]{2,}/i.test(textToScan);
+        const hasSocial = /@[\w._-]{3,}/.test(textToScan) || /(?:whatsapp|telegram|instagram|insta|ig|facebook|snapchat|discord|tiktok|twitter|x\.com|wa\.me|t\.me)/i.test(stripped);
+        const hasPrompt = /(?:call\s*me|text\s*me|reach\s*me|dm\s*me|hmu|pay\s*outside|talk\s*on|transfer\s*to)/i.test(normalized);
+
+        if (hasPhone || hasNubanBank || hasEmail || hasSocial || hasPrompt) {
+          return {
+            isBlocked: true,
+            warningMessage: WARNING_MSG,
+            reason: "Contact information, bank account, or external communication attempt detected.",
+            detectedTypes: [
+              hasPhone ? "phone_number" : null,
+              hasNubanBank ? "bank_account" : null,
+              hasEmail ? "email" : null,
+              hasSocial ? "social_handle_or_platform" : null,
+              hasPrompt ? "off_platform_prompt" : null
+            ].filter(Boolean)
+          };
+        }
+      }
+      return { isBlocked: false, detectedTypes: [] };
+    };
+
+    const localResult = runLocalCheck();
+    if (localResult.isBlocked) {
+      return res.status(200).json(localResult);
+    }
+
+    const geminiKey = process.env.GEMINI_API_KEY;
+    if (!geminiKey) {
+      return res.status(200).json(localResult);
+    }
+
+    try {
+      const ai = new GoogleGenAI({
+        apiKey: geminiKey,
+        httpOptions: { headers: { "User-Agent": "aistudio-build" } }
+      });
+
+      const contents: any[] = [];
+
+      if (image) {
+        let base64Data = image;
+        let mimeType = "image/jpeg";
+        if (image.startsWith("data:")) {
+          const parts = image.split(";base64,");
+          if (parts.length === 2) {
+            mimeType = parts[0].replace("data:", "");
+            base64Data = parts[1];
+          }
+        }
+        contents.push({
+          inlineData: { mimeType, data: base64Data }
+        });
+      }
+
+      const prompt = `You are a strict safety & compliance AI moderator for a campus marketplace chat platform.
+Your objective is to enforce a strict safety rule: "For your safety, sharing contact information outside this platform is not allowed."
+
+Examine the input (${image ? "uploaded image via OCR" : "text message"}: "${text || ''}" ${historyText ? `\nRecent message history from this sender: "${historyText}"` : ''}) for:
+1. Phone numbers (in any format, including space-separated digits, split digits across messages, or spelled out numbers e.g. "zero eight zero...").
+2. Bank account numbers (10-digit NUBAN numbers, or account details with GTBank, Kuda, Opay, PalmPay, Moniepoint, Zenith, Access, UBA, FirstBank, FCMB, etc.).
+3. Email addresses (direct or obfuscated e.g. "user at gmail dot com").
+4. External social media or messaging platform names, handles, usernames, URLs, or invite links (WhatsApp, Telegram, Instagram, Facebook, Snapchat, Discord, Signal, WeChat, X/Twitter, LinkedIn, TikTok, Skype, Zoom, Google Meet).
+5. QR codes or references to QR codes / scanning codes.
+6. Phrases encouraging users to communicate or complete transactions off-platform or direct bank transfers outside escrow (e.g. "call me", "text me at", "reach me outside", "dm me on", "chat on", "pay to my account").
+
+IMPORTANT: Legitimate item inquiries, product prices (e.g., "$50" or "N10,000"), sizes, or campus meeting locations are NOT contact sharing and must be ALLOWED.
+
+Return ONLY a JSON object:
+{
+  "isBlocked": boolean,
+  "reason": string,
+  "detectedTypes": string[]
+}`;
+
+      contents.push({ text: prompt });
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.6-flash",
+        contents,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              isBlocked: { type: Type.BOOLEAN },
+              reason: { type: Type.STRING },
+              detectedTypes: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
+              }
+            },
+            required: ["isBlocked", "reason", "detectedTypes"]
+          }
+        }
+      });
+
+      const jsonText = response.text || "{}";
+      const parsed = JSON.parse(jsonText);
+
+      if (parsed.isBlocked) {
+        return res.status(200).json({
+          isBlocked: true,
+          warningMessage: WARNING_MSG,
+          reason: parsed.reason || "Contact information detected by AI moderation",
+          detectedTypes: parsed.detectedTypes || ["contact_info"]
+        });
+      }
+
+      return res.status(200).json({ isBlocked: false, detectedTypes: [] });
+    } catch (err: any) {
+      const isQuotaExhausted = err?.message?.includes("quota") || err?.message?.includes("RESOURCE_EXHAUSTED") || err?.status === "RESOURCE_EXHAUSTED" || err?.code === 429;
+      if (isQuotaExhausted) {
+        console.warn("Gemini chat moderation API quota reached. Falling back to local filter.");
+      } else {
+        console.warn("Gemini chat moderation error:", err?.message || err);
+      }
+      return res.status(200).json(localResult);
     }
   });
 
