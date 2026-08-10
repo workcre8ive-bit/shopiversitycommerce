@@ -10,6 +10,8 @@ import {
   onAuthStateChanged,
   GoogleAuthProvider,
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   signOut,
   browserPopupRedirectResolver
 } from "firebase/auth";
@@ -39,7 +41,9 @@ import {
   Loader2,
   FileText,
   Users,
-  Home
+  Home,
+  Info,
+  RefreshCw
 } from "lucide-react";
 import Logo from "./Logo";
 import { cn, generateReferralCode } from "../lib/utils";
@@ -182,6 +186,22 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
       if (storedRef) setReferralCodeInput(storedRef);
       else setReferralCodeInput("");
     }
+
+    // Process redirect result if user returned from Google signInWithRedirect (e.g. Safari / mobile)
+    const checkRedirectResult = async () => {
+      try {
+        const result = await getRedirectResult(auth);
+        if (result && result.user) {
+          setLoading(true);
+          await processGoogleUser(result.user);
+        }
+      } catch (err: any) {
+        console.error("Google Redirect Result Error:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    checkRedirectResult();
   }, []);
 
   const generateUsername = () => {
@@ -659,126 +679,134 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
     }
   };
 
+  const processGoogleUser = async (user: any) => {
+    // Check if user is registered as a Logistics partner
+    const logisticsCompanyDoc = await getDoc(doc(db, "logistics_companies", user.uid));
+    const userDoc = await getDoc(doc(db, "users", user.uid));
+
+    if (logisticsCompanyDoc.exists() || (userDoc.exists() && userDoc.data()?.role === "logistics")) {
+      await signOut(auth);
+      setError("This account is registered as a Logistics Partner. Sellers and Buyers must use a separate account.");
+      setLoading(false);
+      return;
+    }
+
+    if (!userDoc.exists()) {
+      const referralCode = generateReferralCode(user.displayName || "USER");
+      const referredBy = referralCodeInput || localStorage.getItem('referredBy');
+      
+      const userProfile: UserProfile = {
+        uid: user.uid,
+        displayName: user.displayName || "Anonymous",
+        username: (user.email?.split("@")[0] || "user") + Math.floor(Math.random() * 1000),
+        email: user.email || "",
+        phoneNumber: user.phoneNumber || "",
+        role: role === "seller" ? "both" : "buyer",
+        activeRole: role,
+        referralCode,
+        referredBy: referredBy || "",
+        referralEarnings: 0,
+        referralCount: 0,
+        isVerified: false, // All users start unverified now
+        isSuspended: false,
+        reportCount: 0,
+        createdAt: new Date().toISOString(),
+        verificationIdUrl: "",
+        profileCompleted: false,
+        schoolType: "",
+        schoolName: "",
+        state: "",
+        city: "",
+        deliveryAddress: "",
+        deliveryLocations: "",
+        gender: "other"
+      };
+      await setDoc(doc(db, "users", user.uid), userProfile);
+      
+      // If referred by someone, increment their referral count
+      if (referredBy) {
+        const referrersQ = query(collection(db, "users"), where("referralCode", "==", referredBy));
+        const referrersSnap = await getDocs(referrersQ);
+        if (!referrersSnap.empty) {
+          const referrerDoc = referrersSnap.docs[0];
+          const currentCount = referrerDoc.data().referralCount || 0;
+          await updateDoc(referrerDoc.ref, { referralCount: currentCount + 1 });
+        }
+      }
+      
+      localStorage.removeItem('referredBy');
+      
+      // If buyer, skip ID verification and set as verified
+      if (role === "buyer") {
+        await updateDoc(doc(db, "users", user.uid), {
+          isVerified: true
+        });
+        setIsVerificationChoice(false);
+        setIsVerifyingEmail(false);
+        setIsVerifyingPhone(false);
+      } else {
+        // Sellers need verification
+        setIsVerificationChoice(false);
+        setIsVerifyingEmail(false);
+        setIsVerifyingPhone(false);
+        setFullName(user.displayName || ""); // Pre-fill name from Google
+        setIsGoogleSellerVerifying(true);
+      }
+    } else {
+      const profile = userDoc.data() as UserProfile;
+      if (profile.isSuspended) {
+        await signOut(auth);
+        setError("Your account has been suspended for violating SHOPIVERSITY terms.");
+        setLoading(false);
+        return;
+      }
+      if (profile.strikeCount >= 3) {
+        await signOut(auth);
+        setError("Your account has been permanently suspended due to receiving 3 strikes.");
+        setLoading(false);
+        return;
+      }
+      // Only force ID verification on sign-in for Sellers who aren't verified
+      if (!profile.isVerified && profile.role === "seller") {
+        setFullName(profile.displayName);
+        setIsGoogleSellerVerifying(true);
+        setLoading(false);
+        return;
+      }
+    }
+  };
+
   const handleGoogleSignIn = async () => {
     setError("");
     setLoading(true);
     try {
-      const result = await signInWithPopup(auth, googleProvider, browserPopupRedirectResolver);
-      const user = result.user;
-
-      // Check if user is registered as a Logistics partner
-      const logisticsCompanyDoc = await getDoc(doc(db, "logistics_companies", user.uid));
-      const userDoc = await getDoc(doc(db, "users", user.uid));
-
-      if (logisticsCompanyDoc.exists() || (userDoc.exists() && userDoc.data()?.role === "logistics")) {
-        await signOut(auth);
-        setError("This account is registered as a Logistics Partner. Sellers and Buyers must use a separate account.");
-        setLoading(false);
+      let user = null;
+      try {
+        const result = await signInWithPopup(auth, googleProvider, browserPopupRedirectResolver);
+        user = result.user;
+      } catch (popupErr: any) {
+        console.warn("Google popup failed or blocked, attempting redirect fallback:", popupErr);
+        // Fallback to signInWithRedirect for Safari, mobile browsers, or blocked popups
+        await signInWithRedirect(auth, googleProvider);
         return;
       }
 
-      if (!userDoc.exists()) {
-        const referralCode = generateReferralCode(user.displayName || "USER");
-        const referredBy = referralCodeInput || localStorage.getItem('referredBy');
-        
-        const userProfile: UserProfile = {
-          uid: user.uid,
-          displayName: user.displayName || "Anonymous",
-          username: (user.email?.split("@")[0] || "user") + Math.floor(Math.random() * 1000),
-          email: user.email || "",
-          phoneNumber: user.phoneNumber || "",
-          role: role === "seller" ? "both" : "buyer",
-          activeRole: role,
-          referralCode,
-          referredBy: referredBy || "",
-          referralEarnings: 0,
-          referralCount: 0,
-          isVerified: false, // All users start unverified now
-          isSuspended: false,
-          reportCount: 0,
-          createdAt: new Date().toISOString(),
-          verificationIdUrl: "",
-          profileCompleted: false,
-          schoolType: "",
-          schoolName: "",
-          state: "",
-          city: "",
-          deliveryAddress: "",
-          deliveryLocations: "",
-          gender: "other"
-        };
-        await setDoc(doc(db, "users", user.uid), userProfile);
-        
-        // If referred by someone, increment their referral count
-        if (referredBy) {
-          const referrersQ = query(collection(db, "users"), where("referralCode", "==", referredBy));
-          const referrersSnap = await getDocs(referrersQ);
-          if (!referrersSnap.empty) {
-            const referrerDoc = referrersSnap.docs[0];
-            const currentCount = referrerDoc.data().referralCount || 0;
-            await updateDoc(referrerDoc.ref, { referralCount: currentCount + 1 });
-          }
-        }
-        
-        localStorage.removeItem('referredBy');
-        
-        // If buyer, skip ID verification and set as verified
-        if (role === "buyer") {
-          await updateDoc(doc(db, "users", user.uid), {
-            isVerified: true
-          });
-          setIsVerificationChoice(false);
-          setIsVerifyingEmail(false);
-          setIsVerifyingPhone(false);
-        } else {
-          // Sellers need verification
-          setIsVerificationChoice(false);
-          setIsVerifyingEmail(false);
-          setIsVerifyingPhone(false);
-          setFullName(user.displayName || ""); // Pre-fill name from Google
-          setIsGoogleSellerVerifying(true);
-        }
-      } else {
-        const profile = userDoc.data() as UserProfile;
-        if (profile.isSuspended) {
-          await signOut(auth);
-          setError("Your account has been suspended for violating SHOPIVERSITY terms.");
-          setLoading(false);
-          return;
-        }
-        if (profile.strikeCount >= 3) {
-          await signOut(auth);
-          setError("Your account has been permanently suspended due to receiving 3 strikes.");
-          setLoading(false);
-          return;
-        }
-        // Only force ID verification on sign-in for Sellers who aren't verified
-        if (!profile.isVerified && profile.role === "seller") {
-          setFullName(profile.displayName);
-          setIsGoogleSellerVerifying(true);
-          setLoading(false);
-          return;
-        }
+      if (user) {
+        await processGoogleUser(user);
       }
     } catch (err: any) {
       const errorCode = err.code || "";
       const errorMessage = err.message || "";
       
       if (errorCode === "auth/popup-closed-by-user" || errorCode === "auth/cancelled-popup-request") {
-        // User closed the popup or navigation was cancelled, don't show an error
         setError("");
       } else {
-        console.error("Google Sign-In Error Full Object:", err);
-        if (errorCode === "auth/popup-blocked") {
-          setError("Sign-in popup was blocked by your browser. Please allow popups or click 'Open in New Tab' at the top right.");
-        } else if (errorCode === "auth/internal-error") {
-          setError("Google Sign-In popup internal error (often caused by iframe security constraints). Please click 'Open in New Tab' at the top right of the screen to sign in, or try again.");
-        } else if (errorCode.includes("network-request-failed") || errorMessage.toLowerCase().includes("network error") || errorMessage.toLowerCase().includes("failed to fetch")) {
-          setError("Network Error: Connection to Google Auth servers failed. 1. Disable ad-blockers/VPNs. 2. If using Safari, try Chrome. 3. CRITICAL: Tap 'Open in New Tab' at the top right of the screen; login often fails inside the app preview window due to browser security constraints.");
-        } else if (errorCode === "auth/blocked-at-iframe" || errorMessage.includes("blocked-at-iframe")) {
-          setError("Sign-in blocked inside this view. Please click 'Open in New Tab' at the top right to sign in safely.");
-        } else {
-          setError(errorMessage || "An unexpected error occurred during Google Sign-In.");
+        console.error("Google Sign-In Error:", err);
+        try {
+          // Ultimate fallback to redirect if popup fails for any other reason
+          await signInWithRedirect(auth, googleProvider);
+        } catch (redirectErr: any) {
+          setError("Google Sign-In failed. Please ensure popups/redirects are allowed or try signing in with email.");
         }
       }
     } finally {

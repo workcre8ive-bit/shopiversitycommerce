@@ -1,6 +1,6 @@
 import React from "react";
 import { auth, db } from "../firebase";
-import { collection, query, where, orderBy, onSnapshot, limit, updateDoc, doc } from "firebase/firestore";
+import { collection, query, where, orderBy, onSnapshot, limit, updateDoc, doc, deleteDoc } from "firebase/firestore";
 import { Order, ProductHistory, Notification, UserProfile } from "../types";
 import { 
   ShoppingBag, 
@@ -106,7 +106,12 @@ export default function BuyerDashboard({ user, setActiveTab, onBack }: BuyerDash
     };
   }, [user.uid]);
 
-  const handleMarkNotifRead = async (id: string) => {
+  const handleMarkNotifRead = async (id: string, e?: React.MouseEvent | React.TouchEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
     try {
       await updateDoc(doc(db, "notifications", id), { isRead: true });
     } catch (error) {
@@ -114,9 +119,28 @@ export default function BuyerDashboard({ user, setActiveTab, onBack }: BuyerDash
     }
   };
 
-  const handleMarkAllNotifsRead = async () => {
+  const handleDeleteNotif = async (id: string, e?: React.MouseEvent | React.TouchEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    setNotifications(prev => prev.filter(n => n.id !== id));
+    try {
+      await deleteDoc(doc(db, "notifications", id));
+    } catch (error) {
+      console.error("Error deleting notification:", error);
+    }
+  };
+
+  const handleMarkAllNotifsRead = async (e?: React.MouseEvent | React.TouchEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
     try {
       const unread = notifications.filter(n => !n.isRead);
+      if (unread.length === 0) return;
+      setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
       await Promise.all(unread.map(n => updateDoc(doc(db, "notifications", n.id), { isRead: true })));
     } catch (error) {
       console.error("Error marking all notifications as read:", error);
@@ -335,8 +359,9 @@ export default function BuyerDashboard({ user, setActiveTab, onBack }: BuyerDash
             <div className="flex gap-2">
               {notifications.filter(n => !n.isRead).length > 0 && (
                 <button 
-                  onClick={handleMarkAllNotifsRead}
-                  className="text-[10px] font-black text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300 uppercase tracking-widest"
+                  type="button"
+                  onClick={(e) => handleMarkAllNotifsRead(e)}
+                  className="text-[10px] font-black text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300 uppercase tracking-widest px-2 py-1 bg-indigo-50 dark:bg-indigo-950/40 rounded-lg touch-manipulation cursor-pointer"
                 >
                   Clear All
                 </button>

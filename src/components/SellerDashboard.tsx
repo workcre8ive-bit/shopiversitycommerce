@@ -320,7 +320,12 @@ export default function SellerDashboard({
     };
   }, [auth.currentUser?.uid]);
 
-  const handleMarkNotifRead = async (id: string) => {
+  const handleMarkNotifRead = async (id: string, e?: React.MouseEvent | React.TouchEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
     try {
       await updateDoc(doc(db, "notifications", id), { isRead: true });
     } catch (error) {
@@ -328,9 +333,28 @@ export default function SellerDashboard({
     }
   };
 
-  const handleMarkAllNotifsRead = async () => {
+  const handleDeleteNotif = async (id: string, e?: React.MouseEvent | React.TouchEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    setNotifications(prev => prev.filter(n => n.id !== id));
+    try {
+      await deleteDoc(doc(db, "notifications", id));
+    } catch (error) {
+      console.error("Error deleting notification:", error);
+    }
+  };
+
+  const handleMarkAllNotifsRead = async (e?: React.MouseEvent | React.TouchEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
     try {
       const unread = notifications.filter(n => !n.isRead);
+      if (unread.length === 0) return;
+      setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
       await Promise.all(unread.map(n => updateDoc(doc(db, "notifications", n.id), { isRead: true })));
     } catch (error) {
       console.error("Error marking all notifications read:", error);
@@ -1056,8 +1080,9 @@ export default function SellerDashboard({
                     </div>
                     {notifications.filter(n => !n.isRead).length > 0 ? (
                       <button 
-                        onClick={handleMarkAllNotifsRead}
-                        className="text-[10px] font-black text-indigo-600 dark:text-indigo-400 hover:underline uppercase tracking-widest cursor-pointer bg-transparent border-none p-0"
+                        type="button"
+                        onClick={(e) => handleMarkAllNotifsRead(e)}
+                        className="text-[10px] font-black text-indigo-600 dark:text-indigo-400 hover:underline uppercase tracking-widest cursor-pointer bg-transparent border-none p-0 touch-manipulation"
                       >
                         Clear ({notifications.filter(n => !n.isRead).length})
                       </button>
@@ -1107,14 +1132,24 @@ export default function SellerDashboard({
                             <p className="text-[11px] leading-snug font-semibold text-slate-600 dark:text-slate-200 select-none break-words">
                               {notif.message}
                             </p>
-                            {!notif.isRead && (
+                            <div className="flex flex-wrap items-center gap-2 mt-2 pt-1 border-t border-slate-100 dark:border-slate-800/60 z-20">
+                              {!notif.isRead && (
+                                <button 
+                                  type="button"
+                                  onClick={(e) => handleMarkNotifRead(notif.id, e)}
+                                  className="px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-100 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all touch-manipulation cursor-pointer active:scale-95"
+                                >
+                                  Mark Read
+                                </button>
+                              )}
                               <button 
-                                onClick={() => handleMarkNotifRead(notif.id)}
-                                className="text-[9px] font-black text-indigo-600 dark:text-indigo-300 hover:underline text-left self-start mt-0.5 cursor-pointer bg-transparent border-none p-0"
+                                type="button"
+                                onClick={(e) => handleDeleteNotif(notif.id, e)}
+                                className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 text-slate-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all touch-manipulation cursor-pointer active:scale-95"
                               >
-                                Mark Read
+                                Delete
                               </button>
-                            )}
+                            </div>
                           </div>
                         );
                       })

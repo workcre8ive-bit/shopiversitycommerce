@@ -9,6 +9,8 @@ import {
   sendEmailVerification,
   signOut,
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   browserPopupRedirectResolver
 } from "firebase/auth";
 import { 
@@ -232,6 +234,21 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
     if (auth.currentUser && !companyProfile && view !== "splash") {
       setView("splash");
     }
+
+    const checkRedirectResult = async () => {
+      try {
+        const result = await getRedirectResult(auth);
+        if (result && result.user) {
+          setLoading(true);
+          await processLogisticsGoogleUser(result.user);
+        }
+      } catch (err: any) {
+        console.error("Logistics Google Redirect Error:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    checkRedirectResult();
   }, [companyProfile, view]);
 
   // Listen to logistics deliveries
@@ -284,100 +301,115 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
     );
   }, [allDeliveries, companyProfile]);
 
+  const processLogisticsGoogleUser = async (user: any) => {
+    // Check if user is already registered as a Buyer/Seller account
+    const userDocSnap = await getDoc(doc(db, "users", user.uid));
+    if (userDocSnap.exists() && userDocSnap.data()?.role !== "logistics") {
+      await signOut(auth);
+      setError("This account is registered as a Buyer or Seller. Logistics partners must use a separate email address.");
+      setLoading(false);
+      return;
+    }
+
+    // Check if logistics company profile exists
+    const companyDoc = await getDoc(doc(db, "logistics_companies", user.uid));
+    
+    if (companyDoc.exists()) {
+      const profile = companyDoc.data() as LogisticsCompany;
+      setCompanyProfile(profile);
+      setView("dashboard");
+    } else {
+      // Create new company profile using Google account details or filled form inputs
+      const profile: LogisticsCompany = {
+        id: user.uid,
+        companyName: companyName.trim() || user.displayName || "Logistics Partner",
+        rcNumber: rcNumber.trim() || `RC-${user.uid.slice(0, 8).toUpperCase()}`,
+        email: user.email || "",
+        phoneNumber: phoneNumber.trim() || user.phoneNumber || "",
+        officeAddress: officeAddress.trim() || "Main Campus Office",
+        vehicleTypes: selectedVehicles.length > 0 ? selectedVehicles : ["Bike / Motorcycle"],
+        coveredCampuses: selectedCampuses.length > 0 ? selectedCampuses : ["University Main Campus"],
+        baseDeliveryPrice: Number(basePrice) > 0 ? Number(basePrice) : 500,
+        isVerified: true,
+        isActive: true,
+        createdAt: new Date().toISOString()
+      };
+
+      const referralCode = generateReferralCode(profile.companyName || user.displayName || "LOGISTICS");
+      const referredBy = referralCodeInput.trim() || localStorage.getItem('referredBy');
+
+      await setDoc(doc(db, "logistics_companies", user.uid), profile);
+
+      await setDoc(doc(db, "users", user.uid), {
+        uid: user.uid,
+        displayName: profile.companyName,
+        username: profile.companyName.toLowerCase().replace(/[^a-z0-9]/g, "") + "_logistics",
+        email: user.email,
+        phoneNumber: profile.phoneNumber,
+        role: "logistics",
+        referralCode,
+        referredBy: referredBy || "",
+        referralEarnings: 0,
+        referralCount: 0,
+        isVerified: true,
+        isSuspended: false,
+        reportCount: 0,
+        createdAt: new Date().toISOString(),
+        businessName: profile.companyName,
+        location: profile.officeAddress,
+        state: "Logistics Partner"
+      }, { merge: true });
+
+      // If referred by someone, increment their referral count
+      if (referredBy) {
+        try {
+          const referrersQ = query(collection(db, "users"), where("referralCode", "==", referredBy));
+          const referrersSnap = await getDocs(referrersQ);
+          if (!referrersSnap.empty) {
+            const referrerDoc = referrersSnap.docs[0];
+            const currentCount = referrerDoc.data().referralCount || 0;
+            await updateDoc(referrerDoc.ref, { referralCount: currentCount + 1 });
+          }
+        } catch (refErr) {
+          console.warn("Error processing referral in LogisticsHub:", refErr);
+        }
+      }
+      localStorage.removeItem('referredBy');
+
+      setCompanyProfile(profile);
+      setView("dashboard");
+    }
+  };
+
   // Handle Google Auth (Login or Signup)
   const handleGoogleAuth = async () => {
     setError("");
     setLoading(true);
     try {
-      const result = await signInWithPopup(auth, googleProvider, browserPopupRedirectResolver);
-      const user = result.user;
-
-      // Check if user is already registered as a Buyer/Seller account
-      const userDocSnap = await getDoc(doc(db, "users", user.uid));
-      if (userDocSnap.exists() && userDocSnap.data()?.role !== "logistics") {
-        await signOut(auth);
-        setError("This account is registered as a Buyer or Seller. Logistics partners must use a separate email address.");
-        setLoading(false);
+      let user = null;
+      try {
+        const result = await signInWithPopup(auth, googleProvider, browserPopupRedirectResolver);
+        user = result.user;
+      } catch (popupErr: any) {
+        console.warn("Logistics Google popup failed/blocked, falling back to redirect:", popupErr);
+        await signInWithRedirect(auth, googleProvider);
         return;
       }
 
-      // Check if logistics company profile exists
-      const companyDoc = await getDoc(doc(db, "logistics_companies", user.uid));
-      
-      if (companyDoc.exists()) {
-        const profile = companyDoc.data() as LogisticsCompany;
-        setCompanyProfile(profile);
-        setView("dashboard");
-      } else {
-        // Create new company profile using Google account details or filled form inputs
-        const profile: LogisticsCompany = {
-          id: user.uid,
-          companyName: companyName.trim() || user.displayName || "Logistics Partner",
-          rcNumber: rcNumber.trim() || `RC-${user.uid.slice(0, 8).toUpperCase()}`,
-          email: user.email || "",
-          phoneNumber: phoneNumber.trim() || user.phoneNumber || "",
-          officeAddress: officeAddress.trim() || "Main Campus Office",
-          vehicleTypes: selectedVehicles.length > 0 ? selectedVehicles : ["Bike / Motorcycle"],
-          coveredCampuses: selectedCampuses.length > 0 ? selectedCampuses : ["University Main Campus"],
-          baseDeliveryPrice: Number(basePrice) > 0 ? Number(basePrice) : 500,
-          isVerified: true,
-          isActive: true,
-          createdAt: new Date().toISOString()
-        };
-
-        const referralCode = generateReferralCode(profile.companyName || user.displayName || "LOGISTICS");
-        const referredBy = referralCodeInput.trim() || localStorage.getItem('referredBy');
-
-        await setDoc(doc(db, "logistics_companies", user.uid), profile);
-
-        await setDoc(doc(db, "users", user.uid), {
-          uid: user.uid,
-          displayName: profile.companyName,
-          username: profile.companyName.toLowerCase().replace(/[^a-z0-9]/g, "") + "_logistics",
-          email: user.email,
-          phoneNumber: profile.phoneNumber,
-          role: "logistics",
-          referralCode,
-          referredBy: referredBy || "",
-          referralEarnings: 0,
-          referralCount: 0,
-          isVerified: true,
-          isSuspended: false,
-          reportCount: 0,
-          createdAt: new Date().toISOString(),
-          businessName: profile.companyName,
-          location: profile.officeAddress,
-          state: "Logistics Partner"
-        }, { merge: true });
-
-        // If referred by someone, increment their referral count
-        if (referredBy) {
-          try {
-            const referrersQ = query(collection(db, "users"), where("referralCode", "==", referredBy));
-            const referrersSnap = await getDocs(referrersQ);
-            if (!referrersSnap.empty) {
-              const referrerDoc = referrersSnap.docs[0];
-              const currentCount = referrerDoc.data().referralCount || 0;
-              await updateDoc(referrerDoc.ref, { referralCount: currentCount + 1 });
-            }
-          } catch (refErr) {
-            console.warn("Error processing referral in LogisticsHub:", refErr);
-          }
-        }
-        localStorage.removeItem('referredBy');
-
-        setCompanyProfile(profile);
-        setView("dashboard");
+      if (user) {
+        await processLogisticsGoogleUser(user);
       }
     } catch (err: any) {
       const errorCode = err.code || "";
       if (errorCode === "auth/popup-closed-by-user" || errorCode === "auth/cancelled-popup-request") {
         setError("Sign-in cancelled.");
-      } else if (errorCode === "auth/internal-error" || errorCode === "auth/popup-blocked") {
-        setError("Google Sign-In popup could not complete (often due to browser iframe constraints). Please click 'Open in New Tab' at the top right of the screen to sign in.");
       } else {
         console.error("Google Auth error in LogisticsHub:", err);
-        setError(getFirestoreErrorMessage(err) || "Failed to sign in with Google. Make sure popups are allowed.");
+        try {
+          await signInWithRedirect(auth, googleProvider);
+        } catch (redirectErr) {
+          setError(getFirestoreErrorMessage(err) || "Failed to sign in with Google.");
+        }
       }
     } finally {
       setLoading(false);

@@ -42,7 +42,13 @@ export default function NotificationsPage({ onBack }: NotificationsPageProps) {
     return () => unsubscribe();
   }, []);
 
-  const markAsRead = async (id: string) => {
+  const markAsRead = async (id: string, e?: React.MouseEvent | React.TouchEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    // Optimistic UI update for instant feedback on Safari/Mobile
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
     try {
       await updateDoc(doc(db, "notifications", id), { isRead: true });
     } catch (error) {
@@ -50,8 +56,14 @@ export default function NotificationsPage({ onBack }: NotificationsPageProps) {
     }
   };
 
-  const markAllAsRead = async () => {
+  const markAllAsRead = async (e?: React.MouseEvent | React.TouchEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
     const unread = notifications.filter(n => !n.isRead);
+    if (unread.length === 0) return;
+    setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
     const promises = unread.map(n => updateDoc(doc(db, "notifications", n.id), { isRead: true }));
     try {
       await Promise.all(promises);
@@ -60,7 +72,13 @@ export default function NotificationsPage({ onBack }: NotificationsPageProps) {
     }
   };
 
-  const deleteNotification = async (id: string) => {
+  const deleteNotification = async (id: string, e?: React.MouseEvent | React.TouchEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    // Optimistic UI update for instant feedback on Safari/Mobile
+    setNotifications(prev => prev.filter(n => n.id !== id));
     try {
       await deleteDoc(doc(db, "notifications", id));
     } catch (error) {
@@ -223,22 +241,24 @@ export default function NotificationsPage({ onBack }: NotificationsPageProps) {
                   <p className={cn("text-sm leading-relaxed mb-4", notification.isRead ? "text-slate-500 dark:text-slate-500" : "text-slate-600 dark:text-slate-300")}>
                     {notification.message}
                   </p>
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-3 pt-1 z-20">
                     {!notification.isRead && (
                       <button
-                        onClick={() => markAsRead(notification.id)}
-                        className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-indigo-600 hover:text-indigo-700"
+                        type="button"
+                        onClick={(e) => markAsRead(notification.id, e)}
+                        className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-50 dark:bg-indigo-950/50 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/60 rounded-xl text-xs font-black uppercase tracking-wider transition-all touch-manipulation cursor-pointer active:scale-95 shadow-sm shrink-0"
                       >
-                        <MailOpen className="w-3.5 h-3.5" />
-                        Mark as read
+                        <MailOpen className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                        <span>Mark as read</span>
                       </button>
                     )}
                     <button
-                      onClick={() => deleteNotification(notification.id)}
-                      className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-red-600"
+                      type="button"
+                      onClick={(e) => deleteNotification(notification.id, e)}
+                      className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-red-50 dark:hover:bg-red-950/50 hover:text-red-600 text-slate-600 dark:text-slate-300 border border-slate-200/60 dark:border-slate-700/60 rounded-xl text-xs font-black uppercase tracking-wider transition-all touch-manipulation cursor-pointer active:scale-95 shadow-sm shrink-0"
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      Delete
+                      <Trash2 className="w-4 h-4 text-red-500 shrink-0" />
+                      <span>Delete</span>
                     </button>
                   </div>
                 </div>
