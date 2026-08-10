@@ -280,10 +280,18 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
             errors.phone = "Phone number is required";
           } else if (phonePrefix === "+234") {
             const cleanPhone = phone.replace(/\D/g, "");
-            if (cleanPhone.length !== 11) {
-              errors.phone = "Nigerian phone number must be 11 digits (e.g. 08012345678).";
-            } else if (!cleanPhone.startsWith("0")) {
-              errors.phone = "Nigerian 11-digit phone number must start with 0 (e.g. 08012345678).";
+            if (cleanPhone.startsWith("0")) {
+              if (cleanPhone.length !== 11) {
+                errors.phone = "Nigerian phone number starting with 0 must be 11 digits (e.g. 08012345678).";
+              } else if (!/^0[789]\d{9}$/.test(cleanPhone)) {
+                errors.phone = "Please enter a valid Nigerian phone number (e.g. 080..., 070..., 090...).";
+              }
+            } else {
+              if (cleanPhone.length !== 10) {
+                errors.phone = "Nigerian phone number without 0 must be 10 digits (e.g. 8012345678).";
+              } else if (!/^[789]\d{9}$/.test(cleanPhone)) {
+                errors.phone = "Please enter a valid Nigerian phone number (e.g. 80..., 70..., 90...).";
+              }
             }
           }
           if (!password) errors.password = "Password is required";
@@ -532,7 +540,7 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
         displayName: fullName,
         username: username.toLowerCase(),
         email: email.toLowerCase(),
-        phoneNumber: `${phonePrefix}${phone}`,
+        phoneNumber: phonePrefix === "+234" && phone.startsWith("0") ? `+234${phone.replace(/\D/g, "").slice(1)}` : `${phonePrefix}${phone}`,
         gender: gender,
         role: role === "seller" ? "both" : "buyer",
         activeRole: role,
@@ -1693,7 +1701,7 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
                                 "flex-1 h-[34px] px-3 bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 rounded text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-[#9333ea] focus:ring-1 focus:ring-[#9333ea] outline-none text-[13px] shadow-sm transition-all",
                                 fieldErrors.phone && "border-red-500"
                               )}
-                              placeholder={phonePrefix === "+234" ? "08012345678" : "8012345678"}
+                              placeholder={phonePrefix === "+234" ? "08012345678 or 8012345678" : "8012345678"}
                             />
                           </div>
                           {fieldErrors.phone && (

@@ -469,6 +469,23 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
       if (!username.trim()) {
         throw new Error("Username is required.");
       }
+
+      if (businessPhone.trim() && (phonePrefix === "+234" || country.toLowerCase() === "nigeria")) {
+        const cleanBp = businessPhone.trim().replace(/\D/g, "");
+        if (cleanBp.startsWith("0")) {
+          if (cleanBp.length !== 11) {
+            throw new Error("Nigerian business phone number starting with 0 must be 11 digits (e.g. 08012345678).");
+          } else if (!/^0[789]\d{9}$/.test(cleanBp)) {
+            throw new Error("Please enter a valid Nigerian business phone number (e.g. 080..., 070..., 090...).");
+          }
+        } else {
+          if (cleanBp.length !== 10) {
+            throw new Error("Nigerian business phone number without 0 must be 10 digits (e.g. 8012345678).");
+          } else if (!/^[789]\d{9}$/.test(cleanBp)) {
+            throw new Error("Please enter a valid Nigerian business phone number (e.g. 80..., 70..., 90...).");
+          }
+        }
+      }
       
       const isNowComplete = !!schoolName && !!state && !!city && (user.role === "seller" || !!deliveryAddress) && (user.role !== "buyer" ? !!verificationIdUrl : true);
 
@@ -991,7 +1008,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                     value={businessPhone}
                     onChange={(e) => setBusinessPhone(e.target.value)}
                     className="w-full h-14 pl-12 pr-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-purple-500 outline-none transition-all text-slate-900 dark:text-white placeholder:text-slate-400"
-                    placeholder="8012345678"
+                    placeholder="08012345678 or 8012345678"
                   />
                 </div>
               </div>

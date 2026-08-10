@@ -255,7 +255,7 @@ export default function BuyerDashboard({ user, setActiveTab, onBack }: BuyerDash
               ) : (
                 <div className="divide-y divide-slate-50 dark:divide-slate-800/50">
                   {recentOrders.map((order, orderIdx) => (
-                    <div key={`recent-order-${order.id}-${orderIdx}`} className="p-6 flex items-center justify-between hover:bg-slate-50/50 dark:hover:bg-slate-800/10 transition-colors">
+                    <div key={`recent-order-${order.id || orderIdx}-${orderIdx}`} className="p-6 flex items-center justify-between hover:bg-slate-50/50 dark:hover:bg-slate-800/10 transition-colors">
                       <div className="flex items-center gap-4">
                         <div className="w-12 h-12 rounded-2xl bg-indigo-50 dark:bg-indigo-950/30 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
                           <Package className="w-6 h-6" />
@@ -324,7 +324,7 @@ export default function BuyerDashboard({ user, setActiveTab, onBack }: BuyerDash
               ) : (
                 <div className="divide-y divide-slate-50 dark:divide-slate-800/50">
                   {recentHistory.map((item, historyIdx) => (
-                    <div key={`recent-history-${item.id}-${historyIdx}`} className="p-6 flex items-center gap-4 hover:bg-slate-50/50 dark:hover:bg-slate-800/10 transition-colors">
+                    <div key={`recent-history-${item.id || historyIdx}-${historyIdx}`} className="p-6 flex items-center gap-4 hover:bg-slate-50/50 dark:hover:bg-slate-800/10 transition-colors">
                       <div className="w-12 h-12 rounded-2xl overflow-hidden bg-slate-100 dark:bg-slate-800 shrink-0">
                         <img 
                           src={item.productImageUrl} 

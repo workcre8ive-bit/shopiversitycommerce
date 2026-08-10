@@ -1710,7 +1710,7 @@ export default function App() {
                         >
                           {searchResults.map((p, pIdx) => (
                             <motion.div
-                              key={`search-card-${p.id}-${pIdx}`}
+                              key={`search-card-${p.id || pIdx}-${pIdx}`}
                               variants={{
                                 hidden: { opacity: 0, y: 15 },
                                 visible: { 

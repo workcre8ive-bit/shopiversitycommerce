@@ -684,7 +684,7 @@ export default function AdminDashboard({ currentUser, onBack }: { currentUser: a
               </thead>
               <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
                 {users.map((u, uIdx) => (
-                  <tr key={`adm-user-${u.id}-${uIdx}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                  <tr key={`adm-user-${u.uid || u.id || uIdx}-${uIdx}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                     <td className="px-8 py-6">
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-xl overflow-hidden bg-slate-100">
@@ -888,8 +888,8 @@ export default function AdminDashboard({ currentUser, onBack }: { currentUser: a
                       </td>
                       <td className="py-4 px-4">
                         <div className="flex flex-wrap gap-1">
-                          {log.detectedTypes?.map((t: string) => (
-                            <span key={t} className="px-2 py-0.5 bg-red-100 dark:bg-red-950/50 text-red-700 dark:text-red-300 rounded text-[10px] font-bold">
+                          {log.detectedTypes?.map((t: string, idx: number) => (
+                            <span key={`log-type-${t}-${idx}`} className="px-2 py-0.5 bg-red-100 dark:bg-red-950/50 text-red-700 dark:text-red-300 rounded text-[10px] font-bold">
                               {t}
                             </span>
                           ))}

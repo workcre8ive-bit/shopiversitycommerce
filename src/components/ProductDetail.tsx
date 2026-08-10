@@ -2073,7 +2073,7 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                     </div>
                   ) : (
                     reviews.map((review, rIdx) => (
-                      <div key={`review-${review.id}-${rIdx}`} className="space-y-3">
+                      <div key={`review-${review.id || rIdx}-${rIdx}`} className="space-y-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
                             <div className="w-8 h-8 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
@@ -2083,7 +2083,7 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                               <p className="text-sm font-bold text-slate-900 dark:text-white">{review.buyerName}</p>
                               <div className="flex text-amber-400">
                                 {[1, 2, 3, 4, 5].map((s) => (
-                                  <Star key={`rev-star-${review.id}-${s}`} className={cn("w-3 h-3 fill-current", s > review.rating && "text-slate-200 dark:text-slate-700 fill-none")} />
+                                  <Star key={`rev-star-${review.id || rIdx}-${rIdx}-${s}`} className={cn("w-3 h-3 fill-current", s > review.rating && "text-slate-200 dark:text-slate-700 fill-none")} />
                                 ))}
                               </div>
                             </div>
