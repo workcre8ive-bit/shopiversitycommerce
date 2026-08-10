@@ -282,7 +282,7 @@ export default function UserProfileHub({
       <div className="space-y-6">
         {menuGroups.map((group, gIdx) => (
           <div key={`group-${gIdx}`} className="space-y-2">
-            <h4 className="text-[10px] font-black text-slate-400 dark:text-zinc-500 uppercase tracking-widest text-left px-2">
+            <h4 className="text-[10px] font-black text-slate-400 dark:text-slate-300 uppercase tracking-widest text-left px-2">
               {group.title}
             </h4>
             <div className="bg-white dark:bg-zinc-900/85 rounded-3xl border border-slate-150/60 dark:border-zinc-800/80 overflow-hidden shadow-sm divide-y divide-slate-100 dark:divide-zinc-800/60">
@@ -299,10 +299,10 @@ export default function UserProfileHub({
                         <Icon className="w-5 h-5" />
                       </div>
                       <div className="min-w-0">
-                        <span className="font-bold text-slate-800 dark:text-zinc-155 text-sm block tracking-tight">
+                        <span className="font-bold text-slate-800 dark:text-white text-sm block tracking-tight">
                           {item.label}
                         </span>
-                        <span className="text-xs text-slate-450 dark:text-zinc-400 font-medium block truncate">
+                        <span className="text-xs text-slate-500 dark:text-zinc-400 font-medium block truncate">
                           {item.sublabel}
                         </span>
                       </div>
@@ -317,7 +317,7 @@ export default function UserProfileHub({
 
         {/* Theme Settings Group */}
         <div className="space-y-2">
-          <h4 className="text-[10px] font-black text-slate-400 dark:text-zinc-500 uppercase tracking-widest text-left px-2">
+          <h4 className="text-[10px] font-black text-slate-400 dark:text-slate-300 uppercase tracking-widest text-left px-2">
             Preferences & Security
           </h4>
           <div className="bg-white dark:bg-zinc-900/85 rounded-3xl border border-slate-150/60 dark:border-zinc-800/80 overflow-hidden shadow-sm divide-y divide-slate-100 dark:divide-zinc-800/60">
@@ -330,10 +330,10 @@ export default function UserProfileHub({
                   {isDarkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
                 </div>
                 <div>
-                  <span className="font-bold text-slate-800 dark:text-zinc-155 text-sm block tracking-tight">
+                  <span className="font-bold text-slate-800 dark:text-white text-sm block tracking-tight">
                     Theme Mode
                   </span>
-                  <span className="text-xs text-slate-450 dark:text-zinc-400 font-medium block">
+                  <span className="text-xs text-slate-500 dark:text-zinc-400 font-medium block">
                     Currently: {isDarkMode ? "Dark Theme" : "Light Theme"}
                   </span>
                 </div>

@@ -294,7 +294,7 @@ export default function StorefrontSettingsTab({ user }: StorefrontSettingsTabPro
         <div className="mb-10 bg-slate-50 dark:bg-zinc-950 p-6 sm:p-8 rounded-[2.2rem] border border-slate-150 dark:border-zinc-850 text-left">
           <div className="flex items-center gap-2.5 mb-4">
             <Layout className="w-5 h-5 text-orange-500" />
-            <h4 className="text-md font-black uppercase tracking-wider text-slate-800 dark:text-zinc-150">Modular Block Customizer</h4>
+            <h4 className="text-md font-black uppercase tracking-wider text-slate-800 dark:text-white">Modular Block Customizer</h4>
           </div>
           <p className="text-xs text-slate-500 mb-6 leading-relaxed">
             Drag-and-drop / arrange your storefront sections in any vertical sequence. Enable or disable individual modular blocks to match your specific style.
