@@ -424,6 +424,11 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
       return;
     }
 
+    if (auth.currentUser && !auth.currentUser.emailVerified) {
+      alert("Email Verification Required: Please verify your email address before booking tickets or placing orders. Check your inbox or click 'Resend Verification Email' in the top banner.");
+      return;
+    }
+
     const finalResponses = product.eventDetails?.googleFormUrl 
       ? { ...formResponses, googleFormRegistration: "Registered via Google Forms Link" }
       : formResponses;

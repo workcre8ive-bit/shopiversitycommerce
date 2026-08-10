@@ -428,6 +428,11 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
       }
       return;
     }
+
+    if (auth.currentUser && !auth.currentUser.emailVerified) {
+      alert("Email Verification Required: Please verify your email address before placing an order. Check your inbox for the verification link or click 'Resend Verification Email' in the top banner.");
+      return;
+    }
     
     if (paymentMethod === "online") {
       if (!import.meta.env.VITE_PAYSTACK_PUBLIC_KEY) {

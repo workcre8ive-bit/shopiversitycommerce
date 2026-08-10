@@ -485,7 +485,8 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
     setGeneratedCode(code);
 
     try {
-      setError(`Verification code sent to ${phonePrefix}${phone}.`);
+      setError(`SMS Simulation: Verification code generated (${code}) and auto-filled below for phone ${phonePrefix}${phone}.`);
+      setVerificationInput(code);
       setIsVerifyingPhone(true);
       setIsVerificationChoice(false);
     } catch (err: any) {

@@ -132,15 +132,21 @@ async function startServer() {
 
     // If neither provider delivered the email, handle gracefully with fallback code so verification is never blocked
     if (!emailSentSuccessfully) {
-      const reason = deliveryError || "No live email provider keys set in .env (RESEND_API_KEY or SMTP_HOST/USER/PASS).";
-      console.warn(`[VERIFICATION ENGINE NOTICE] Live email send failed/unconfigured (${reason}). Returning verification code fallback for ${targetEmail}.`);
+      const isResendRestriction = deliveryError?.includes("testing emails") || deliveryError?.includes("verify a domain");
+      const reason = isResendRestriction
+        ? "Resend test mode limit (emails can only be delivered to fashopcommerce@gmail.com until domain verified)."
+        : (deliveryError || "No live email provider keys set in .env.");
+
+      console.log(`[VERIFICATION ENGINE] ${targetEmail} code generated: ${code} (${reason})`);
       return res.status(200).json({
         success: true,
         sent: false,
         fallback: true,
         code,
-        message: "Email dispatch fallback active. Verification code generated.",
-        notice: "To receive live emails directly in user inboxes, add RESEND_API_KEY or SMTP credentials in Settings.",
+        message: "Verification code generated.",
+        notice: isResendRestriction 
+          ? "Resend is in test mode. Verification code has been auto-filled for quick entry."
+          : "Verification code generated and auto-filled for quick entry.",
         targetEmail
       });
     }

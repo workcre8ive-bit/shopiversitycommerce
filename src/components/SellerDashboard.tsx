@@ -4094,6 +4094,12 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
     e.preventDefault();
     if (!auth.currentUser) return;
 
+    if (auth.currentUser && !auth.currentUser.emailVerified) {
+      setError("Email Verification Required: Please verify your email address before listing products or services. Check your inbox for the verification link or resend it from the banner at the top.");
+      setLoading(false);
+      return;
+    }
+
     if (type === "service" && !category) {
       setError("Please select a category for your service.");
       setLoading(false);

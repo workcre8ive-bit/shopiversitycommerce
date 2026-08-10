@@ -1,6 +1,6 @@
 import React from "react";
 import { auth, db } from "./firebase";
-import { onAuthStateChanged, signOut } from "firebase/auth";
+import { onAuthStateChanged, signOut, sendEmailVerification } from "firebase/auth";
 import { 
   collection, 
   query, 
@@ -43,6 +43,7 @@ import { cn } from "./lib/utils";
 import { 
   Search, 
   Loader2, 
+  Mail,
   ShoppingBag, 
   Store, 
   LayoutDashboard,
@@ -254,6 +255,52 @@ export default function App() {
   } | null>(null);
   const [notifications, setNotifications] = React.useState<Notification[]>([]);
   const [isNotificationsOpen, setIsNotificationsOpen] = React.useState(false);
+
+  // Email verification handlers
+  const [isResendingFirebaseEmail, setIsResendingFirebaseEmail] = React.useState(false);
+  const [isRefreshingVerification, setIsRefreshingVerification] = React.useState(false);
+  const [verificationBannerNotice, setVerificationBannerNotice] = React.useState<string | null>(null);
+
+  const handleResendFirebaseVerification = async () => {
+    if (!auth.currentUser) return;
+    setIsResendingFirebaseEmail(true);
+    setVerificationBannerNotice(null);
+    try {
+      await sendEmailVerification(auth.currentUser);
+      setVerificationBannerNotice(`Verification email sent to ${auth.currentUser.email}. Please check your inbox and spam folder.`);
+      triggerDynamicIsland("Verification email sent! ✉️");
+    } catch (err: any) {
+      console.error("Error resending verification email:", err);
+      if (err.code === "auth/too-many-requests") {
+        setVerificationBannerNotice("Too many requests. Please wait a minute before requesting another verification email.");
+      } else {
+        setVerificationBannerNotice(err.message || "Failed to resend verification email. Please try again.");
+      }
+    } finally {
+      setIsResendingFirebaseEmail(false);
+    }
+  };
+
+  const handleRefreshFirebaseVerification = async () => {
+    if (!auth.currentUser) return;
+    setIsRefreshingVerification(true);
+    setVerificationBannerNotice(null);
+    try {
+      await auth.currentUser.reload();
+      if (auth.currentUser.emailVerified) {
+        setVerificationBannerNotice("Email verified successfully! All platform features are now unlocked.");
+        triggerDynamicIsland("Email verified! 🎉");
+        setCurrentUser(prev => prev ? { ...prev, isVerified: true } : null);
+      } else {
+        setVerificationBannerNotice(`Email is not verified yet. Please click the verification link sent to ${auth.currentUser.email}.`);
+      }
+    } catch (err: any) {
+      console.error("Error checking verification status:", err);
+      setVerificationBannerNotice("Failed to check verification status. Please try again.");
+    } finally {
+      setIsRefreshingVerification(false);
+    }
+  };
   
   // Navigation & UI states
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(false);
@@ -1133,6 +1180,40 @@ export default function App() {
 
         {/* Content Area */}
         <main className="flex-1 overflow-y-auto bg-white dark:bg-zinc-950 scroll-smooth">
+          {auth.currentUser && !auth.currentUser.emailVerified && (
+            <div className="bg-amber-500/10 dark:bg-amber-950/40 border-b border-amber-500/30 px-4 py-3 text-xs text-amber-900 dark:text-amber-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 font-medium select-none animate-in fade-in slide-in-from-top-1 duration-300">
+              <div className="flex items-start sm:items-center gap-2.5">
+                <Mail className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5 sm:mt-0" />
+                <div>
+                  <p className="font-bold">
+                    Please verify your email address (<span className="underline">{auth.currentUser.email}</span>)
+                  </p>
+                  <p className="text-[11px] text-amber-800/80 dark:text-amber-300/80 font-normal mt-0.5">
+                    {verificationBannerNotice || "Check your inbox for the verification link sent by SHOPIVERSITY to unlock all selling and buying features."}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+                <button
+                  onClick={handleResendFirebaseVerification}
+                  disabled={isResendingFirebaseEmail}
+                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold text-xs transition-all cursor-pointer flex items-center gap-1.5 shadow-sm active:scale-95 disabled:opacity-50"
+                >
+                  {isResendingFirebaseEmail ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                  Resend Email
+                </button>
+                <button
+                  onClick={handleRefreshFirebaseVerification}
+                  disabled={isRefreshingVerification}
+                  className="px-3 py-1.5 bg-white dark:bg-zinc-800 border border-amber-300 dark:border-amber-700/60 text-amber-900 dark:text-amber-200 hover:bg-amber-50 dark:hover:bg-zinc-750 rounded-xl font-bold text-xs transition-all cursor-pointer flex items-center gap-1.5 shadow-sm active:scale-95 disabled:opacity-50"
+                >
+                  {isRefreshingVerification ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                  I've Verified
+                </button>
+              </div>
+            </div>
+          )}
+
           <AnimatePresence mode="wait">
             {!currentUser && isTabRestricted ? (
               <motion.div
