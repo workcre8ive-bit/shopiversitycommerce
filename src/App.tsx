@@ -266,7 +266,11 @@ export default function App() {
     setIsResendingFirebaseEmail(true);
     setVerificationBannerNotice(null);
     try {
-      await sendEmailVerification(auth.currentUser);
+      const actionCodeSettings = {
+        url: window.location.origin,
+        handleCodeInApp: false
+      };
+      await sendEmailVerification(auth.currentUser, actionCodeSettings);
       setVerificationBannerNotice(`Verification email sent to ${auth.currentUser.email}. Please check your inbox and spam folder.`);
       triggerDynamicIsland("Verification email sent! ✉️");
     } catch (err: any) {

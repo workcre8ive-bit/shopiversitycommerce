@@ -6,6 +6,7 @@ import {
   sendPasswordResetEmail,
   sendEmailVerification,
   updateProfile,
+  updateEmail,
   onAuthStateChanged,
   GoogleAuthProvider,
   signInWithPopup,
@@ -117,18 +118,25 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
     setResetLoading(true);
     setResetError("");
     try {
-      await sendPasswordResetEmail(auth, resetEmail.trim());
+      const actionCodeSettings = {
+        url: window.location.origin,
+        handleCodeInApp: false
+      };
+      await sendPasswordResetEmail(auth, resetEmail.trim(), actionCodeSettings);
       setResetEmailSent(true);
     } catch (err: any) {
       console.error("Password reset error:", err);
-      if (err.code === "auth/user-not-found") {
-        setResetError("No account found with this email address.");
+      if (err.code === "auth/user-not-found" || err.code === "auth/invalid-credential") {
+        // Show success message to prevent account enumeration
+        setResetEmailSent(true);
       } else if (err.code === "auth/invalid-email") {
         setResetError("Please enter a valid email address.");
       } else if (err.code === "auth/too-many-requests") {
-        setResetError("Too many password reset requests. Please wait a moment and try again.");
+        setResetError("Too many password reset requests. Please wait a minute and try again.");
+      } else if (err.code === "auth/network-request-failed") {
+        setResetError("Network error. Please check your internet connection and try again.");
       } else {
-        setResetError(err.message || "Failed to send password reset email. Please try again.");
+        setResetError("Failed to send password reset email. Please check your network and try again.");
       }
     } finally {
       setResetLoading(false);
@@ -146,6 +154,8 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
   const [isEmailVerified, setIsEmailVerified] = React.useState(false);
   const [resendingCode, setResendingCode] = React.useState(false);
   const [isGoogleSellerVerifying, setIsGoogleSellerVerifying] = React.useState(false);
+  const [showChangeEmail, setShowChangeEmail] = React.useState(false);
+  const [newEmailInput, setNewEmailInput] = React.useState("");
 
   // School details
   const [schoolType, setSchoolType] = React.useState("");
@@ -288,63 +298,180 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
           }
         }
 
-        // If we already have a user (e.g. profile missing case), we don't need verification choice again
-    if (firebaseUser) {
-      const referralCode = generateReferralCode(fullName || firebaseUser.displayName || "USER");
-      const referredBy = referralCodeInput || localStorage.getItem('referredBy');
+        if (!firebaseUser) {
+          const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
+          firebaseUser = userCredential.user;
+          await updateProfile(firebaseUser, { displayName: fullName });
 
-          const userProfile: UserProfile = {
-            uid: firebaseUser.uid,
-            displayName: fullName || firebaseUser.displayName || "User",
-            username: username.toLowerCase(),
-            email: firebaseUser.email || email.toLowerCase(),
-            phoneNumber: phonePrefix === "+234" && phone.startsWith("0") ? `+234${phone.replace(/\D/g, "").slice(1)}` : `${phonePrefix}${phone}`,
-            gender: gender,
-            role: role === "seller" ? "both" : "buyer",
-            activeRole: role,
-            referralCode,
-            referredBy: referredBy || "",
-            referralEarnings: 0,
-            referralCount: 0,
-            schoolType: "", 
-            schoolName: "", 
-            state: "", 
-            city: "", 
-            deliveryAddress: "", 
-            isVerified: false, 
-            isSuspended: false,
-            reportCount: 0,
-            createdAt: new Date().toISOString(),
-            verificationIdUrl: verificationIdUrl || "",
-            profileCompleted: false 
-          };
-          await setDoc(doc(db, "users", firebaseUser.uid), userProfile);
-          
-          // If referred by someone, increment their referral count
-          if (referredBy) {
-            const referrersQ = query(collection(db, "users"), where("referralCode", "==", referredBy));
-            const referrersSnap = await getDocs(referrersQ);
-            if (!referrersSnap.empty) {
-              const referrerDoc = referrersSnap.docs[0];
-              const currentCount = referrerDoc.data().referralCount || 0;
-              await updateDoc(referrerDoc.ref, { referralCount: currentCount + 1 });
-            }
+          try {
+            const actionCodeSettings = {
+              url: window.location.origin,
+              handleCodeInApp: false
+            };
+            await sendEmailVerification(firebaseUser, actionCodeSettings);
+            console.log(`[FIREBASE AUTH] Verification email dispatched directly to ${email}`);
+          } catch (evErr) {
+            console.warn("sendEmailVerification notice:", evErr);
           }
-          
-          // Sign out after account creation
-          await signOut(auth);
-          localStorage.removeItem('referredBy');
-          
-          setIsVerificationSuccess(true);
-          return;
         }
 
-        // Go to verification choice
-        setIsVerificationChoice(true);
+        const referralCode = generateReferralCode(fullName || firebaseUser.displayName || "USER");
+        const referredBy = referralCodeInput || localStorage.getItem('referredBy');
+
+        const userProfile: UserProfile = {
+          uid: firebaseUser.uid,
+          displayName: fullName || firebaseUser.displayName || "User",
+          username: username.toLowerCase(),
+          email: firebaseUser.email || email.trim().toLowerCase(),
+          phoneNumber: phonePrefix === "+234" && phone.startsWith("0") ? `+234${phone.replace(/\D/g, "").slice(1)}` : `${phonePrefix}${phone}`,
+          gender: gender,
+          role: role === "seller" ? "both" : "buyer",
+          activeRole: role,
+          referralCode,
+          referredBy: referredBy || "",
+          referralEarnings: 0,
+          referralCount: 0,
+          schoolType: "", 
+          schoolName: "", 
+          state: "", 
+          city: "", 
+          deliveryAddress: "", 
+          isVerified: false, 
+          isSuspended: false,
+          reportCount: 0,
+          createdAt: new Date().toISOString(),
+          verificationIdUrl: verificationIdUrl || "",
+          profileCompleted: false 
+        };
+        await setDoc(doc(db, "users", firebaseUser.uid), userProfile);
+        
+        // If referred by someone, increment their referral count
+        if (referredBy) {
+          const referrersQ = query(collection(db, "users"), where("referralCode", "==", referredBy));
+          const referrersSnap = await getDocs(referrersQ);
+          if (!referrersSnap.empty) {
+            const referrerDoc = referrersSnap.docs[0];
+            const currentCount = referrerDoc.data().referralCount || 0;
+            await updateDoc(referrerDoc.ref, { referralCount: currentCount + 1 });
+          }
+        }
+
+        localStorage.removeItem('referredBy');
+        
+        // Directly transition to Check Email Verification Screen
+        setIsVerifyingEmail(true);
+        setIsVerificationChoice(false);
+        setError("");
+        return;
       }
     } catch (err: any) {
       setError(getFirestoreErrorMessage(err));
       handleFirestoreError(err, isLogin ? OperationType.GET : OperationType.WRITE, `users/${auth.currentUser?.uid || 'new-user'}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCheckVerifiedStatus = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      if (auth.currentUser) {
+        await auth.currentUser.reload();
+        if (auth.currentUser.emailVerified) {
+          try {
+            await updateDoc(doc(db, "users", auth.currentUser.uid), { isVerified: true });
+          } catch (uErr) {
+            console.warn("User doc update notice:", uErr);
+          }
+          await signOut(auth);
+          setIsVerifyingEmail(false);
+          setIsLogin(true);
+          setError("Email verified successfully! Please log in with your credentials to access your dashboard.");
+          return;
+        }
+      }
+      setError(`Email is not verified yet. Please open the verification email sent to ${email || auth.currentUser?.email || 'your email'}, click the verification link, then tap 'I Have Verified'.`);
+    } catch (err: any) {
+      console.error("Verification check error:", err);
+      setError("Unable to reload account status. Please check your network connection or click 'Resend Verification Email'.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResendVerificationEmail = async () => {
+    const currentAuthUser = auth.currentUser;
+    if (!currentAuthUser) {
+      setError("No active user session found. If you created an account, please try logging in.");
+      return;
+    }
+    setResendingCode(true);
+    setError("");
+    try {
+      const actionCodeSettings = {
+        url: window.location.origin,
+        handleCodeInApp: false
+      };
+      await sendEmailVerification(currentAuthUser, actionCodeSettings);
+      setError(`Verification link resent to ${currentAuthUser.email}! Please check your inbox and spam folder.`);
+    } catch (err: any) {
+      console.error("Resend verification email error:", err);
+      if (err.code === "auth/too-many-requests") {
+        setError("Too many email requests. Please wait 1 minute before requesting another email.");
+      } else {
+        setError("Failed to resend verification email. Please try again in a few moments.");
+      }
+    } finally {
+      setResendingCode(false);
+    }
+  };
+
+  const handleChangeEmailSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = newEmailInput.trim().toLowerCase();
+    if (!trimmed) {
+      setError("Please enter a valid new email address.");
+      return;
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(trimmed)) {
+      setError("Please enter a valid email address format.");
+      return;
+    }
+    const currentAuthUser = auth.currentUser;
+    if (!currentAuthUser) {
+      setError("Session lost. Please log in to change your email address.");
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+    try {
+      await updateEmail(currentAuthUser, trimmed);
+      try {
+        await updateDoc(doc(db, "users", currentAuthUser.uid), { email: trimmed });
+      } catch (uErr) {
+        console.warn("Firestore email update notice:", uErr);
+      }
+      setEmail(trimmed);
+      const actionCodeSettings = {
+        url: window.location.origin,
+        handleCodeInApp: false
+      };
+      await sendEmailVerification(currentAuthUser, actionCodeSettings);
+      setShowChangeEmail(false);
+      setNewEmailInput("");
+      setError(`Email updated to ${trimmed}! A new verification link has been sent.`);
+    } catch (err: any) {
+      console.error("Change email error:", err);
+      if (err.code === "auth/requires-recent-login") {
+        setError("For security, please sign out and log in again before changing your email.");
+      } else if (err.code === "auth/email-already-in-use") {
+        setError("This email address is already registered to another account.");
+      } else {
+        setError(err.message || "Failed to update email address.");
+      }
     } finally {
       setLoading(false);
     }
@@ -370,7 +497,11 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
       await updateProfile(firebaseUser, { displayName: fullName });
 
       try {
-        await sendEmailVerification(firebaseUser);
+        const actionCodeSettings = {
+          url: window.location.origin,
+          handleCodeInApp: false
+        };
+        await sendEmailVerification(firebaseUser, actionCodeSettings);
         console.log(`[FIREBASE AUTH] Verification email dispatched directly to ${email}`);
       } catch (evErr) {
         console.warn("sendEmailVerification notice:", evErr);
@@ -1102,9 +1233,153 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
                   </button>
                 </div>
               </motion.div>
-            ) : isVerifyingEmail || isVerifyingPhone ? (
+            ) : isVerifyingEmail ? (
               <motion.div 
-                key="verify"
+                key="verify-email"
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="space-y-5 text-center font-sans"
+              >
+                <div className="flex flex-col items-center justify-center pt-2">
+                  <div className="w-14 h-14 bg-gradient-to-tr from-purple-600 to-indigo-500 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-purple-500/30 mb-3 ring-4 ring-purple-100 dark:ring-purple-900/40 animate-pulse">
+                    <Mail className="w-7 h-7" />
+                  </div>
+                  <h3 className="text-xl font-bold text-slate-900 dark:text-zinc-100 leading-tight">
+                    Check your email to verify
+                  </h3>
+                  <p className="text-xs text-slate-600 dark:text-zinc-300 mt-1.5 max-w-sm mx-auto leading-relaxed">
+                    We sent a verification link to <br />
+                    <span className="font-extrabold text-purple-700 dark:text-purple-400 break-all underline decoration-purple-300">
+                      {email || auth.currentUser?.email}
+                    </span>
+                  </p>
+                </div>
+
+                {error && (
+                  <div className={cn(
+                    "p-3.5 border rounded-xl text-xs leading-relaxed font-semibold text-left transition-all",
+                    error.toLowerCase().includes("verified successfully") || error.toLowerCase().includes("resent") || error.toLowerCase().includes("updated")
+                      ? "bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-300" 
+                      : "bg-amber-50 border-amber-200 text-amber-900 dark:bg-amber-950/40 dark:border-amber-800 dark:text-amber-300"
+                  )}>
+                    <p className="flex items-start gap-2">
+                      {error.toLowerCase().includes("verified successfully") ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                      ) : (
+                        <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      )}
+                      <span>{error}</span>
+                    </p>
+                  </div>
+                )}
+
+                <div className="space-y-2.5 pt-1">
+                  {/* Open Gmail Link */}
+                  <a 
+                    href="https://mail.google.com" 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="w-full h-11 bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-800 dark:text-zinc-100 font-bold rounded-xl flex items-center justify-center gap-2 text-xs border border-slate-200 dark:border-zinc-700 transition-all touch-manipulation select-none active:scale-95 shadow-sm"
+                  >
+                    <Mail className="w-4 h-4 text-red-500" />
+                    <span>Open Gmail / Mail App ↗</span>
+                  </a>
+
+                  {/* Primary: I Have Verified */}
+                  <button 
+                    type="button"
+                    onClick={handleCheckVerifiedStatus}
+                    disabled={loading}
+                    className="w-full h-12 bg-gradient-to-b from-[#ffd814] to-[#f7ca00] hover:brightness-95 active:scale-95 text-zinc-950 font-bold rounded-xl border border-[#a88734] transition-all text-sm shadow-md flex items-center justify-center gap-2 cursor-pointer touch-manipulation select-none z-20 disabled:opacity-50"
+                  >
+                    {loading ? (
+                      <Loader2 className="w-5 h-5 animate-spin text-zinc-950" />
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-5 h-5 text-emerald-800" />
+                        <span>I Have Verified</span>
+                      </>
+                    )}
+                  </button>
+
+                  {/* Secondary: Resend Verification Email */}
+                  <button 
+                    type="button"
+                    onClick={handleResendVerificationEmail}
+                    disabled={resendingCode || loading}
+                    className="w-full h-11 bg-white dark:bg-zinc-900 hover:bg-slate-50 dark:hover:bg-zinc-800 text-slate-800 dark:text-zinc-200 font-bold rounded-xl border border-slate-300 dark:border-zinc-700 transition-all text-xs shadow-sm flex items-center justify-center gap-2 cursor-pointer touch-manipulation select-none z-20 disabled:opacity-50"
+                  >
+                    {resendingCode ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-slate-700" />
+                    ) : (
+                      <RefreshCw className="w-4 h-4 text-purple-600" />
+                    )}
+                    <span>Resend Verification Email</span>
+                  </button>
+
+                  {/* Change Email Toggle / Form */}
+                  {!showChangeEmail ? (
+                    <button 
+                      type="button"
+                      onClick={() => {
+                        setShowChangeEmail(true);
+                        setNewEmailInput(email || auth.currentUser?.email || "");
+                      }}
+                      className="text-xs font-bold text-purple-700 dark:text-purple-400 hover:underline cursor-pointer pt-1 block mx-auto touch-manipulation"
+                    >
+                      Wrong email address? Change Email
+                    </button>
+                  ) : (
+                    <form onSubmit={handleChangeEmailSubmit} className="mt-2 p-3 bg-slate-50 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl space-y-2 text-left animate-fadeIn">
+                      <label className="block text-xs font-bold text-slate-700 dark:text-zinc-300">
+                        Enter Correct Email Address
+                      </label>
+                      <input 
+                        type="email"
+                        required
+                        placeholder="e.g. correctemail@gmail.com"
+                        value={newEmailInput}
+                        onChange={(e) => setNewEmailInput(e.target.value)}
+                        className="w-full h-10 px-3 bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 rounded-lg text-xs font-semibold text-slate-900 dark:text-white outline-none focus:border-purple-500"
+                      />
+                      <div className="flex gap-2 pt-1">
+                        <button 
+                          type="submit"
+                          disabled={loading}
+                          className="flex-1 h-9 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg text-xs transition-all touch-manipulation cursor-pointer flex items-center justify-center gap-1.5"
+                        >
+                          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Update & Resend"}
+                        </button>
+                        <button 
+                          type="button"
+                          onClick={() => setShowChangeEmail(false)}
+                          className="px-3 h-9 bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 font-bold rounded-lg text-xs cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
+                  )}
+
+                  {/* Go to Login Link */}
+                  <div className="pt-2">
+                    <button 
+                      type="button"
+                      onClick={async () => {
+                        try { await signOut(auth); } catch (e) {}
+                        setIsVerifyingEmail(false);
+                        setIsLogin(true);
+                      }}
+                      className="text-xs font-bold text-slate-500 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-100 hover:underline cursor-pointer touch-manipulation"
+                    >
+                      Already verified? Go to Log In
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            ) : isVerifyingPhone ? (
+              <motion.div 
+                key="verify-phone"
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 className="space-y-4"

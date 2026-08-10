@@ -125,7 +125,11 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
     setResetLoading(true);
     setResetError("");
     try {
-      await sendPasswordResetEmail(auth, resetEmail.trim());
+      const actionCodeSettings = {
+        url: window.location.origin,
+        handleCodeInApp: false
+      };
+      await sendPasswordResetEmail(auth, resetEmail.trim(), actionCodeSettings);
       setResetEmailSent(true);
     } catch (err: any) {
       console.error("Password reset error:", err);
@@ -487,7 +491,11 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
       const user = userCredential.user;
 
       try {
-        await sendEmailVerification(user);
+        const actionCodeSettings = {
+          url: window.location.origin,
+          handleCodeInApp: false
+        };
+        await sendEmailVerification(user, actionCodeSettings);
         console.log(`[FIREBASE AUTH] Logistics signup verification email sent to ${email}`);
       } catch (evErr) {
         console.warn("Logistics sendEmailVerification notice:", evErr);
