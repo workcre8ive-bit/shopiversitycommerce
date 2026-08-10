@@ -179,7 +179,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
               <span>{user?.state === "Logistics Partner" ? "Logistics Partner Account" : (activeRole === "buyer" ? "Shopping Account" : "Seller Account")}</span>
               <ChevronRight className="w-3.5 h-3.5 text-white/70 group-hover:translate-x-0.5 transition-transform" />
             </p>
-            <h2 className="text-2xl font-black !text-white tracking-tight no-underline">Hello, {user?.displayName?.split(' ')[0] || "Sign In"}</h2>
+            <h2 className="text-2xl font-black !text-white tracking-tight no-underline">Hello, {user?.displayName?.split(' ')[0] || "Guest"}</h2>
           </button>
         </div>
 
@@ -272,16 +272,18 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
                 <span className="text-xs font-bold uppercase tracking-widest">Terms & Policies</span>
              </button>
 
-             <button 
-               onClick={() => {
-                 signOut(auth);
-                 onClose();
-               }}
-               className="flex items-center gap-3 text-red-500 hover:text-red-600 transition-colors bg-transparent border-none cursor-pointer outline-none"
-             >
-                <LogOut className="w-4 h-4" />
-                <span className="text-xs font-bold uppercase tracking-widest">Sign Out</span>
-             </button>
+             {user && (
+               <button 
+                 onClick={() => {
+                   signOut(auth);
+                   onClose();
+                 }}
+                 className="flex items-center gap-3 text-red-500 hover:text-red-600 transition-colors bg-transparent border-none cursor-pointer outline-none"
+               >
+                  <LogOut className="w-4 h-4" />
+                  <span className="text-xs font-bold uppercase tracking-widest">Sign Out</span>
+               </button>
+             )}
           </div>
         </div>
 

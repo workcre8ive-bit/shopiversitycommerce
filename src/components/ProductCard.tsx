@@ -102,19 +102,6 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                     <span>-{discountPct}% OFF</span>
                   </div>
                 )}
-                {!isOwner && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setIsReportModalOpen(true);
-                    }}
-                    className="px-2.5 py-1 bg-rose-50/95 dark:bg-rose-950/90 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800 rounded-full text-[10px] font-extrabold transition-all shadow-md hover:bg-rose-600 hover:text-white flex items-center gap-1.5 cursor-pointer backdrop-blur-sm"
-                    title="Report Product or Seller"
-                  >
-                    <AlertTriangle className="w-3.5 h-3.5" />
-                    <span>Report</span>
-                  </button>
-                )}
               </div>
             </div>
 
@@ -152,7 +139,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                       <span className="text-xs mt-0.5 mr-0.5 font-black text-slate-800 dark:text-zinc-200">
                         ₦
                       </span>
-                      <span className="text-xl tracking-tight leading-none font-black">
+                      <span className="text-base sm:text-lg tracking-tight leading-none font-black">
                         {Math.floor(product.price).toLocaleString()}
                       </span>
                       <span className="text-xs font-medium text-slate-500 dark:text-zinc-400">
@@ -261,6 +248,18 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                       }}
                     >
                       STORE
+                    </button>
+                  )}
+                  {!isOwner && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsReportModalOpen(true);
+                      }}
+                      className="p-1 text-slate-400 hover:text-red-500 transition-colors cursor-pointer"
+                      title="Report Product or Seller"
+                    >
+                      <AlertTriangle className="w-3.5 h-3.5" />
                     </button>
                   )}
                 </div>
