@@ -581,7 +581,7 @@ export default function ReferralDashboard({ user, onBack }: ReferralDashboardPro
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Account Number (NUBAN)</label>
                   <input
                     type="text"
-                    pattern="[0-9]*"
+                    inputMode="numeric"
                     maxLength={10}
                     placeholder="Enter 10-digit NUBAN"
                     value={accountNumber}

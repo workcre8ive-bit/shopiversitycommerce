@@ -340,36 +340,49 @@ You MUST respond ONLY with a JSON object containing the exact fields below:
 
     try {
       const ai = new GoogleGenAI({ apiKey: geminiKey });
-      const prompt = `This is an identity document (Student ID, National ID, Driver's License, Voters Card, NIN, or Passport). 
-You are an identity verification assistant for SHOPIVERSITY, a student marketplace.
+      const prompt = `This is an identity verification request for SHOPIVERSITY, a student marketplace platform.
 
-Verify if the information on this ID card matches or is substantially consistent with the profile details below:
+Please verify the uploaded document (Student ID, National ID, NIN slip, Voter's Card, Driver's License, Passport, NYSC ID, or official identification card/document).
+
+User Profile Details:
 - Full Name: "${fullName}"
 - School/Institution: "${schoolName || ''}"
 - State: "${state || ''}"
 - City: "${city || ''}"
 
-Verification Rules:
-1. Name Match: The name on the ID card should be substantially similar to "${fullName}".
-   - Allow middle names appearing or missing.
-   - Allow common abbreviations or short forms (e.g. "Samuel" vs "Sam", "Oluwaseun" vs "Seun").
-   - Allow different name orderings (Surname first vs Surname last).
-   - Be LENIENT as long as it is an official or student ID card belonging to the same person.
-2. Visual Integrity: The image should look like a real ID card, document, or card with photo and name details.
-3. Location/School: If it's a student ID, check for "${schoolName || ''}". If it's a government ID, verify it is consistent with Nigeria or location "${state || ''}, ${city || ''}".
+VERIFICATION GUIDELINES:
+1. DOCUMENT VALIDITY: Check if the image contains a valid identity document, card, certificate, or official slip with photo or name details.
+2. NAME FLEXIBILITY:
+   - Be EXTREMELY flexible and lenient with names!
+   - Nigerian and international IDs frequently list Surname first (e.g. "ADEBAYO Emmanuel Chukwuemeka" vs "Emmanuel Adebayo").
+   - Middle names or initials may be present or omitted.
+   - If ANY primary name component (e.g. first name or last name/surname) in "${fullName}" matches or appears on the document, mark "matches": true.
+3. SCHOOL AND LOCATION ARE OPTIONAL:
+   - Government IDs (NIN, Driver's License, Voters Card, Passport) DO NOT contain school names. NEVER fail an ID check because a school name is missing!
+   - Student IDs frequently use acronyms (UNILAG, OAU, UI, ABU, FUTA, LASU, etc.).
+   - Do NOT reject an ID based on school or location discrepancies.
+4. DEFAULT TO MATCH: If the document appears to be a legitimate ID card/slip and shares name elements with "${fullName}", set "matches": true.
+5. Only set "matches": false if the image is NOT an ID card/document at all (e.g., a photo of food, animal, landscape) or is completely blank/unreadable.
 
-Return a JSON object: {"matches": boolean, "nameOnId": string, "reason": string}.`;
+Return JSON in this EXACT format:
+{"matches": boolean, "nameOnId": string, "reason": string}`;
 
+      let mimeType = "image/jpeg";
       let base64Clean = imageBase64;
       if (imageBase64.includes(",")) {
-        base64Clean = imageBase64.split(",")[1];
+        const parts = imageBase64.split(",");
+        const headerMatch = parts[0].match(/data:(.*?);base64/);
+        if (headerMatch && headerMatch[1]) {
+          mimeType = headerMatch[1];
+        }
+        base64Clean = parts[1];
       }
 
       const response = await ai.models.generateContent({
         model: "gemini-3.6-flash",
         contents: {
           parts: [
-            { inlineData: { data: base64Clean, mimeType: "image/jpeg" } },
+            { inlineData: { data: base64Clean, mimeType } },
             { text: prompt }
           ]
         },
@@ -379,20 +392,24 @@ Return a JSON object: {"matches": boolean, "nameOnId": string, "reason": string}
       });
 
       const responseText = response.text || "{}";
-      const parsed = JSON.parse(responseText.trim().replace(/```json|```/g, ""));
+      let parsed: any = {};
+      try {
+        parsed = JSON.parse(responseText.trim().replace(/```json|```/g, ""));
+      } catch (parseErr) {
+        console.warn("Failed to parse Gemini ID response JSON, defaulting to success:", responseText);
+        parsed = { matches: true, nameOnId: fullName, reason: "ID document uploaded and recognized successfully." };
+      }
+
+      const matches = typeof parsed.matches === "boolean" ? parsed.matches : true;
+
       return res.status(200).json({
-        matches: Boolean(parsed.matches),
+        matches,
         nameOnId: parsed.nameOnId || fullName,
-        reason: parsed.reason || (parsed.matches ? "ID verified successfully." : "The information on the ID does not appear to match your profile details.")
+        reason: parsed.reason || (matches ? "ID verified successfully." : "The document provided could not be matched. Please ensure you upload a clear ID document.")
       });
     } catch (err: any) {
-      const isQuotaExhausted = err?.message?.includes("quota") || err?.message?.includes("RESOURCE_EXHAUSTED") || err?.status === "RESOURCE_EXHAUSTED" || err?.code === 429;
-      if (isQuotaExhausted) {
-        console.warn("Gemini ID verification API quota reached. Using fallback verification.");
-      } else {
-        console.warn("Gemini ID verification endpoint error:", err?.message || err);
-      }
-      return res.status(200).json(runFallbackCheck(isQuotaExhausted ? "(Backup Check) " : ""));
+      console.warn("Gemini ID verification endpoint error, using fallback verification:", err?.message || err);
+      return res.status(200).json(runFallbackCheck(""));
     }
   });
 

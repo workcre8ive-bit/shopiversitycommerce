@@ -1423,6 +1423,8 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                     <div className="relative">
                       <Hash className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                       <input 
+                        type="text"
+                        inputMode="numeric"
                         value={accountNumber}
                         onChange={(e) => setAccountNumber(e.target.value.replace(/\D/g, '').slice(0, 15))}
                         className={cn(

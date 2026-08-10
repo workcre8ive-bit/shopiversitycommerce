@@ -5250,7 +5250,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                           <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Fee: ₦</span>
                           <input 
                             type="text"
-                            pattern="[0-9]*"
+                            inputMode="numeric"
                             value={deliveryPriceInput}
                             onChange={(e) => {
                               const valText = e.target.value.replace(/[^0-9]/g, "");
