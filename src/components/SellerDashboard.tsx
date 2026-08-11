@@ -2821,92 +2821,67 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
               )
             ) : (
               <div className="space-y-4 text-left animate-in fade-in duration-300">
-                <div className="p-4 bg-orange-50/80 dark:bg-orange-950/40 border border-orange-200 dark:border-orange-800/50 rounded-2xl text-xs text-slate-700 dark:text-slate-200 leading-relaxed font-medium">
-                  <p className="font-bold text-slate-900 dark:text-white mb-1">💡 What does Outsourcing mean?</p>
-                  Outsourcing allows you to deliver using any third-party logistics company (like DHL, GIG Logistics, custom student riders, etc.) that is not registered as an official partner on our website. Enter their information below to keep the buyer fully informed.
+                <div className="p-4 bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/60 rounded-2xl text-xs text-purple-900 dark:text-purple-200 leading-relaxed space-y-2">
+                  <div className="flex items-center gap-2 font-black text-purple-700 dark:text-purple-300 text-sm">
+                    <ShieldAlert className="w-5 h-5 shrink-0 text-purple-600" />
+                    <span>Outsourced Delivery & Terms & Conditions Registration Policy</span>
+                  </div>
+                  <p className="font-medium">
+                    To maintain escrow security and buyer protection, all third-party courier firms, external delivery agencies, or independent riders <strong>MUST register as an official Logistics Partner on SHOPIVERSITY</strong> according to our Terms and Conditions before handling order dispatches.
+                  </p>
                 </div>
 
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-[10px] font-black text-slate-500 dark:text-slate-300 uppercase tracking-widest mb-1">Courier / Company Name *</label>
-                    <input 
-                      type="text"
-                      value={outsourceCourierName}
-                      onChange={(e) => setOutsourceCourierName(e.target.value)}
-                      placeholder="e.g. GIG Logistics, DHL, Custom Rider"
-                      className="w-full h-11 px-4 bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 rounded-xl text-xs font-bold text-slate-800 dark:text-white outline-none focus:border-orange-500"
-                    />
+                <div className="p-4 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 rounded-2xl text-xs text-amber-900 dark:text-amber-200 leading-relaxed space-y-2">
+                  <div className="flex items-center gap-2 font-black text-amber-700 dark:text-amber-400 text-xs uppercase tracking-wider">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>Off-Platform Payment & Delivery Enforcement Policy</span>
                   </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Rider Name</label>
-                      <input 
-                        type="text"
-                        value={outsourceRiderName}
-                        onChange={(e) => setOutsourceRiderName(e.target.value)}
-                        placeholder="e.g. Emeka Rider"
-                        className="w-full h-11 px-4 bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 rounded-xl text-xs font-bold text-slate-800 dark:text-white outline-none focus:border-orange-500"
-                      />
+                  <p className="font-semibold text-[11px] leading-normal text-amber-800 dark:text-amber-200">
+                    If <strong>3 days pass after the delivery time</strong> and payment was not made through SHOPIVERSITY, the seller will be flagged for policy violation:
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 text-[11px]">
+                    <div className="p-2 bg-amber-100/80 dark:bg-amber-900/40 rounded-xl border border-amber-300/60 dark:border-amber-700/50">
+                      <p className="font-black text-amber-900 dark:text-amber-200">1st Offense</p>
+                      <p className="text-[10px] text-amber-800 dark:text-amber-300">Warning strike message from the app</p>
                     </div>
-                    <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Rider Phone</label>
-                      <input 
-                        type="tel"
-                        value={outsourceRiderPhone}
-                        onChange={(e) => setOutsourceRiderPhone(e.target.value)}
-                        placeholder="e.g. +234 803 123 4567"
-                        className="w-full h-11 px-4 bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 rounded-xl text-xs font-bold text-slate-800 dark:text-white outline-none focus:border-orange-500"
-                      />
+                    <div className="p-2 bg-orange-100/80 dark:bg-orange-900/40 rounded-xl border border-orange-300/60 dark:border-orange-700/50">
+                      <p className="font-black text-orange-900 dark:text-orange-200">2nd Offense</p>
+                      <p className="text-[10px] text-orange-800 dark:text-orange-300">Account suspension</p>
                     </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Delivery Fee (₦)</label>
-                      <input 
-                        type="number"
-                        value={outsourceDeliveryFee}
-                        onChange={(e) => setOutsourceDeliveryFee(Number(e.target.value))}
-                        placeholder="e.g. 1000"
-                        className="w-full h-11 px-4 bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 rounded-xl text-xs font-bold text-slate-800 dark:text-white outline-none focus:border-orange-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Tracking Number / Note</label>
-                      <input 
-                        type="text"
-                        value={outsourceNotes}
-                        onChange={(e) => setOutsourceNotes(e.target.value)}
-                        placeholder="e.g. Ref: GIG-LA-987"
-                        className="w-full h-11 px-4 bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 rounded-xl text-xs font-bold text-slate-800 dark:text-white outline-none focus:border-orange-500"
-                      />
+                    <div className="p-2 bg-rose-100/80 dark:bg-rose-900/40 rounded-xl border border-rose-300/60 dark:border-rose-700/50">
+                      <p className="font-black text-rose-900 dark:text-rose-200">Repeated Offenses</p>
+                      <p className="text-[10px] text-rose-800 dark:text-rose-300">Permanent account ban</p>
                     </div>
                   </div>
                 </div>
 
-                <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex gap-3">
+                <div className="p-4 bg-slate-50 dark:bg-slate-800/80 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-2.5">
+                  <h5 className="font-bold text-slate-800 dark:text-white text-xs">How to register your outsourced courier company:</h5>
+                  <ol className="list-decimal pl-4 space-y-1 text-xs text-slate-600 dark:text-slate-300 font-medium">
+                    <li>Send the invitation link to your external courier firm or rider.</li>
+                    <li>They complete their registration as a <strong>Logistics Partner</strong> on SHOPIVERSITY.</li>
+                    <li>Upon approval, they appear under <strong>Registered Partners</strong> to receive protected orders.</li>
+                  </ol>
+                </div>
+
+                <div className="pt-2 flex flex-col sm:flex-row gap-3">
                   <button
                     type="button"
-                    onClick={() => setShowCampusLogisticsModal(false)}
-                    className="flex-1 h-11 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-500 dark:text-slate-400 rounded-xl font-bold text-xs cursor-pointer border-none"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(window.location.origin);
+                      alert("SHOPIVERSITY platform link copied! Share this link with your courier to register as a Logistics Partner.");
+                    }}
+                    className="flex-1 h-11 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-md shadow-orange-500/10 cursor-pointer border-none"
                   >
-                    Cancel
+                    <Share2 className="w-4 h-4" />
+                    Copy Courier Registration Link
                   </button>
                   <button
                     type="button"
-                    disabled={isOutsourcing}
-                    onClick={handleOutsourceLogistics}
-                    className="flex-1 h-11 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-md shadow-orange-500/10 cursor-pointer border-none"
+                    onClick={() => setShowCampusLogisticsModal(false)}
+                    className="px-5 h-11 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-600 dark:text-slate-300 rounded-xl font-bold text-xs cursor-pointer border-none"
                   >
-                    {isOutsourcing ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Dispatched...
-                      </>
-                    ) : (
-                      "Confirm Outsourced Dispatch"
-                    )}
+                    Close
                   </button>
                 </div>
               </div>

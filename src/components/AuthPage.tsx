@@ -971,7 +971,7 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
       setIsVerifyingId(true);
       setIdVerificationError("");
       try {
-        const base64 = await compressImage(file, 800, 800, 0.7);
+        const base64 = await compressImage(file, 1200, 1200, 0.88);
         
         // Gemini Verification via Server Endpoint
         const response = await fetch("/api/gemini/verify-id", {
@@ -991,12 +991,12 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
           setVerificationIdUrl(base64);
           setIdVerificationError("");
         } else {
-          setIdVerificationError(`Verification failed: ${result.reason || "The information on the ID does not appear to match your profile details."}`);
+          setIdVerificationError(result.reason || "Unable to verify document. Please ensure you upload a clear government or student ID card.");
           setVerificationIdUrl("");
         }
       } catch (error) {
         console.error("Error verifying ID:", error);
-        setIdVerificationError("Failed to verify ID. Please ensure the image is clear and try again.");
+        setIdVerificationError("Failed to process ID photo. Please upload a clear image of your document.");
       } finally {
         setIsVerifyingId(false);
       }
@@ -1961,11 +1961,15 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
                       <p>Raise disputes within 48 hours. Sellers must provide proof of delivery within 24 hours of the complaint.</p>
                     </section>
                     <section>
-                      <h4 className="text-slate-900 dark:text-white font-bold mb-1">4. Payment Security</h4>
-                      <p>Always pay through the SHOPIVERSITY app. Off-app payments are NOT protected or supported.</p>
+                      <h4 className="text-slate-900 dark:text-white font-bold mb-1">4. Payment Security & Off-App Policy</h4>
+                      <p>Always pay through the SHOPIVERSITY app. If 3 days pass after delivery time and payment was not made through SHOPIVERSITY, the seller receives a <strong>warning strike</strong> message. On the 2nd offense, the seller's account is <strong>suspended</strong>, and repeated offenses result in a <strong>permanent ban</strong>.</p>
                     </section>
                     <section>
-                      <h4 className="text-slate-900 dark:text-white font-bold mb-1">5. Verification</h4>
+                      <h4 className="text-slate-900 dark:text-white font-bold mb-1">5. Mandatory Logistics Registration</h4>
+                      <p>All courier companies, student riders, or outsourced delivery services MUST register as an official Logistics Partner on SHOPIVERSITY according to our Terms & Conditions before taking custody of dispatches.</p>
+                    </section>
+                    <section>
+                      <h4 className="text-slate-900 dark:text-white font-bold mb-1">6. Profile & ID Verification</h4>
                       <p>All users must verify their Student ID and account details to ensure traceability and community safety.</p>
                     </section>
                   </div>

@@ -135,11 +135,12 @@ export default function TermsAndConditions({ onBack }: TermsAndConditionsProps) 
           <section className="space-y-3">
             <h3 className="text-lg font-bold text-white dark:text-slate-900 flex items-center gap-2">
               <span className="w-6 h-6 bg-purple-500 text-white text-[10px] flex items-center justify-center rounded-full shrink-0">5</span>
-              Logistics
+              Logistics & Mandatory Partner Registration
             </h3>
             <div className="space-y-2 pl-8">
-              <p>5.1. <strong>SHOPIVERSITY Recommended Logistics:</strong> If our recommended courier fails to deliver, you will be refunded. SHOPIVERSITY will charge a penalty fee to the logistics company.</p>
-              <p>5.2. <strong>Seller’s Choice of Logistics:</strong> If a seller uses a courier not recommended by SHOPIVERSITY and delivery fails, you will be refunded. SHOPIVERSITY is not liable for third-party courier failures. The contract is between you, the seller, and the courier.</p>
+              <p>5.1. <strong>Registered SHOPIVERSITY Logistics Partners:</strong> To maintain escrow protection and buyer safety, all delivery dispatches must be assigned directly to verified Logistics Partners registered on the SHOPIVERSITY platform.</p>
+              <p>5.2. <strong>Outsourced Delivery Company Registration:</strong> Unverified off-platform courier outsourcing is strictly prohibited for security and escrow integrity. If a seller wishes to utilize an external logistics company, courier agency, or student delivery rider, that courier company MUST register as an official Logistics Partner on SHOPIVERSITY according to our Terms & Conditions before taking custody of order dispatches.</p>
+              <p>5.3. <strong>Courier Verification & Compliance:</strong> Registered courier partners must agree to platform tracking and escrow delivery confirmation rules. Sellers who attempt off-platform logistics dispatch without official registration risk order invalidation and account warnings.</p>
             </div>
           </section>
 
@@ -158,13 +159,13 @@ export default function TermsAndConditions({ onBack }: TermsAndConditionsProps) 
           <section className="space-y-3">
             <h3 className="text-lg font-bold text-white dark:text-slate-900 flex items-center gap-2">
               <span className="w-6 h-6 bg-purple-500 text-white text-[10px] flex items-center justify-center rounded-full shrink-0">7</span>
-              Payment on Delivery [POD]
+              Payment on Delivery [POD] & Off-Platform Non-Payment Strike Policy
             </h3>
             <div className="space-y-2 pl-8">
               <p>7.1. <strong>For POD orders, payment must be made through the SHOPIVERSITY app when receiving the delivery.</strong></p>
               <p>7.2. If payment is made outside the app, SHOPIVERSITY will not accept any complaints of bad product, non-delivery by seller, or non-payment by buyer. <strong>SHOPIVERSITY is not responsible since there is no proof of payment on the app.</strong></p>
               <p>7.3. The “Delivered” button will not be activated for the buyer to confirm unless payment is made through the app.</p>
-              <p>7.4. If 3 days pass after the delivery time and payment was not made through SHOPIVERSITY, the seller will receive a <em>warning strike</em> message from the app. On the 2nd offense, the seller’s account will be <em>suspended</em>. Repeated offenses will result in a <em>permanent ban</em>.</p>
+              <p>7.4. <strong>3-Day Payment & Offense Policy:</strong> If 3 days pass after the delivery time and payment was not made through SHOPIVERSITY, the seller will receive a <em>warning strike</em> message from the app. On the 2nd offense, the seller’s account will be <em>suspended</em>. Repeated offenses will result in a <em>permanent ban</em>.</p>
               <p>7.5. <strong>Buyers must report and refuse if a seller asks for payment outside the app.</strong> Using SHOPIVERSITY for payment protects you.</p>
             </div>
           </section>

@@ -1108,9 +1108,12 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                             ₦{product.price.toLocaleString()}
                           </p>
                           {product.priceBefore && product.priceBefore > product.price ? (
-                            <p className="text-base font-bold text-slate-400 dark:text-zinc-400 line-through decoration-red-500 decoration-2">
-                              ₦{product.priceBefore.toLocaleString()}
-                            </p>
+                            <div className="flex items-center gap-1.5 text-slate-400 dark:text-zinc-400">
+                              <span className="text-xs font-black uppercase text-rose-500/90 tracking-wider">WAS</span>
+                              <p className="text-base font-bold line-through decoration-rose-500/80 decoration-1 tracking-tight">
+                                ₦{product.priceBefore.toLocaleString()}
+                              </p>
+                            </div>
                           ) : null}
                         </div>
                         {savedAmount > 0 && (
@@ -1146,7 +1149,12 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                         {product.priceBefore && product.priceBefore > product.price ? (
                           <div className="space-y-1">
                             <p className="text-[9px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Original Price (Before Discount)</p>
-                            <p className="text-sm font-bold text-slate-400 dark:text-slate-500 line-through decoration-red-500 decoration-2">₦{product.priceBefore.toLocaleString()}</p>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-xs font-black text-rose-500/90">WAS</span>
+                              <p className="text-sm font-bold text-slate-400 dark:text-slate-500 line-through decoration-rose-500/80 decoration-1 tracking-tight">
+                                ₦{product.priceBefore.toLocaleString()}
+                              </p>
+                            </div>
                           </div>
                         ) : null}
 

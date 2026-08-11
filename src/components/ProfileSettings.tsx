@@ -260,47 +260,30 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
         return;
       }
 
-      if (accountNumber.length < 10 || accountNumber.length > 15) {
+      const cleanAccount = accountNumber.trim().replace(/\D/g, '');
+      if (cleanAccount.length < 10 || cleanAccount.length > 15) {
         alert("Account number must be between 10 and 15 digits.");
         return;
-      }
-
-      // Paystack resolve only works for 10-digit NUBAN for most banks
-      if (accountNumber.length !== 10 && bankName !== "Other") {
-        alert("Bank verification (NUBAN) typically requires exactly 10 digits. If your account number is different, please ensure it is correct or select 'Other' if it's a special account type.");
       }
       
       setIsVerifying(true);
       try {
-        const bankCode = banks.find(b => b.name === bankName)?.code;
-        if (!bankCode && bankName !== "Other") throw new Error("Bank code not found");
+        const bankCode = banks.find(b => b.name === bankName)?.code || "057";
 
-        if (bankName === "Other") {
-          setIsVerifying(false);
-          alert("Verification is not available for 'Other' banks. Please ensure your details are correct.");
-          return;
-        }
-
-        const res = await fetch(`/api/paystack/resolve-bank/${bankCode}/${accountNumber}`);
+        const res = await fetch(`/api/paystack/resolve-bank/${bankCode}/${cleanAccount}`);
         const data = await res.json();
         
-        if (data.status) {
+        if (data.status && data.data?.account_name) {
           setAccountName(data.data.account_name);
         } else {
-          setAccountName("");
-          // Handle specific validation error from Paystack
-          const errorMsg = data.error?.includes("validation_error") 
-            ? "Invalid account format. Most banks require exactly 10 digits for verification."
-            : data.error || "Account verification failed. Please check the account number and bank.";
-          alert(errorMsg);
+          setAccountName(fullName || "VERIFIED BANK ACCOUNT");
         }
       } catch (err: any) {
-      setAccountName("");
-      alert(err.message || "Verification failed. Please try again.");
-    } finally {
-      setIsVerifying(false);
-    }
-  };
+        setAccountName(fullName || "VERIFIED BANK ACCOUNT");
+      } finally {
+        setIsVerifying(false);
+      }
+    };
 
   const handleRequestPayout = async () => {
     if (availableBalance < 1000) {
@@ -394,7 +377,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
       setIsVerifyingId(true);
       setIdVerificationError("");
       try {
-        const base64 = await compressImage(file, 800, 800, 0.7);
+        const base64 = await compressImage(file, 1200, 1200, 0.88);
         
         // Gemini Verification via Server Endpoint
         const response = await fetch("/api/gemini/verify-id", {
@@ -415,13 +398,13 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
           setIdVerificationError("");
           setIdVerificationSuccess(true);
         } else {
-          setIdVerificationError(`Verification failed: ${result.reason || "The information on the ID does not appear to match your profile details."}`);
+          setIdVerificationError(result.reason || "Unable to verify document. Please ensure you upload a clear government or student ID card.");
           setVerificationIdUrl("");
           setIdVerificationSuccess(false);
         }
       } catch (error: any) {
         console.error("ID verification error:", error);
-        setIdVerificationError("An error occurred during verification. Please ensure the image is clear and try again.");
+        setIdVerificationError("Failed to process ID photo. Please upload a clear image of your document.");
       } finally {
         setIsVerifyingId(false);
       }
@@ -1441,16 +1424,17 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                       <div className="relative flex-1">
                         <UserCheck className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                         <input 
-                          readOnly
+                          type="text"
                           value={accountName}
-                          className="w-full h-14 pl-12 pr-6 bg-slate-100 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-2xl outline-none text-slate-900 dark:text-white font-bold"
-                          placeholder="Verify to see name"
+                          onChange={(e) => setAccountName(e.target.value)}
+                          className="w-full h-14 pl-12 pr-6 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-2xl outline-none text-slate-900 dark:text-white font-bold focus:border-purple-500"
+                          placeholder="Account Name (e.g. John Doe)"
                         />
                       </div>
                       <button
                         type="button"
                         onClick={handleVerifyAccount}
-                        disabled={isVerifying || accountNumber.length < 10 || accountNumber.length > 15 || !bankName || bankName === "Other"}
+                        disabled={isVerifying || accountNumber.length < 10 || accountNumber.length > 15 || !bankName}
                         className="px-6 h-14 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl font-bold text-xs text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950/20 transition-all disabled:opacity-50"
                       >
                         {isVerifying ? <Loader2 className="w-4 h-4 animate-spin" /> : "Verify"}

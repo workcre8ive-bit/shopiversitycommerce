@@ -54,10 +54,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
           viewport={{ once: true, margin: "-40px" }}
           transition={{ duration: 0.45, ease: "easeOut" }}
           whileHover={{ y: -6, transition: { duration: 0.2 } }}
-          className="group relative flex flex-col bg-white dark:bg-zinc-900 rounded-[2.5rem] overflow-hidden h-full shadow-md hover:shadow-2xl transition-all duration-300 border p-4 select-none cursor-pointer"
-          style={{
-            borderColor: isHovered ? brandColor : "rgba(0, 0, 0, 0.08)",
-          }}
+          className="group relative flex flex-col bg-white dark:bg-zinc-900 rounded-[2.5rem] overflow-hidden h-full shadow-md hover:shadow-2xl transition-all duration-300 border border-slate-200/80 dark:border-zinc-800 p-4 select-none cursor-pointer"
         >
           {/* Content Wrapper (Ensures text/elements sit on top) */}
           <div className="relative z-10 flex flex-col h-full">
@@ -95,10 +92,10 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                 </div>
               ) : null}
               
-              <div className="absolute top-3 right-3 flex flex-col items-end gap-1.5 z-10">
+              <div className="absolute top-2.5 right-2.5 flex flex-col items-end gap-1.5 z-10 pointer-events-none">
                 {discountPct > 0 && (
-                  <div className="bg-gradient-to-r from-red-600 via-rose-600 to-pink-600 text-white px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider shadow-lg shadow-red-500/30 border border-white/20 flex items-center gap-1 animate-pulse">
-                    <Tag className="w-3 h-3" />
+                  <div className="bg-gradient-to-r from-red-600 via-rose-600 to-pink-600 text-white px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider shadow-md border border-white/20 flex items-center gap-1">
+                    <Tag className="w-2.5 h-2.5" />
                     <span>-{discountPct}% OFF</span>
                   </div>
                 )}
@@ -147,9 +144,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                       </span>
                     </div>
                     {product.priceBefore && product.priceBefore > product.price ? (
-                      <span className="text-xs line-through font-bold text-slate-400 dark:text-zinc-400 decoration-red-500 decoration-2">
-                        ₦{Math.floor(product.priceBefore).toLocaleString()}
-                      </span>
+                      <div className="flex items-center gap-1 text-slate-400 dark:text-zinc-400">
+                        <span className="text-xs font-bold line-through decoration-rose-500/80 decoration-1 tracking-tight">
+                          ₦{Math.floor(product.priceBefore).toLocaleString()}
+                        </span>
+                      </div>
                     ) : null}
                   </div>
                 </div>

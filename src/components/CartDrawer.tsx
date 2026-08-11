@@ -629,7 +629,7 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
               </div>
 
               {/* Checkout Options */}
-              <div className="space-y-6 sm:space-y-8 pb-10">
+              <div className="space-y-6 sm:space-y-8 pb-36 sm:pb-40">
                  <div>
                     <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">
                       {hasService ? "Service Fulfillment" : "Fulfillment Mode"}
