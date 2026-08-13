@@ -65,6 +65,8 @@ import {
   Layout,
   MousePointer2,
   ShieldCheck,
+  ShieldAlert,
+  AlertTriangle,
   RotateCcw,
   Store,
   Share2,
@@ -2820,47 +2822,64 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                 </div>
               )
             ) : (
-              <div className="space-y-4 text-left animate-in fade-in duration-300">
-                <div className="p-4 bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/60 rounded-2xl text-xs text-purple-900 dark:text-purple-200 leading-relaxed space-y-2">
+              <div className="space-y-4 text-left animate-in fade-in duration-300 max-h-[70vh] overflow-y-auto pr-1">
+                {/* Terms and Conditions Section 5 Banner */}
+                <div className="p-4 bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/60 rounded-2xl text-xs text-purple-900 dark:text-purple-200 leading-relaxed space-y-2.5">
                   <div className="flex items-center gap-2 font-black text-purple-700 dark:text-purple-300 text-sm">
                     <ShieldAlert className="w-5 h-5 shrink-0 text-purple-600" />
-                    <span>Outsourced Delivery & Terms & Conditions Registration Policy</span>
+                    <span>Terms & Conditions: Section 5 — Outsourced Logistics Regulations</span>
                   </div>
-                  <p className="font-medium">
-                    To maintain escrow security and buyer protection, all third-party courier firms, external delivery agencies, or independent riders <strong>MUST register as an official Logistics Partner on SHOPIVERSITY</strong> according to our Terms and Conditions before handling order dispatches.
+                  <p className="font-semibold text-purple-950 dark:text-purple-100">
+                    According to <strong>Section 5 (Logistics, Delivery & Escrow Handover)</strong> of the SHOPIVERSITY Platform Agreement:
                   </p>
+                  <ul className="list-disc pl-5 space-y-1 text-[11px] text-purple-900 dark:text-purple-200 font-medium">
+                    <li>
+                      <strong>Section 5.1 (Mandatory Courier Onboarding):</strong> All third-party courier agencies, private dispatch riders, or student delivery couriers <em>must register as an official Logistics Partner</em> on SHOPIVERSITY before accepting order dispatches.
+                    </li>
+                    <li>
+                      <strong>Section 5.2 (Escrow & Live Tracking Protection):</strong> Unverified, off-platform courier dispatching bypasses escrow release triggers and voids buyer dispute protection. Orders delivered by unregistered third parties cannot be marked as verified delivered.
+                    </li>
+                    <li>
+                      <strong>Section 5.3 (Seller Compliance Obligation):</strong> Sellers are legally required to assign dispatches through the Logistics Hub or ensure their outsourced courier registers on the platform prior to package pickup.
+                    </li>
+                  </ul>
                 </div>
 
-                <div className="p-4 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 rounded-2xl text-xs text-amber-900 dark:text-amber-200 leading-relaxed space-y-2">
+                {/* Section 7.4 Enforcement Banner */}
+                <div className="p-4 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 rounded-2xl text-xs text-amber-900 dark:text-amber-200 leading-relaxed space-y-2.5">
                   <div className="flex items-center gap-2 font-black text-amber-700 dark:text-amber-400 text-xs uppercase tracking-wider">
                     <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                    <span>Off-Platform Payment & Delivery Enforcement Policy</span>
+                    <span>Terms & Conditions: Section 7.4 — Off-Platform Payment & Delivery Enforcement</span>
                   </div>
-                  <p className="font-semibold text-[11px] leading-normal text-amber-800 dark:text-amber-200">
-                    If <strong>3 days pass after the delivery time</strong> and payment was not made through SHOPIVERSITY, the seller will be flagged for policy violation:
+                  <p className="font-medium text-[11px] text-amber-900 dark:text-amber-200">
+                    If <strong>3 days elapse past the scheduled delivery time</strong> and payment was attempted outside the SHOPIVERSITY escrow system, the seller account triggers automatic platform disciplinary action:
                   </p>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 text-[11px]">
-                    <div className="p-2 bg-amber-100/80 dark:bg-amber-900/40 rounded-xl border border-amber-300/60 dark:border-amber-700/50">
+                    <div className="p-2.5 bg-amber-100/80 dark:bg-amber-900/40 rounded-xl border border-amber-300/60 dark:border-amber-700/50">
                       <p className="font-black text-amber-900 dark:text-amber-200">1st Offense</p>
-                      <p className="text-[10px] text-amber-800 dark:text-amber-300">Warning strike message from the app</p>
+                      <p className="text-[10px] text-amber-800 dark:text-amber-300 font-medium">Official warning strike notice & in-app policy reminder</p>
                     </div>
-                    <div className="p-2 bg-orange-100/80 dark:bg-orange-900/40 rounded-xl border border-orange-300/60 dark:border-orange-700/50">
+                    <div className="p-2.5 bg-orange-100/80 dark:bg-orange-900/40 rounded-xl border border-orange-300/60 dark:border-orange-700/50">
                       <p className="font-black text-orange-900 dark:text-orange-200">2nd Offense</p>
-                      <p className="text-[10px] text-orange-800 dark:text-orange-300">Account suspension</p>
+                      <p className="text-[10px] text-orange-800 dark:text-orange-300 font-medium">14-day temporary store suspension & payout freeze</p>
                     </div>
-                    <div className="p-2 bg-rose-100/80 dark:bg-rose-900/40 rounded-xl border border-rose-300/60 dark:border-rose-700/50">
+                    <div className="p-2.5 bg-rose-100/80 dark:bg-rose-900/40 rounded-xl border border-rose-300/60 dark:border-rose-700/50">
                       <p className="font-black text-rose-900 dark:text-rose-200">Repeated Offenses</p>
-                      <p className="text-[10px] text-rose-800 dark:text-rose-300">Permanent account ban</p>
+                      <p className="text-[10px] text-rose-800 dark:text-rose-300 font-medium">Permanent account termination & escrow forfeiture</p>
                     </div>
                   </div>
                 </div>
 
+                {/* Steps to Onboard Outsourced Courier */}
                 <div className="p-4 bg-slate-50 dark:bg-slate-800/80 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-2.5">
-                  <h5 className="font-bold text-slate-800 dark:text-white text-xs">How to register your outsourced courier company:</h5>
-                  <ol className="list-decimal pl-4 space-y-1 text-xs text-slate-600 dark:text-slate-300 font-medium">
-                    <li>Send the invitation link to your external courier firm or rider.</li>
-                    <li>They complete their registration as a <strong>Logistics Partner</strong> on SHOPIVERSITY.</li>
-                    <li>Upon approval, they appear under <strong>Registered Partners</strong> to receive protected orders.</li>
+                  <h5 className="font-bold text-slate-800 dark:text-white text-xs flex items-center gap-2">
+                    <Truck className="w-4 h-4 text-orange-500" />
+                    How to onboard your outsourced courier in 2 minutes:
+                  </h5>
+                  <ol className="list-decimal pl-4 space-y-1.5 text-xs text-slate-600 dark:text-slate-300 font-medium">
+                    <li>Copy and share the invitation link with your external courier firm or rider.</li>
+                    <li>They register as a <strong>Logistics Partner</strong> on SHOPIVERSITY (takes under 2 minutes).</li>
+                    <li>Once approved, select them under <strong>Registered Partners</strong> to dispatch packages securely with full escrow protection.</li>
                   </ol>
                 </div>
 
@@ -2869,7 +2888,7 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                     type="button"
                     onClick={() => {
                       navigator.clipboard?.writeText(window.location.origin);
-                      alert("SHOPIVERSITY platform link copied! Share this link with your courier to register as a Logistics Partner.");
+                      alert("SHOPIVERSITY Logistics Partner registration link copied! Share this link with your courier firm or rider so they can register and handle your dispatches legally.");
                     }}
                     className="flex-1 h-11 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-md shadow-orange-500/10 cursor-pointer border-none"
                   >
@@ -5569,10 +5588,86 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                   )}
                 </div>
 
-                <div className="space-y-2">
-                  <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest block ml-1">
-                    {type === "service" ? "Requested Service Location for Google Map Pinpoint" : "Requested Pickup / Delivery Location for Google Map Pinpoint"}
-                  </span>
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest block ml-1">
+                      {type === "service" ? "Requested Service Location for Google Map Pinpoint" : "Campus Pickup / Delivery Location (Instant 1-Click Select)"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if ("geolocation" in navigator) {
+                          setIsVerifyingAddress(true);
+                          navigator.geolocation.getCurrentPosition(
+                            async (position) => {
+                              const coords = {
+                                lat: position.coords.latitude,
+                                lng: position.coords.longitude
+                              };
+                              setPickupCoordinates(coords);
+                              setMapCenter(coords);
+                              try {
+                                const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${coords.lat}&lon=${coords.lng}`);
+                                const data = await res.json();
+                                if (data && data.display_name) {
+                                  setLocation(data.display_name);
+                                } else {
+                                  setLocation(`${addrSchool || "Campus"} GPS Pickup (${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)})`);
+                                }
+                              } catch (e) {
+                                setLocation(`${addrSchool || "Campus"} GPS Location (${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)})`);
+                              } finally {
+                                setIsVerifyingAddress(false);
+                              }
+                            },
+                            (err) => {
+                              console.error("GPS error:", err);
+                              alert("Unable to fetch live GPS. Please choose a landmark hotspot chip or select on map.");
+                              setIsVerifyingAddress(false);
+                            },
+                            { timeout: 10000, enableHighAccuracy: true }
+                          );
+                        } else {
+                          alert("Geolocation is not supported by your browser.");
+                        }
+                      }}
+                      className="px-3 py-1.5 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-100 rounded-xl font-black text-[11px] transition-all flex items-center gap-1.5 border border-indigo-200 dark:border-indigo-800 cursor-pointer"
+                    >
+                      <Navigation className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 animate-pulse" />
+                      <span>🎯 Auto-Detect My Live Location</span>
+                    </button>
+                  </div>
+
+                  {/* Campus Quick Landmark Hotspots */}
+                  <div className="space-y-1 bg-slate-50 dark:bg-slate-800/60 p-3 rounded-2xl border border-slate-200/80 dark:border-slate-800">
+                    <p className="text-[10px] font-extrabold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
+                      ⚡ Quick Campus Hotspots (Tap to set pickup spot instantly):
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[
+                        { label: "SUB / Student Union Gate", spot: "Student Union Building (SUB) Complex Gate" },
+                        { label: "Main University Gate", spot: "Main Campus Entrance & Gate Pickup Bay" },
+                        { label: "Central Library Quad", spot: "University Main Library Front Square" },
+                        { label: "Hostel Quad / Block A", spot: "Student Hostel Complex Main Car Park" },
+                        { label: "Faculty of Eng. Car Park", spot: "Engineering Complex & Lecture Theater" },
+                        { label: "Campus Shopping Mall", spot: "Commercial Bank & Shopping Center" }
+                      ].map((item, idx) => (
+                        <button
+                          key={`spot-chip-${idx}`}
+                          type="button"
+                          onClick={() => {
+                            const fullLoc = `${item.spot}${addrSchool ? `, ${addrSchool}` : ""}${addrCity ? `, ${addrCity}` : ""}`;
+                            setLocation(fullLoc);
+                            verifyLocationAddress(fullLoc);
+                          }}
+                          className="px-2.5 py-1.5 bg-white dark:bg-slate-900 hover:bg-orange-50 dark:hover:bg-orange-950/30 text-slate-700 dark:text-slate-300 hover:text-[#ff6b00] border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] font-extrabold transition-all shadow-2xs cursor-pointer flex items-center gap-1"
+                        >
+                          <span>📍</span>
+                          <span>{item.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   
                   <div className="flex gap-2">
                     <input 
@@ -5580,7 +5675,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                       value={location}
                       onChange={(e) => setLocation(e.target.value)}
                       required={false}
-                      className="flex-1 h-12 px-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:bg-white dark:focus:bg-slate-900 focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white"
+                      className="flex-1 h-12 px-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:bg-white dark:focus:bg-slate-900 focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white font-semibold"
                       placeholder={type === "service" ? "e.g. Hostels Block A Room 204 or Campus Salon" : "e.g. Block C Shop 4, Campus Shopping Complex, Unilag Gate"}
                     />
                     <button 
@@ -5601,7 +5696,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                       disabled={isVerifyingAddress}
                     >
                       {isVerifyingAddress ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <MapPin className="w-3.5 h-3.5" />}
-                      Verify
+                      Verify Map
                     </button>
                   </div>
 

@@ -96,7 +96,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                 {discountPct > 0 && (
                   <div className="bg-gradient-to-r from-red-600 via-rose-600 to-pink-600 text-white px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider shadow-md border border-white/20 flex items-center gap-1">
                     <Tag className="w-2.5 h-2.5" />
-                    <span>-{discountPct}% OFF</span>
+                    <span>-{discountPct}%</span>
                   </div>
                 )}
               </div>
@@ -123,7 +123,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                 </span>
                 {discountPct > 0 && (
                   <span className="text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 border border-rose-200/60 dark:border-rose-900/40">
-                    -{discountPct}% SAVINGS
+                    -{discountPct}%
                   </span>
                 )}
               </div>

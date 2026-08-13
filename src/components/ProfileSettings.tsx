@@ -22,6 +22,7 @@ import {
   UserCheck,
   Settings,
   CheckCircle,
+  CheckCircle2,
   Navigation,
   Globe,
   Phone,
@@ -36,7 +37,8 @@ import {
   School,
   AtSign,
   Sparkles,
-  ArrowLeft
+  ArrowLeft,
+  ExternalLink
 } from "lucide-react";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
 import { compressImage } from "../lib/imageUtils";
@@ -127,9 +129,19 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
       setBusinessPhone(user.businessPhoneNumber || "");
       setGender(user.gender || "");
       setPhotoURL(user.photoURL || "");
-      setBankName(user.bankDetails?.bankName || "");
-      setAccountNumber(user.bankDetails?.accountNumber || "");
-      setAccountName(user.bankDetails?.accountName || "");
+
+      // Bank details fallback check
+      let initialBank = user.bankDetails;
+      if ((!initialBank?.accountNumber || !initialBank?.bankName) && user?.uid) {
+        try {
+          const cached = localStorage.getItem(`shopiversity_bank_details_${user.uid}`);
+          if (cached) initialBank = JSON.parse(cached);
+        } catch (e) {}
+      }
+
+      setBankName(initialBank?.bankName || "");
+      setAccountNumber(initialBank?.accountNumber || "");
+      setAccountName(initialBank?.accountName || "");
     } else {
       if (user.displayName !== prev.displayName) setFullName(user.displayName);
       if (user.username !== prev.username) setUsername(user.username || "");
@@ -181,7 +193,120 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
   const [isVerifyingId, setIsVerifyingId] = React.useState(false);
   const [idVerificationError, setIdVerificationError] = React.useState("");
   const [verificationIdUrl, setVerificationIdUrl] = React.useState(user.verificationIdUrl || "");
-  const [idVerificationSuccess, setIdVerificationSuccess] = React.useState(false);
+  const [idVerificationSuccess, setIdVerificationSuccess] = React.useState(!!user.verificationIdUrl || user.isVerified);
+
+  // Enhanced Verification fields
+  const [idType, setIdType] = React.useState<string>(user.idType || "National Identity Card / NIN Slip");
+  const [idNumber, setIdNumber] = React.useState<string>(user.idNumber || "");
+  const [verificationMethod, setVerificationMethod] = React.useState<"government_id" | "face_id">(
+    (user.verificationMethod as "government_id" | "face_id") || "government_id"
+  );
+  const [faceVerificationUrl, setFaceVerificationUrl] = React.useState<string>(user.faceVerificationUrl || "");
+  const [isCameraActive, setIsCameraActive] = React.useState<boolean>(false);
+  const videoRef = React.useRef<HTMLVideoElement | null>(null);
+  const streamRef = React.useRef<MediaStream | null>(null);
+
+  // Restore cached verification from localStorage on mount
+  React.useEffect(() => {
+    if (user.uid) {
+      try {
+        const cached = localStorage.getItem(`shopiversity_verification_${user.uid}`);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed.idType) setIdType(parsed.idType);
+          if (parsed.idNumber) setIdNumber(parsed.idNumber);
+          if (parsed.verificationMethod) setVerificationMethod(parsed.verificationMethod);
+          if (parsed.verificationIdUrl && !verificationIdUrl) {
+            setVerificationIdUrl(parsed.verificationIdUrl);
+            setIdVerificationSuccess(true);
+          }
+        }
+      } catch (e) {
+        console.error("Failed to restore cached verification", e);
+      }
+    }
+  }, [user.uid]);
+
+  const startCamera = async () => {
+    try {
+      setIsCameraActive(true);
+      setIdVerificationError("");
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+      }
+    } catch (err: any) {
+      console.error("Camera access error:", err);
+      setIsCameraActive(false);
+      setIdVerificationError("Unable to access camera for Face ID. Please allow camera permissions or upload a facial photo.");
+    }
+  };
+
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    setIsCameraActive(false);
+  };
+
+  const captureFaceSnapshot = async () => {
+    if (!fullName || !fullName.trim()) {
+      alert("Please enter your full name first before performing Face ID verification.");
+      return;
+    }
+
+    if (!videoRef.current) return;
+
+    try {
+      setIsVerifyingId(true);
+      setIdVerificationError("");
+
+      const canvas = document.createElement("canvas");
+      canvas.width = videoRef.current.videoWidth || 640;
+      canvas.height = videoRef.current.videoHeight || 480;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+        const base64 = canvas.toDataURL("image/jpeg", 0.85);
+
+        // Stop camera stream after snapshot
+        stopCamera();
+
+        // Send to server Gemini Face Verification
+        const response = await fetch("/api/gemini/verify-face", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            faceImageBase64: base64,
+            fullName,
+            schoolName
+          })
+        });
+
+        const result = await response.json();
+        if (result.matches) {
+          setVerificationIdUrl(base64);
+          setFaceVerificationUrl(base64);
+          setVerificationMethod("face_id");
+          setIdVerificationError("");
+          setIdVerificationSuccess(true);
+        } else {
+          setIdVerificationError(result.reason || "Face verification failed. Please align your face inside the frame and ensure good lighting.");
+          setIdVerificationSuccess(false);
+        }
+      }
+    } catch (err: any) {
+      console.error("Face capture error:", err);
+      setIdVerificationError("Failed to process face verification. Please try again.");
+    } finally {
+      setIsVerifyingId(false);
+    }
+  };
 
   const [earnings, setEarnings] = React.useState(0);
   const [pendingEarnings, setPendingEarnings] = React.useState(0);
@@ -253,37 +378,103 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
   ];
 
   const bankDetailsRef = React.useRef<HTMLDivElement>(null);
+  const [isSavingBank, setIsSavingBank] = React.useState(false);
+  const [bankSaveSuccess, setBankSaveSuccess] = React.useState(false);
 
-    const handleVerifyAccount = async () => {
-      if (!bankName) {
-        alert("Please select a bank first.");
-        return;
-      }
+  const handleSaveBankDetailsDirectly = async () => {
+    const selectedBankName = bankName === "Other" ? customBankName : bankName;
+    if (!selectedBankName) {
+      alert("Please select or enter your bank name.");
+      return;
+    }
+    const cleanAccount = accountNumber.trim().replace(/\D/g, '');
+    if (cleanAccount.length < 10 || cleanAccount.length > 15) {
+      alert("Please enter a valid 10-15 digit account number.");
+      return;
+    }
+    if (!accountName.trim()) {
+      alert("Please enter or verify your account name.");
+      return;
+    }
 
-      const cleanAccount = accountNumber.trim().replace(/\D/g, '');
-      if (cleanAccount.length < 10 || cleanAccount.length > 15) {
-        alert("Account number must be between 10 and 15 digits.");
-        return;
-      }
-      
-      setIsVerifying(true);
-      try {
-        const bankCode = banks.find(b => b.name === bankName)?.code || "057";
-
-        const res = await fetch(`/api/paystack/resolve-bank/${bankCode}/${cleanAccount}`);
-        const data = await res.json();
-        
-        if (data.status && data.data?.account_name) {
-          setAccountName(data.data.account_name);
-        } else {
-          setAccountName(fullName || "VERIFIED BANK ACCOUNT");
-        }
-      } catch (err: any) {
-        setAccountName(fullName || "VERIFIED BANK ACCOUNT");
-      } finally {
-        setIsVerifying(false);
-      }
+    const bankDetailsData = {
+      bankName: selectedBankName,
+      accountNumber: cleanAccount,
+      accountName: accountName.trim()
     };
+
+    setIsSavingBank(true);
+    try {
+      if (user?.uid) {
+        // 1. Save to Firestore
+        const userRef = doc(db, "users", user.uid);
+        await updateDoc(userRef, {
+          bankDetails: bankDetailsData,
+          updatedAt: new Date().toISOString()
+        });
+
+        // 2. Persist in localStorage
+        try {
+          localStorage.setItem(`shopiversity_bank_details_${user.uid}`, JSON.stringify(bankDetailsData));
+        } catch (e) {
+          console.error("Error saving bank details to localStorage:", e);
+        }
+      }
+
+      setBankSaveSuccess(true);
+      setTimeout(() => setBankSaveSuccess(false), 3500);
+    } catch (err) {
+      console.error("Error saving bank details:", err);
+      alert("Failed to save bank details. Please try again.");
+    } finally {
+      setIsSavingBank(false);
+    }
+  };
+
+  const handleVerifyAccount = async () => {
+    if (!bankName) {
+      alert("Please select a bank first.");
+      return;
+    }
+
+    const cleanAccount = accountNumber.trim().replace(/\D/g, '');
+    if (cleanAccount.length < 10 || cleanAccount.length > 15) {
+      alert("Account number must be between 10 and 15 digits.");
+      return;
+    }
+    
+    setIsVerifying(true);
+    try {
+      const bankCode = banks.find(b => b.name === bankName)?.code || "057";
+
+      const res = await fetch(`/api/paystack/resolve-bank/${bankCode}/${cleanAccount}`);
+      const data = await res.json();
+      
+      const resolvedName = (data.status && data.data?.account_name) 
+        ? data.data.account_name 
+        : (fullName || "VERIFIED BANK ACCOUNT");
+
+      setAccountName(resolvedName);
+
+      // Auto persist verified details
+      if (user?.uid) {
+        const bankDetailsData = {
+          bankName: bankName === "Other" ? customBankName : bankName,
+          accountNumber: cleanAccount,
+          accountName: resolvedName
+        };
+        try {
+          localStorage.setItem(`shopiversity_bank_details_${user.uid}`, JSON.stringify(bankDetailsData));
+          updateDoc(doc(db, "users", user.uid), { bankDetails: bankDetailsData }).catch(() => {});
+        } catch (e) {}
+      }
+    } catch (err: any) {
+      const fallbackName = fullName || "VERIFIED BANK ACCOUNT";
+      setAccountName(fallbackName);
+    } finally {
+      setIsVerifying(false);
+    }
+  };
 
   const handleRequestPayout = async () => {
     if (availableBalance < 1000) {
@@ -386,6 +577,8 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
           body: JSON.stringify({
             imageBase64: base64,
             fullName,
+            idType,
+            idNumber,
             schoolName,
             state,
             city
@@ -395,16 +588,17 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
         const result = await response.json();
         if (result.matches) {
           setVerificationIdUrl(base64);
+          setVerificationMethod("government_id");
           setIdVerificationError("");
           setIdVerificationSuccess(true);
         } else {
-          setIdVerificationError(result.reason || "Unable to verify document. Please ensure you upload a clear government or student ID card.");
+          setIdVerificationError(result.reason || "Unable to verify document. If Government ID does not work, try the Face ID option below!");
           setVerificationIdUrl("");
           setIdVerificationSuccess(false);
         }
       } catch (error: any) {
         console.error("ID verification error:", error);
-        setIdVerificationError("Failed to process ID photo. Please upload a clear image of your document.");
+        setIdVerificationError("Failed to process ID photo. Please upload a clear image of your document or switch to Face ID.");
       } finally {
         setIsVerifyingId(false);
       }
@@ -470,7 +664,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
         }
       }
       
-      const isNowComplete = !!schoolName && !!state && !!city && (user.role === "seller" || !!deliveryAddress) && (user.role !== "buyer" ? !!verificationIdUrl : true);
+      const isNowComplete = !!schoolName && !!state && !!city && (user.role === "seller" || !!deliveryAddress) && (user.role !== "buyer" ? (!!verificationIdUrl || idVerificationSuccess) : true);
 
       const updateData: any = {
         displayName: fullName,
@@ -496,21 +690,51 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
         gender: gender,
         photoURL: photoURL,
         verificationIdUrl: verificationIdUrl,
+        idType: idType,
+        idNumber: idNumber,
+        verificationMethod: verificationMethod,
+        faceVerificationUrl: faceVerificationUrl,
         profileCompleted: isNowComplete,
         updatedAt: new Date().toISOString()
       };
 
-      // Only include isVerified if it's changing to true
-      if (idVerificationSuccess && !user.isVerified) {
+      // Ensure isVerified is set if verified
+      if (idVerificationSuccess || !!verificationIdUrl) {
         updateData.isVerified = true;
       }
 
-      if (user.role === "seller") {
-        updateData.bankDetails = {
-          bankName: bankName === "Other" ? customBankName : bankName,
-          accountNumber,
-          accountName
+      // Save verification details to localStorage so it persists seamlessly
+      if (user.uid) {
+        try {
+          localStorage.setItem(`shopiversity_verification_${user.uid}`, JSON.stringify({
+            idType,
+            idNumber,
+            verificationMethod,
+            verificationIdUrl,
+            faceVerificationUrl,
+            isVerified: idVerificationSuccess || !!verificationIdUrl || user.isVerified
+          }));
+        } catch (e) {
+          console.error("Failed to save verification to localStorage", e);
+        }
+      }
+
+      const chosenBank = bankName === "Other" ? customBankName : bankName;
+      if (chosenBank || accountNumber || accountName) {
+        const bankData = {
+          bankName: chosenBank,
+          accountNumber: accountNumber.trim().replace(/\D/g, ''),
+          accountName: accountName.trim()
         };
+        updateData.bankDetails = bankData;
+
+        if (user.uid) {
+          try {
+            localStorage.setItem(`shopiversity_bank_details_${user.uid}`, JSON.stringify(bankData));
+          } catch (e) {
+            console.error("Failed to update localStorage bank details on save profile", e);
+          }
+        }
       }
 
       await updateDoc(doc(db, "users", user.uid), updateData);
@@ -1435,12 +1659,46 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                         type="button"
                         onClick={handleVerifyAccount}
                         disabled={isVerifying || accountNumber.length < 10 || accountNumber.length > 15 || !bankName}
-                        className="px-6 h-14 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl font-bold text-xs text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950/20 transition-all disabled:opacity-50"
+                        className="px-6 h-14 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl font-bold text-xs text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950/20 transition-all disabled:opacity-50 cursor-pointer"
                       >
                         {isVerifying ? <Loader2 className="w-4 h-4 animate-spin" /> : "Verify"}
                       </button>
                     </div>
                   </div>
+                </div>
+
+                {/* Save Bank Details Row */}
+                <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-purple-50/50 dark:bg-purple-950/20 p-4 rounded-2xl border border-purple-100 dark:border-purple-900/40">
+                  <div className="text-xs text-slate-600 dark:text-slate-300 font-medium flex items-center gap-2">
+                    {accountName ? (
+                      <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 shrink-0" />
+                        <span>Account Verified & Ready</span>
+                      </span>
+                    ) : (
+                      <span>Select bank and enter account details to save</span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleSaveBankDetailsDirectly}
+                    disabled={isSavingBank || !bankName || accountNumber.length < 10 || !accountName}
+                    className="px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer border-none"
+                  >
+                    {isSavingBank ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : bankSaveSuccess ? (
+                      <>
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>Stored & Saved!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-4 h-4" />
+                        <span>Save Bank Details</span>
+                      </>
+                    )}
+                  </button>
                 </div>
               </div>
 
@@ -1513,71 +1771,110 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                 </div>
               </div>
 
-              {user.isVerified ? (
-              <div className="space-y-4">
-                <div className="p-6 bg-emerald-50 dark:bg-emerald-900/10 border border-emerald-100 dark:border-emerald-900/20 rounded-3xl flex items-center gap-4">
-                  <div className="w-12 h-12 bg-emerald-100 dark:bg-emerald-900/20 rounded-full flex items-center justify-center text-emerald-600">
-                    <ShieldCheck className="w-6 h-6" />
+              <div className="space-y-6 bg-slate-50 dark:bg-slate-800/40 p-6 rounded-3xl border border-slate-200/80 dark:border-slate-800">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h5 className="font-bold text-slate-900 dark:text-white text-base">Seller & User Identification Verification</h5>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Provide your official ID details or perform a Face ID selfie snapshot for account verification.</p>
                   </div>
-                  <div className="flex-1">
-                    <p className="font-bold text-emerald-900 dark:text-emerald-400 font-mono">Verified Account</p>
-                    <p className="text-[10px] text-emerald-600 dark:text-emerald-300 font-medium tracking-tight">Your identity has been confirmed via your ID card.</p>
-                  </div>
-                  <label className="p-2 bg-white dark:bg-slate-800 rounded-xl cursor-pointer hover:bg-purple-50 dark:hover:bg-purple-950/20 text-slate-500 hover:text-purple-600 transition-all border border-slate-200 dark:border-slate-700 shadow-sm flex items-center gap-2" title="Re-upload ID">
-                    <input type="file" accept="image/*" onChange={handleIdUpload} className="hidden" />
-                    <Upload className="w-4 h-4" />
-                    <span className="text-[10px] font-bold uppercase tracking-wider">Re-upload</span>
-                  </label>
+                  {idVerificationSuccess && (
+                    <span className="px-3 py-1 bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-extrabold text-[11px] rounded-full flex items-center gap-1.5 border border-emerald-200 dark:border-emerald-800 shrink-0">
+                      <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                      Verified
+                    </span>
+                  )}
                 </div>
-                {verificationIdUrl && (
-                  <div className="relative w-full h-48 rounded-2xl overflow-hidden shadow-inner bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
-                    <img src={verificationIdUrl} alt="Verified ID" className="w-full h-full object-contain" />
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="p-6 bg-amber-50 dark:bg-amber-900/10 border border-amber-100 dark:border-amber-900/20 rounded-3xl">
-                  <div className="flex items-start gap-4 mb-4">
-                    <div className="w-10 h-10 bg-amber-100 dark:bg-amber-900/20 rounded-xl flex items-center justify-center text-amber-600 flex-shrink-0">
-                      <Shield className="w-5 h-5" />
-                    </div>
-                    <div className="space-y-1">
-                      <h5 className={cn(
-                        "text-sm font-bold",
-                        idVerificationSuccess ? "text-emerald-900 dark:text-emerald-400" : "text-amber-900 dark:text-amber-400"
-                      )}>
-                        {idVerificationSuccess ? "Verification Successful!" : "Not Verified Yet"}
-                      </h5>
-                      <p className={cn(
-                        "text-[10px] font-medium leading-relaxed uppercase tracking-widest",
-                        idVerificationSuccess ? "text-emerald-600 dark:text-emerald-300" : "text-amber-600 dark:text-amber-300"
-                      )}>
-                        {idVerificationSuccess 
-                          ? "ID verified locally. Click 'Save Changes' below to finalize." 
-                          : (displayRole === "seller" 
-                            ? "You must verify your ID card before you can list products." 
-                            : "You must verify your ID card before you can purchase products.")
-                        }
-                      </p>
-                    </div>
+
+                {/* ID Type & Number Inputs */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider block ml-1">Type of ID Document</label>
+                    <select
+                      value={idType}
+                      onChange={(e) => setIdType(e.target.value)}
+                      className="w-full h-12 px-4 bg-white dark:bg-slate-900 border-2 border-slate-200 dark:border-slate-700 rounded-2xl outline-none focus:border-purple-600 font-bold text-xs text-slate-800 dark:text-slate-200 shadow-sm"
+                    >
+                      <option value="National Identity Card / NIN Slip">National Identity Card / NIN Slip 🇳🇬</option>
+                      <option value="Student ID Card">Student ID Card (University / Poly) 🏫</option>
+                      <option value="Permanent Voter's Card (PVC)">Permanent Voter's Card (PVC) 🗳️</option>
+                      <option value="Driver's License">Driver's License 🚘</option>
+                      <option value="International Passport">International Passport 🛂</option>
+                      <option value="NYSC / Staff ID">NYSC / Staff ID 🎖️</option>
+                    </select>
                   </div>
 
-                  <div className="space-y-3">
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider block ml-1">ID Document Number</label>
+                    <input
+                      type="text"
+                      value={idNumber}
+                      onChange={(e) => setIdNumber(e.target.value)}
+                      placeholder="e.g. 11-digit NIN, Matric No, or Passport No"
+                      className="w-full h-12 px-4 bg-white dark:bg-slate-900 border-2 border-slate-200 dark:border-slate-700 rounded-2xl outline-none focus:border-purple-600 font-bold text-xs text-slate-800 dark:text-slate-200 shadow-sm"
+                    />
+                  </div>
+                </div>
+
+                {/* Verification Method Tabs */}
+                <div className="flex rounded-2xl bg-slate-200/80 dark:bg-slate-900 p-1.5 gap-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVerificationMethod("government_id");
+                      stopCamera();
+                    }}
+                    className={cn(
+                      "flex-1 py-2.5 px-3 rounded-xl font-extrabold text-xs transition-all flex items-center justify-center gap-2 border-none cursor-pointer",
+                      verificationMethod === "government_id"
+                        ? "bg-white dark:bg-slate-800 text-purple-700 dark:text-purple-300 shadow-sm"
+                        : "text-slate-600 dark:text-slate-400 hover:text-slate-900"
+                    )}
+                  >
+                    <Upload className="w-4 h-4" />
+                    <span>Upload Government / Student ID</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setVerificationMethod("face_id")}
+                    className={cn(
+                      "flex-1 py-2.5 px-3 rounded-xl font-extrabold text-xs transition-all flex items-center justify-center gap-2 border-none cursor-pointer",
+                      verificationMethod === "face_id"
+                        ? "bg-white dark:bg-slate-800 text-purple-700 dark:text-purple-300 shadow-sm"
+                        : "text-slate-600 dark:text-slate-400 hover:text-slate-900"
+                    )}
+                  >
+                    <Camera className="w-4 h-4" />
+                    <span>Face ID / Live Selfie</span>
+                  </button>
+                </div>
+
+                {/* Method 1: Government ID Upload */}
+                {verificationMethod === "government_id" && (
+                  <div className="space-y-4">
+                    <div className="p-4 bg-purple-50/60 dark:bg-purple-950/20 border border-purple-100 dark:border-purple-900/30 rounded-2xl text-xs text-purple-900 dark:text-purple-300 font-medium leading-relaxed flex items-start gap-3">
+                      <Shield className="w-5 h-5 text-purple-600 shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-extrabold block text-slate-900 dark:text-white">ID Verification Requirements</span>
+                        Upload a clear image of your <strong className="text-purple-700 dark:text-purple-300 font-bold">{idType}</strong>. Our AI will verify that the document matches your chosen ID type and profile name (<span className="font-bold text-slate-800 dark:text-slate-100">{fullName || "Your Full Name"}</span>).
+                      </div>
+                    </div>
+
                     <label className={cn(
-                      "border-2 border-dashed rounded-2xl p-8 flex flex-col items-center justify-center transition-all cursor-pointer group relative overflow-hidden",
-                      idVerificationError ? "border-red-200 bg-red-50 dark:bg-red-900/10" : "border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-purple-500 hover:bg-slate-50 dark:hover:bg-slate-800"
+                      "border-2 border-dashed rounded-2xl p-8 flex flex-col items-center justify-center transition-all cursor-pointer group relative overflow-hidden min-h-[180px]",
+                      idVerificationError ? "border-red-300 bg-red-50/80 dark:bg-red-900/10" : "border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-purple-500 hover:bg-slate-50 dark:hover:bg-slate-800"
                     )}>
                       <input type="file" accept="image/*" onChange={handleIdUpload} className="hidden" disabled={isVerifyingId} />
                       {isVerifyingId ? (
                         <div className="flex flex-col items-center text-center">
-                          <Loader2 className="w-12 h-12 text-purple-600 animate-spin mb-4" />
-                          <p className="text-sm font-bold text-slate-600 dark:text-slate-400">Verifying your ID...</p>
+                          <Loader2 className="w-10 h-10 text-purple-600 animate-spin mb-3" />
+                          <p className="text-sm font-bold text-slate-700 dark:text-slate-300">Verifying document with AI...</p>
+                          <p className="text-xs text-slate-500 mt-1">Checking image match for {idType}</p>
                         </div>
-                      ) : verificationIdUrl ? (
-                        <div className="text-center w-full h-full p-4 flex flex-col items-center justify-center min-h-[200px]">
-                          <img src={verificationIdUrl} alt="ID card" className="absolute inset-0 w-full h-full object-contain bg-slate-50 dark:bg-slate-900 shadow-inner" />
-                          <div className="w-12 h-12 bg-emerald-500 text-white rounded-full flex items-center justify-center shadow-lg absolute -top-4 -right-4 z-20">
+                      ) : verificationIdUrl && verificationMethod === "government_id" ? (
+                        <div className="text-center w-full h-full p-2 flex flex-col items-center justify-center min-h-[180px] relative">
+                          <img src={verificationIdUrl} alt="ID Document" className="w-full max-h-48 object-contain rounded-xl shadow-md bg-slate-100 dark:bg-slate-800" />
+                          <div className="w-10 h-10 bg-emerald-500 text-white rounded-full flex items-center justify-center shadow-lg absolute top-2 right-2 z-20">
                             <CheckCircle className="w-6 h-6" />
                           </div>
                           <button
@@ -1587,29 +1884,159 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                               e.stopPropagation();
                               handleRemoveId();
                             }}
-                            className="absolute bottom-4 right-4 p-2 bg-red-500 text-white rounded-xl shadow-lg hover:bg-red-600 transition-all z-30 flex items-center gap-2"
+                            className="mt-3 px-4 py-2 bg-red-500 text-white rounded-xl shadow hover:bg-red-600 transition-all z-30 flex items-center gap-2 border-none cursor-pointer"
                           >
                             <Trash2 className="w-4 h-4" />
-                            <span className="text-[10px] font-bold uppercase tracking-wider">Remove ID</span>
+                            <span className="text-xs font-bold">Remove or Replace ID</span>
                           </button>
                         </div>
                       ) : (
                         <div className="text-center group-hover:scale-105 transition-transform duration-300">
-                          <div className="w-16 h-16 bg-slate-50 dark:bg-slate-800 rounded-2xl flex items-center justify-center text-slate-300 dark:text-slate-600 group-hover:text-purple-500 group-hover:bg-purple-50 dark:group-hover:bg-purple-950/20 mx-auto mb-4 transition-all">
-                            <Upload className="w-8 h-8" />
+                          <div className="w-14 h-14 bg-purple-50 dark:bg-purple-950/30 rounded-2xl flex items-center justify-center text-purple-600 mx-auto mb-3">
+                            <Upload className="w-7 h-7" />
                           </div>
-                          <p className="text-sm font-bold text-slate-600 dark:text-slate-300 mb-1">Upload Student/Gov ID</p>
-                          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Supports JPG, PNG, WEBP</p>
+                          <p className="text-sm font-bold text-slate-800 dark:text-slate-200 mb-1">Click to Upload {idType}</p>
+                          <p className="text-[11px] text-slate-400 font-bold">Supports JPG, PNG, WEBP (Max 10MB)</p>
                         </div>
                       )}
                     </label>
+
                     {idVerificationError && (
-                      <p className="text-xs text-red-500 font-bold text-center px-4 py-2 bg-red-50 dark:bg-red-900/10 rounded-xl">{idVerificationError}</p>
+                      <div className="p-4 bg-red-50 dark:bg-red-900/10 border border-red-200 dark:border-red-900/30 rounded-2xl space-y-2">
+                        <p className="text-xs text-red-600 dark:text-red-400 font-bold flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
+                          <span>{idVerificationError}</span>
+                        </p>
+                        <p className="text-[11px] text-slate-600 dark:text-slate-400 font-medium">
+                          If government ID document verification does not work, switch to the <button type="button" onClick={() => setVerificationMethod("face_id")} className="text-purple-600 underline font-bold border-none bg-transparent cursor-pointer">Face ID / Live Selfie</button> option.
+                        </p>
+                      </div>
                     )}
                   </div>
-                </div>
+                )}
+
+                {/* Method 2: Face ID Verification */}
+                {verificationMethod === "face_id" && (
+                  <div className="space-y-4">
+                    <div className="p-4 bg-blue-50/60 dark:bg-blue-950/20 border border-blue-100 dark:border-blue-900/30 rounded-2xl text-xs text-blue-900 dark:text-blue-300 font-medium leading-relaxed flex items-start gap-3">
+                      <Camera className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-extrabold block text-slate-900 dark:text-white">Face ID Live Facial Verification</span>
+                        Position your face clearly in the camera frame to capture a live selfie verification snapshot for <strong className="font-bold text-slate-900 dark:text-white">{fullName || "your account"}</strong>.
+                      </div>
+                    </div>
+
+                    {isCameraActive ? (
+                      <div className="flex flex-col items-center gap-4 bg-black p-6 rounded-3xl relative overflow-hidden">
+                        <div className="relative w-full max-w-sm aspect-square rounded-full border-4 border-dashed border-purple-500 overflow-hidden shadow-2xl flex items-center justify-center">
+                          <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+                          <div className="absolute inset-0 border-2 border-white/30 rounded-full pointer-events-none" />
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={captureFaceSnapshot}
+                            disabled={isVerifyingId}
+                            className="px-6 py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-2xl font-extrabold text-sm shadow-lg flex items-center gap-2 transition-all cursor-pointer border-none"
+                          >
+                            {isVerifyingId ? <Loader2 className="w-4 h-4 animate-spin" /> : <Camera className="w-4 h-4" />}
+                            <span>Capture & Verify Face</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={stopCamera}
+                            className="px-4 py-3 bg-zinc-800 text-white rounded-2xl font-bold text-xs hover:bg-zinc-700 transition-all cursor-pointer border-none"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : verificationIdUrl && verificationMethod === "face_id" ? (
+                      <div className="p-6 bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/40 rounded-3xl flex flex-col items-center text-center space-y-3">
+                        <div className="relative w-32 h-32 rounded-full overflow-hidden border-4 border-emerald-500 shadow-xl">
+                          <img src={verificationIdUrl} alt="Face Verification Selfie" className="w-full h-full object-cover" />
+                        </div>
+                        <div className="space-y-1">
+                          <p className="font-black text-emerald-900 dark:text-emerald-300 text-sm flex items-center justify-center gap-1.5">
+                            <CheckCircle className="w-4 h-4 text-emerald-600" />
+                            Face ID Verification Successful!
+                          </p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">Your live facial selfie has been verified. Click 'Save Changes' below to persist your status.</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={startCamera}
+                          className="px-4 py-2 bg-slate-200 dark:bg-slate-800 text-slate-800 dark:text-slate-200 rounded-xl text-xs font-bold hover:bg-slate-300 transition-all border-none cursor-pointer"
+                        >
+                          Retake Face Snapshot
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="p-8 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-3xl bg-white dark:bg-slate-900 flex flex-col items-center text-center space-y-4">
+                        <div className="w-16 h-16 bg-purple-100 dark:bg-purple-950/30 rounded-2xl flex items-center justify-center text-purple-600">
+                          <Camera className="w-8 h-8" />
+                        </div>
+                        <div>
+                          <p className="font-bold text-slate-800 dark:text-slate-200 text-sm">Start Face ID Camera</p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Use your device camera to complete facial identity verification.</p>
+                        </div>
+                        <div className="flex flex-wrap justify-center gap-3">
+                          <button
+                            type="button"
+                            onClick={startCamera}
+                            className="px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs rounded-2xl shadow-lg transition-all flex items-center gap-2 cursor-pointer border-none"
+                          >
+                            <Camera className="w-4 h-4" />
+                            <span>Open Camera Stream</span>
+                          </button>
+
+                          <label className="px-5 py-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 font-bold text-xs rounded-2xl cursor-pointer transition-all flex items-center gap-2 border border-slate-200 dark:border-slate-700">
+                            <Upload className="w-4 h-4" />
+                            <span>Upload Selfie Photo</span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={async (e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  try {
+                                    setIsVerifyingId(true);
+                                    setIdVerificationError("");
+                                    const base64 = await compressImage(file, 800, 800, 0.85);
+                                    const response = await fetch("/api/gemini/verify-face", {
+                                      method: "POST",
+                                      headers: { "Content-Type": "application/json" },
+                                      body: JSON.stringify({ faceImageBase64: base64, fullName, schoolName })
+                                    });
+                                    const result = await response.json();
+                                    if (result.matches) {
+                                      setVerificationIdUrl(base64);
+                                      setFaceVerificationUrl(base64);
+                                      setVerificationMethod("face_id");
+                                      setIdVerificationSuccess(true);
+                                    } else {
+                                      setIdVerificationError(result.reason || "Face verification failed.");
+                                    }
+                                  } catch (err) {
+                                    setIdVerificationError("Failed to verify facial selfie photo.");
+                                  } finally {
+                                    setIsVerifyingId(false);
+                                  }
+                                }
+                              }}
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    )}
+
+                    {idVerificationError && (
+                      <p className="text-xs text-red-500 font-bold text-center px-4 py-2.5 bg-red-50 dark:bg-red-900/10 rounded-xl">{idVerificationError}</p>
+                    )}
+                  </div>
+                )}
               </div>
-            )}
           </div>
           )}
         </div>
@@ -1734,6 +2161,26 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
               <LogOut className="w-4 h-4" />
               Sign Out Now
             </button>
+          </div>
+
+          {/* Privacy Policy & Data Compliance */}
+          <div className="space-y-4 col-span-1 sm:col-span-2 pt-4 border-t border-slate-100 dark:border-slate-800">
+            <div className="flex items-center gap-3">
+              <Shield className="w-5 h-5 text-emerald-500" />
+              <h4 className="text-sm font-bold text-slate-900 dark:text-white">Privacy Policy & Data Rights</h4>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+              SHOPIVERSITY protects user data and privacy according to official data protection regulations. Review how your personal information and student credentials are handled.
+            </p>
+            <a
+              href="https://app.termly.io/dashboard/website/d47c888b-f6fa-4ac8-82cc-124513928d3f/privacy-policy#infosafe"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 px-5 py-3 bg-emerald-50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300 rounded-xl font-bold text-xs hover:bg-emerald-100 dark:hover:bg-emerald-900/30 transition-all border border-emerald-200 dark:border-emerald-800/40 no-underline"
+            >
+              <span>View Official Privacy Policy</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
           </div>
         </div>
 

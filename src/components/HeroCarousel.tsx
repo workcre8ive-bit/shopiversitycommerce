@@ -40,7 +40,7 @@ const slides = [
     highlight: "they just lack a platform",
     suffix: " for the right visibility and targeted reach.",
     subtext: "Without dedicated campus exposure, incredible student-led businesses and custom services stay hidden.",
-    image: "https://images.unsplash.com/photo-1556742044-3c52d6e88c62?q=80&w=1600&auto=format&fit=crop",
+    image: "https://images.unsplash.com/photo-1531482615713-2afd69097998?q=80&w=1600&auto=format&fit=crop",
     icon: Eye,
     featureName: "Right Visibility",
     featureDesc: "Unlocking local exposure"
@@ -64,7 +64,7 @@ const slides = [
     highlight: "marketplace is at your fingertips",
     suffix: " daily.",
     subtext: "Find textbooks, custom clothes, gadgets, and tutoring services with peer-to-peer simplicity.",
-    image: "https://images.unsplash.com/photo-1472851294608-062f824d29cc?q=80&w=1600&auto=format&fit=crop",
+    image: "https://images.unsplash.com/photo-1519389950473-47ba0277781c?q=80&w=1600&auto=format&fit=crop",
     icon: ShoppingBag,
     featureName: "At Fingertips",
     featureDesc: "Peer-to-peer convenience"
@@ -88,7 +88,7 @@ const slides = [
     highlight: "affordable prices",
     suffix: " for premium quality products.",
     subtext: "Direct campus trading means zero middleman fees, translating to student-pocket friendly costs.",
-    image: "https://images.unsplash.com/photo-1441986300917-64674bd600d8?q=80&w=1600&auto=format&fit=crop",
+    image: "https://images.unsplash.com/photo-1489987707025-afc232f7ea0f?q=80&w=1600&auto=format&fit=crop",
     icon: DollarSign,
     featureName: "Affordable Price",
     featureDesc: "Zero middleman markups"
@@ -100,32 +100,33 @@ const slides = [
     highlight: "logistics services",
     suffix: " tailored to your lecture halls & hostels.",
     subtext: "Campus student dispatch riders deliver directly to your specific doorstep within minutes.",
-    image: "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?q=80&w=1600&auto=format&fit=crop",
+    image: "https://images.unsplash.com/photo-1616401784845-180882ba9ba8?q=80&w=1600&auto=format&fit=crop",
     icon: Truck,
     featureName: "Swift Logistics",
     featureDesc: "Doorstep delivery agent"
   },
   {
     id: 8,
-    badge: "Worry-Free Purchases",
+    badge: "Worry-Free Returns",
     prefix: "Shop with peace of mind using our ",
-    highlight: "better refund system",
-    suffix: " and active dispute solvers.",
-    subtext: "If an item is damaged or not as described, request refunds immediately under our escrow safeguards.",
+    highlight: "worry-free refund protection",
+    suffix: " and active dispute resolution.",
+    subtext: "If an item is damaged, incorrect, or unfulfilled, request instant refunds under our strict escrow safeguards.",
     image: "https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?q=80&w=1600&auto=format&fit=crop",
     icon: RefreshCw,
-    featureName: "Easy Refund",
-    featureDesc: "Hassle-free resolutions"
+    featureName: "Easy Returns",
+    featureDesc: "Escrow-backed refunds"
   }
 ];
 
 interface HeroCarouselProps {
   onShopNow: () => void;
   onStartSelling: () => void;
+  onOpenReturnPolicy?: () => void;
   currentUser: any;
 }
 
-export default function HeroCarousel({ onShopNow, onStartSelling, currentUser }: HeroCarouselProps) {
+export default function HeroCarousel({ onShopNow, onStartSelling, onOpenReturnPolicy, currentUser }: HeroCarouselProps) {
   const [slideIndex, setSlideIndex] = React.useState(0);
   const [charIndex, setCharIndex] = React.useState(0);
   const [isDeleting, setIsDeleting] = React.useState(false);
@@ -291,11 +292,19 @@ export default function HeroCarousel({ onShopNow, onStartSelling, currentUser }:
         );
       case 7: // Refund
         return (
-          <div className="flex flex-col items-center justify-center p-5 bg-white/10 backdrop-blur-md rounded-2xl border border-white/15 h-full min-h-[140px]">
+          <div 
+            onClick={onOpenReturnPolicy}
+            className="flex flex-col items-center justify-center p-5 bg-white/10 backdrop-blur-md rounded-2xl border border-white/15 h-full min-h-[140px] cursor-pointer hover:bg-white/20 hover:border-emerald-500/50 transition-all group shadow-lg"
+          >
             <RefreshCw className={iconClass} />
             <div className="text-center">
               <span className="text-xs font-extrabold text-white uppercase tracking-wider block">Worry-Free returns</span>
               <span className="text-[8px] text-emerald-400 block font-semibold mt-1">Instant dispute resolution</span>
+              {onOpenReturnPolicy && (
+                <span className="inline-flex items-center gap-1 text-[9px] bg-emerald-500/20 group-hover:bg-emerald-500 text-emerald-300 group-hover:text-white px-2.5 py-1 rounded-full mt-2 font-bold transition-all border border-emerald-500/30">
+                  Read Return Policy &rarr;
+                </span>
+              )}
             </div>
           </div>
         );
@@ -368,10 +377,20 @@ export default function HeroCarousel({ onShopNow, onStartSelling, currentUser }:
         <div className="flex-1 max-w-2xl space-y-2 sm:space-y-4 text-left self-center">
           
           {/* Dynamic Badge */}
-          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 sm:px-3 sm:py-1 bg-orange-500/10 border border-orange-500/25 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest text-[#ff6b00] shadow-sm animate-pulse">
+          <button
+            type="button"
+            onClick={slideIndex === 7 && onOpenReturnPolicy ? onOpenReturnPolicy : undefined}
+            className={cn(
+              "inline-flex items-center gap-1.5 px-2.5 py-0.5 sm:px-3 sm:py-1 bg-orange-500/10 border border-orange-500/25 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest text-[#ff6b00] shadow-sm animate-pulse transition-all",
+              slideIndex === 7 && onOpenReturnPolicy && "cursor-pointer hover:bg-orange-500/25 hover:scale-105"
+            )}
+          >
             <Sparkles className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-[#ff6b00]" />
             <span>{currentSlide.badge}</span>
-          </div>
+            {slideIndex === 7 && onOpenReturnPolicy && (
+              <span className="text-[8px] bg-[#ff6b00] text-white px-1.5 py-0.5 rounded-full ml-1">View Policy</span>
+            )}
+          </button>
 
           {/* Typing sentence area */}
           <div className="min-h-[50px] sm:min-h-[90px] md:min-h-[130px] flex items-center">
@@ -404,14 +423,26 @@ export default function HeroCarousel({ onShopNow, onStartSelling, currentUser }:
               <ShoppingBag className="w-3.5 h-3.5 text-white" />
             </motion.button>
 
-            <motion.button 
-              whileHover={{ scale: 1.03 }}
-              whileTap={{ scale: 0.97 }}
-              onClick={onStartSelling}
-              className="px-4 py-2 sm:px-6 sm:py-3 bg-white/10 text-white hover:bg-white/15 border border-white/20 rounded-xl font-black tracking-wider transition-all text-[10px] sm:text-xs uppercase cursor-pointer flex items-center gap-1.5 outline-none shrink-0"
-            >
-              Start Selling
-            </motion.button>
+            {slideIndex === 7 && onOpenReturnPolicy ? (
+              <motion.button 
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.97 }}
+                onClick={onOpenReturnPolicy}
+                className="px-4 py-2 sm:px-6 sm:py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black tracking-wider transition-all text-[10px] sm:text-xs uppercase cursor-pointer flex items-center gap-1.5 outline-none shrink-0 shadow-lg shadow-emerald-500/20"
+              >
+                <RefreshCw className="w-3.5 h-3.5 text-white" />
+                <span>Return Policy</span>
+              </motion.button>
+            ) : (
+              <motion.button 
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.97 }}
+                onClick={onStartSelling}
+                className="px-4 py-2 sm:px-6 sm:py-3 bg-white/10 text-white hover:bg-white/15 border border-white/20 rounded-xl font-black tracking-wider transition-all text-[10px] sm:text-xs uppercase cursor-pointer flex items-center gap-1.5 outline-none shrink-0"
+              >
+                Start Selling
+              </motion.button>
+            )}
           </div>
         </div>
 

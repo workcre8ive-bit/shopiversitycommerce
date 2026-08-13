@@ -34,6 +34,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/utils";
 import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
+import Logo from "./Logo";
 
 const FALLBACK_BANKS = [
   { name: "Access Bank", code: "044" },
@@ -404,11 +405,13 @@ export default function AdminDashboard({ currentUser, onBack }: { currentUser: a
             </button>
           )}
           <div>
-            <div className="flex items-center gap-3 mb-1">
-               <ShieldCheck className="w-8 h-8 text-slate-900 dark:text-white" />
-               <h1 className="text-3xl font-black text-slate-900 dark:text-white tracking-tight">Admin Control</h1>
+            <div className="flex flex-wrap items-center gap-3 mb-1">
+               <Logo showText={true} />
+               <span className="text-slate-300 dark:text-slate-700">|</span>
+               <ShieldCheck className="w-7 h-7 text-[#ff6b00]" />
+               <h1 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white tracking-tight">Admin Control</h1>
             </div>
-            <p className="text-slate-500 font-medium">System-wide payout management and oversight</p>
+            <p className="text-slate-500 font-medium text-xs sm:text-sm">System-wide payout management and oversight</p>
           </div>
         </div>
       </div>

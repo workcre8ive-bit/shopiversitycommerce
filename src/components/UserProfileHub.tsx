@@ -68,16 +68,14 @@ export default function UserProfileHub({
           color: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
           onClick: () => onNavigateToEdit("campus")
         },
-        ...(user?.role === "seller" || user?.role === "both" || activeRole === "seller" ? [
-          {
-            id: "payment-details",
-            label: "Banking & Bank Transfers",
-            sublabel: user?.bankDetails?.bankName ? `${user.bankDetails.bankName} (${user.bankDetails.accountNumber?.slice(-4)})` : "Add bank account for payouts",
-            icon: CreditCard,
-            color: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-            onClick: () => onNavigateToEdit("payment")
-          }
-        ] : [])
+        {
+          id: "payment-details",
+          label: "Banking & Bank Transfers",
+          sublabel: user?.bankDetails?.bankName ? `${user.bankDetails.bankName} (${user.bankDetails.accountNumber?.slice(-4)})` : "Add verified bank account for payouts",
+          icon: CreditCard,
+          color: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+          onClick: () => onNavigateToEdit("payment")
+        }
       ]
     },
     {

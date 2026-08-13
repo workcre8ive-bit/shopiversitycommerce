@@ -106,6 +106,16 @@ export default function Footer({ setActiveTab, activeTab }: FooterProps) {
                   Terms & Conditions
                 </button>
               </li>
+              <li>
+                <a
+                  href="https://app.termly.io/dashboard/website/d47c888b-f6fa-4ac8-82cc-124513928d3f/privacy-policy#infosafe"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-[#ff6b00] transition-colors text-slate-400 py-1 block no-underline"
+                >
+                  Privacy Policy
+                </a>
+              </li>
             </ul>
           </div>
 
@@ -122,9 +132,18 @@ export default function Footer({ setActiveTab, activeTab }: FooterProps) {
         </div>
 
         <div className="mt-10 pt-6 border-t border-slate-800/80 flex flex-col sm:flex-row items-center justify-between text-center sm:text-left gap-3">
-          <p className="text-[11px] font-bold text-slate-500">
-            &copy; 2026 Shopiversity. All rights reserved. Trade with peace of mind.
-          </p>
+          <div className="flex flex-wrap items-center justify-center sm:justify-start gap-3 text-[11px] font-bold text-slate-500">
+            <span>&copy; 2026 Shopiversity. All rights reserved. Trade with peace of mind.</span>
+            <span>•</span>
+            <a
+              href="https://app.termly.io/dashboard/website/d47c888b-f6fa-4ac8-82cc-124513928d3f/privacy-policy#infosafe"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-slate-400 hover:text-[#ff6b00] underline transition-colors"
+            >
+              Privacy Policy
+            </a>
+          </div>
           <p className="text-[11px] font-bold text-slate-500 flex items-center justify-center gap-1">
             Made with <Heart className="w-3 h-3 text-red-500 fill-red-500 inline shrink-0" /> for Campus Creators.
           </p>

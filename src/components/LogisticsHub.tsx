@@ -2,6 +2,7 @@ import React from "react";
 import { auth, db, googleProvider } from "../firebase";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
 import { generateReferralCode, cn } from "../lib/utils";
+import Logo from "./Logo";
 import { 
   createUserWithEmailAndPassword, 
   signInWithEmailAndPassword, 
@@ -806,17 +807,21 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-zinc-950 font-sans transition-colors duration-300 pb-24">
       {/* Top Banner Header */}
-      <div className="bg-gradient-to-r from-orange-600 to-amber-500 py-6 px-6 text-white flex items-center justify-between shadow-md animate-in fade-in slide-in-from-top-4 duration-300">
+      <div className="bg-gradient-to-r from-orange-600 to-amber-500 py-6 px-6 text-white flex flex-wrap items-center justify-between gap-4 shadow-md animate-in fade-in slide-in-from-top-4 duration-300">
         <div className="flex items-center gap-3">
-          <Truck className="w-8 h-8 text-white animate-bounce" />
-          <div>
-            <h1 className="text-xl font-black tracking-tight uppercase !text-white">Shopiversity Logistics</h1>
-            <p className="text-xs text-orange-100 font-medium">Campus Delivery Network Partner</p>
+          <Logo showText={true} className="bg-white/10 p-2 rounded-2xl backdrop-blur-sm border border-white/20" />
+          <span className="text-white/40 hidden sm:inline">|</span>
+          <div className="flex items-center gap-2">
+            <Truck className="w-7 h-7 text-white animate-bounce shrink-0" />
+            <div>
+              <h1 className="text-lg sm:text-xl font-black tracking-tight uppercase !text-white leading-tight">Shopiversity Logistics</h1>
+              <p className="text-[11px] text-orange-100 font-medium">Campus Delivery Network Partner</p>
+            </div>
           </div>
         </div>
         <button
           onClick={onBackToMarket}
-          className="px-4 py-2 bg-white/20 hover:bg-white/30 text-white rounded-xl text-xs font-bold transition-all border border-white/20 cursor-pointer"
+          className="px-4 py-2 bg-white/20 hover:bg-white/30 text-white rounded-xl text-xs font-bold transition-all border border-white/20 cursor-pointer shadow-sm"
         >
           Back to Marketplace
         </button>

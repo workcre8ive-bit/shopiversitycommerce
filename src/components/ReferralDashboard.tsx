@@ -124,6 +124,23 @@ export default function ReferralDashboard({ user, onBack }: ReferralDashboardPro
   const [payoutHistory, setPayoutHistory] = React.useState<any[]>([]);
   const [showHistory, setShowHistory] = React.useState(false);
 
+  // Prefill bank details from profile or localStorage
+  React.useEffect(() => {
+    let savedBank = user?.bankDetails;
+    if (!savedBank?.accountNumber && user?.uid) {
+      try {
+        const cached = localStorage.getItem(`shopiversity_bank_details_${user.uid}`);
+        if (cached) savedBank = JSON.parse(cached);
+      } catch (e) {}
+    }
+
+    if (savedBank) {
+      if (savedBank.bankName) setBankName(savedBank.bankName);
+      if (savedBank.accountNumber) setAccountNumber(savedBank.accountNumber);
+      if (savedBank.accountName) setAccountName(savedBank.accountName);
+    }
+  }, [user, showCashoutForm]);
+
   // Listen to referred friends
   React.useEffect(() => {
     if (!user?.referralCode) return;
@@ -247,11 +264,19 @@ export default function ReferralDashboard({ user, onBack }: ReferralDashboardPro
 
     setIsSubmittingCashout(true);
     try {
-      // 1. Deduct referral balance from user's document
+      const bankDetailsObj = { bankName, accountNumber, accountName };
+
+      // 1. Deduct referral balance and save bank details to user's document
       const userRef = doc(db, "users", user.uid);
       await updateDoc(userRef, {
-        referralWalletBalance: increment(-withdrawable)
+        referralWalletBalance: increment(-withdrawable),
+        bankDetails: bankDetailsObj
       });
+
+      // 2. Cache in localStorage
+      try {
+        localStorage.setItem(`shopiversity_bank_details_${user.uid}`, JSON.stringify(bankDetailsObj));
+      } catch (e) {}
 
       // 2. Submit payoutRequest
       await addDoc(collection(db, "payoutRequests"), {

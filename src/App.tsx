@@ -35,6 +35,7 @@ import BuyerDashboard from "./components/BuyerDashboard";
 import AdminDashboard from "./components/AdminDashboard";
 import ChatView from "./components/Chat/ChatView";
 import TermsAndConditions from "./components/TermsAndConditions";
+import ReturnPolicyModal from "./components/ReturnPolicyModal";
 import Carousel from "./components/HeroCarousel";
 import Logo from "./components/Logo";
 import StickmanLoader from "./components/StickmanLoader";
@@ -311,6 +312,47 @@ export default function App() {
   const [activeTab, setActiveTabState] = React.useState("market");
   const [settingsSubView, setSettingsSubView] = React.useState<"hub" | "edit">("hub");
   const [tabHistory, setTabHistory] = React.useState<string[]>([]);
+  const [viewingProduct, setViewingProduct] = React.useState<Product | null>(null);
+  const [viewingSellerId, setViewingSellerId] = React.useState<string | null>(null);
+
+  const mainContentRef = React.useRef<HTMLElement | null>(null);
+
+  const scrollToTop = React.useCallback(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+    if (mainContentRef.current) {
+      mainContentRef.current.scrollTop = 0;
+    }
+    const mainEl = document.querySelector("main");
+    if (mainEl) {
+      mainEl.scrollTop = 0;
+    }
+  }, []);
+
+  React.useEffect(() => {
+    scrollToTop();
+  }, [activeTab, settingsSubView, viewingProduct, viewingSellerId, scrollToTop]);
+
+  // Global click listener so clicking any link or button automatically scrolls to top
+  React.useEffect(() => {
+    const handleGlobalClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      const clickable = target.closest("button, a, [role='button']");
+      if (clickable) {
+        const isInputControl = clickable.closest("input, select, textarea, [data-no-scroll='true']");
+        if (!isInputControl) {
+          scrollToTop();
+        }
+      }
+    };
+
+    document.addEventListener("click", handleGlobalClick, { capture: true });
+    return () => {
+      document.removeEventListener("click", handleGlobalClick, { capture: true });
+    };
+  }, [scrollToTop]);
 
   const setActiveTab = React.useCallback((newTab: string) => {
     if (newTab === "settings") {
@@ -327,12 +369,10 @@ export default function App() {
     });
   }, []);
 
-  const [viewingProduct, setViewingProduct] = React.useState<Product | null>(null);
-  const [viewingSellerId, setViewingSellerId] = React.useState<string | null>(null);
-
   const [activeRole, setActiveRole] = React.useState<"buyer" | "seller">("buyer");
   const [chatWithUserId, setChatWithUserId] = React.useState<string | null>(null);
   const [isCartOpen, setIsCartOpen] = React.useState(false);
+  const [isReturnPolicyOpen, setIsReturnPolicyOpen] = React.useState(false);
   const [notificationView, setNotificationView] = React.useState<"unread" | "read">("unread");
   const [connectionError, setConnectionError] = React.useState<string | null>(null);
   const [needsProfile, setNeedsProfile] = React.useState(false);
@@ -583,6 +623,27 @@ export default function App() {
                     });
                   });
                 }
+              }
+            }
+
+            // Sync and auto-restore bankDetails from localStorage if missing in Firestore snapshot
+            if (profile.uid) {
+              const cacheKey = `shopiversity_bank_details_${profile.uid}`;
+              if (profile.bankDetails?.accountNumber) {
+                try {
+                  localStorage.setItem(cacheKey, JSON.stringify(profile.bankDetails));
+                } catch (e) {}
+              } else {
+                try {
+                  const cachedBank = localStorage.getItem(cacheKey);
+                  if (cachedBank) {
+                    const parsedBank = JSON.parse(cachedBank);
+                    if (parsedBank?.accountNumber && parsedBank?.bankName) {
+                      profile = { ...profile, bankDetails: parsedBank };
+                      updateDoc(doc(db, "users", profile.uid), { bankDetails: parsedBank }).catch(() => {});
+                    }
+                  }
+                } catch (e) {}
               }
             }
 
@@ -1100,36 +1161,34 @@ export default function App() {
             {viewingSellerId || viewingProduct || (activeTab !== "market" && activeTab !== "search" && activeTab !== "messages" && activeTab !== "orders" && activeTab !== "settings" && activeTab !== "dashboard") ? (
               <button 
                 onClick={handleGoBack} 
-                className="p-1.5 hover:bg-slate-100 dark:hover:bg-zinc-800/80 rounded-xl text-[#ff6b00] active:scale-90 transition-all cursor-pointer border-none"
+                className="p-1.5 hover:bg-slate-100 dark:hover:bg-zinc-800/80 rounded-xl text-[#ff6b00] active:scale-90 transition-all cursor-pointer border-none shrink-0"
                 title="Go Back"
               >
                 <ArrowLeft className="w-5 h-5" />
               </button>
             ) : (
-              <div className="flex items-center gap-1 sm:gap-2">
-                <button
-                  onClick={() => setIsSidebarOpen(true)}
-                  className="p-1 hover:bg-slate-100 dark:hover:bg-zinc-800/80 rounded-xl text-[#ff6b00] active:scale-95 transition-all cursor-pointer border-none flex items-center justify-center shrink-0"
-                  title="Open Navigation Menu"
-                >
-                  <Menu className="w-5 h-5" />
-                </button>
-                <Logo 
-                  onClick={() => {
-                    if (activeRole === "seller") {
-                      setActiveTab("dashboard");
-                    } else {
-                      setActiveTab("market");
-                    }
-                    setViewingProduct(null);
-                    setViewingSellerId(null);
-                    setFilterCategory("All");
-                    setSearchQuery("");
-                  }} 
-                  className="ml-1 sm:ml-3" 
-                />
-              </div>
+              <button
+                onClick={() => setIsSidebarOpen(true)}
+                className="p-1 hover:bg-slate-100 dark:hover:bg-zinc-800/80 rounded-xl text-[#ff6b00] active:scale-95 transition-all cursor-pointer border-none flex items-center justify-center shrink-0"
+                title="Open Navigation Menu"
+              >
+                <Menu className="w-5 h-5" />
+              </button>
             )}
+            <Logo 
+              onClick={() => {
+                if (activeRole === "seller") {
+                  setActiveTab("dashboard");
+                } else {
+                  setActiveTab("market");
+                }
+                setViewingProduct(null);
+                setViewingSellerId(null);
+                setFilterCategory("All");
+                setSearchQuery("");
+              }} 
+              className="ml-0.5 sm:ml-1 shrink-0" 
+            />
           </div>
 
           {/* Center: Removed delivery select campus context */}
@@ -1183,7 +1242,7 @@ export default function App() {
 
 
         {/* Content Area */}
-        <main className="flex-1 overflow-y-auto bg-white dark:bg-zinc-950 scroll-smooth">
+        <main ref={mainContentRef} className="flex-1 overflow-y-auto bg-white dark:bg-zinc-950 scroll-smooth">
           {auth.currentUser && !auth.currentUser.emailVerified && (
             <div className="bg-amber-500/10 dark:bg-amber-950/40 border-b border-amber-500/30 px-4 py-3 text-xs text-amber-900 dark:text-amber-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 font-medium select-none animate-in fade-in slide-in-from-top-1 duration-300">
               <div className="flex items-start sm:items-center gap-2.5">
@@ -1298,8 +1357,8 @@ export default function App() {
                         <Carousel 
                           onShopNow={() => {
                             if (currentUser) {
-                              const el = document.getElementById('product-grid');
-                              el?.scrollIntoView({ behavior: 'smooth' });
+                              setActiveTab("market");
+                              scrollToTop();
                             } else {
                               setActiveTab("settings");
                             }
@@ -1320,6 +1379,7 @@ export default function App() {
                             }
                           }}
                           currentUser={currentUser}
+                          onOpenReturnPolicy={() => setIsReturnPolicyOpen(true)}
                         />
                       </div>
                     </div>
@@ -1941,6 +2001,12 @@ export default function App() {
         setActiveTab={setActiveTab}
       />
 
+      <ReturnPolicyModal
+        isOpen={isReturnPolicyOpen}
+        onClose={() => setIsReturnPolicyOpen(false)}
+        onViewOrders={() => setActiveTab("orders")}
+      />
+
       {/* Floating Support Button */}
       <motion.button
         drag
@@ -1953,10 +2019,7 @@ export default function App() {
         whileTap={{ scale: 0.9 }}
         onClick={() => {
           setActiveTab("support");
-          setTimeout(() => {
-            const el = document.getElementById('support-form');
-            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          }, 100);
+          scrollToTop();
         }}
         className="fixed bottom-6 right-6 z-[150] w-14 h-14 bg-[#ff6b00] text-white rounded-2xl shadow-2xl shadow-orange-500/20 flex items-center justify-center group cursor-grab active:cursor-grabbing hover:bg-orange-600"
         title="Customer Support (Drag to move me!)"

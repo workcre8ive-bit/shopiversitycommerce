@@ -15,6 +15,7 @@ const GOOGLE_MAPS_API_KEY =
 
 import { cn } from "../lib/utils";
 import ReportModal from "./ReportModal";
+import Logo from "./Logo";
 import { AlertTriangle } from "lucide-react";
 import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
 
@@ -745,20 +746,29 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
     );
   };
 
+  const computedDiscountPct = product.discountPercent && product.discountPercent > 0
+    ? product.discountPercent
+    : (product.priceBefore && product.priceBefore > product.price
+        ? Math.round(((product.priceBefore - product.price) / product.priceBefore) * 100)
+        : 0);
+
   return (
     <ContainerWrapper>
       {isPageMode ? (
-        <button
-          onClick={onClose}
-          className="mb-6 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-750 rounded-xl text-slate-750 dark:text-zinc-300 transition-all font-black text-xs uppercase tracking-wider cursor-pointer border-none flex items-center gap-1.5 shadow-sm"
-        >
-          <ArrowLeft className="w-4 h-4 text-[#ff6b00]" />
-          <span>
-            {currentUser?.role === 'seller' || product?.sellerId === currentUser?.uid 
-              ? 'Back to Seller Dashboard' 
-              : 'Back to marketplace'}
-          </span>
-        </button>
+        <div className="mb-6 flex items-center justify-between gap-4">
+          <button
+            onClick={onClose}
+            className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-750 rounded-xl text-slate-750 dark:text-zinc-300 transition-all font-black text-xs uppercase tracking-wider cursor-pointer border-none flex items-center gap-1.5 shadow-sm"
+          >
+            <ArrowLeft className="w-4 h-4 text-[#ff6b00]" />
+            <span>
+              {currentUser?.role === 'seller' || product?.sellerId === currentUser?.uid 
+                ? 'Back to Seller Dashboard' 
+                : 'Back to marketplace'}
+            </span>
+          </button>
+          <Logo showText={true} />
+        </div>
       ) : (
         <>
           <button
@@ -813,6 +823,14 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                     </div>
                   </div>
                   
+                  {/* Discount percentage tag directly on picture */}
+                  {computedDiscountPct > 0 && (
+                    <div className="absolute top-4 right-4 z-10 bg-gradient-to-r from-red-600 via-rose-600 to-pink-600 text-white font-black text-xs px-2.5 py-1 rounded-full shadow-lg border border-white/20 tracking-wider flex items-center gap-1">
+                      <Tag className="w-3 h-3" />
+                      <span>-{computedDiscountPct}%</span>
+                    </div>
+                  )}
+
                   <div className="flex items-center gap-2 bottom-6 left-6 absolute z-10">
                     <span className="px-3 py-1.5 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md rounded-xl text-[10px] font-bold text-indigo-600 uppercase tracking-wider shadow-sm">
                       {product.category}
@@ -1080,11 +1098,6 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                 </div>
 
                 {product.category !== "Food & Drinks" && (() => {
-                  const computedDiscountPct = product.discountPercent && product.discountPercent > 0
-                    ? product.discountPercent
-                    : (product.priceBefore && product.priceBefore > product.price
-                        ? Math.round(((product.priceBefore - product.price) / product.priceBefore) * 100)
-                        : 0);
                   const savedAmount = product.priceBefore && product.priceBefore > product.price
                     ? product.priceBefore - product.price
                     : 0;
@@ -1097,7 +1110,7 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                         {computedDiscountPct > 0 && (
                           <div className="absolute top-2.5 right-2.5 bg-gradient-to-r from-red-600 via-rose-600 to-pink-600 text-white font-black text-[10px] px-2.5 py-1 rounded-full shadow-md tracking-wider uppercase flex items-center gap-1 animate-pulse">
                             <Tag className="w-3 h-3" />
-                            <span>-{computedDiscountPct}% OFF</span>
+                            <span>-{computedDiscountPct}%</span>
                           </div>
                         )}
                         <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-1.5 flex items-center gap-1.5">
@@ -1163,7 +1176,7 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                             <p className="text-[9px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Discount Savings</p>
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <span className="px-2 py-0.5 bg-red-500 text-white font-black text-[10px] rounded-full uppercase tracking-wider">
-                                -{computedDiscountPct}% OFF
+                                -{computedDiscountPct}%
                               </span>
                               {savedAmount > 0 && (
                                 <span className="font-extrabold text-emerald-600 dark:text-emerald-400 text-xs">

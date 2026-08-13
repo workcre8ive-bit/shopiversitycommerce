@@ -1764,18 +1764,19 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
                     <button 
                       type="button"
                       onClick={() => setShowTermsPage(true)}
-                      className="text-[#0066c0] hover:underline hover:text-[#c45500] font-sans"
+                      className="text-[#0066c0] hover:underline hover:text-[#c45500] font-sans border-none bg-transparent cursor-pointer p-0"
                     >
                       Conditions of Use
                     </button>{" "}
                     and{" "}
-                    <button 
-                      type="button"
-                      onClick={() => setShowTermsPage(true)}
+                    <a 
+                      href="https://app.termly.io/dashboard/website/d47c888b-f6fa-4ac8-82cc-124513928d3f/privacy-policy#infosafe"
+                      target="_blank"
+                      rel="noopener noreferrer"
                       className="text-[#0066c0] hover:underline hover:text-[#c45500] font-sans"
                     >
-                      Privacy Notice
-                    </button>.
+                      Privacy Policy
+                    </a>.
                   </p>
                 </form>
 

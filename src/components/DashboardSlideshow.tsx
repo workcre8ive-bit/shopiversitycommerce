@@ -36,7 +36,7 @@ export const BUYER_SLIDES: SlideItem[] = [
     tagIcon: ShoppingBag,
     image: "https://images.unsplash.com/photo-1523240795612-9a054b0db644?auto=format&fit=crop&w=1920&q=80",
     ctaText: "Shop Campus Market",
-    accentColor: "from-purple-600/90 via-indigo-600/80 to-slate-900/95",
+    accentColor: "from-purple-950/80 via-indigo-950/60 to-slate-950/85",
   },
   {
     id: "buyer-tech",
@@ -46,7 +46,7 @@ export const BUYER_SLIDES: SlideItem[] = [
     tagIcon: Laptop,
     image: "https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&w=1920&q=80",
     ctaText: "Shop Electronics",
-    accentColor: "from-blue-600/90 via-cyan-600/80 to-slate-900/95",
+    accentColor: "from-blue-950/80 via-cyan-950/60 to-slate-950/85",
   },
   {
     id: "buyer-escrow",
@@ -56,7 +56,7 @@ export const BUYER_SLIDES: SlideItem[] = [
     tagIcon: ShieldCheck,
     image: "https://images.unsplash.com/photo-1563013544-824ae1b704d3?auto=format&fit=crop&w=1920&q=80",
     ctaText: "View My Orders",
-    accentColor: "from-emerald-600/90 via-teal-600/80 to-slate-900/95",
+    accentColor: "from-emerald-950/80 via-teal-950/60 to-slate-950/85",
   },
   {
     id: "buyer-dispatch",
@@ -66,7 +66,7 @@ export const BUYER_SLIDES: SlideItem[] = [
     tagIcon: Truck,
     image: "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&w=1920&q=80",
     ctaText: "Track Deliveries",
-    accentColor: "from-orange-600/90 via-amber-600/80 to-slate-900/95",
+    accentColor: "from-orange-950/80 via-amber-950/60 to-slate-950/85",
   }
 ];
 
@@ -79,7 +79,7 @@ export const SELLER_SLIDES: SlideItem[] = [
     tagIcon: Store,
     image: "https://images.unsplash.com/photo-1556742049-0a670f4a4591?auto=format&fit=crop&w=1920&q=80",
     ctaText: "Add New Product",
-    accentColor: "from-purple-600/90 via-indigo-600/80 to-slate-900/95",
+    accentColor: "from-purple-950/80 via-indigo-950/60 to-slate-950/85",
   },
   {
     id: "seller-payouts",
@@ -89,7 +89,7 @@ export const SELLER_SLIDES: SlideItem[] = [
     tagIcon: Wallet,
     image: "https://images.unsplash.com/photo-1559526324-4b87b5e36e44?auto=format&fit=crop&w=1920&q=80",
     ctaText: "Check Earnings",
-    accentColor: "from-emerald-600/90 via-teal-600/80 to-slate-900/95",
+    accentColor: "from-emerald-950/80 via-teal-950/60 to-slate-950/85",
   },
   {
     id: "seller-analytics",
@@ -99,7 +99,7 @@ export const SELLER_SLIDES: SlideItem[] = [
     tagIcon: BarChart3,
     image: "https://images.unsplash.com/photo-1460925895917-afdab827c52f?auto=format&fit=crop&w=1920&q=80",
     ctaText: "View Sales & Orders",
-    accentColor: "from-blue-600/90 via-indigo-600/80 to-slate-900/95",
+    accentColor: "from-blue-950/80 via-indigo-950/60 to-slate-950/85",
   },
   {
     id: "seller-couriers",
@@ -107,9 +107,9 @@ export const SELLER_SLIDES: SlideItem[] = [
     subtitle: "Easily assign verified campus dispatch companies to pick up and deliver your customer packages promptly.",
     tag: "Campus Couriers",
     tagIcon: Truck,
-    image: "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&w=1920&q=80",
+    image: "https://images.unsplash.com/photo-1616401784845-180882ba9ba8?auto=format&fit=crop&w=1920&q=80",
     ctaText: "Manage Store Inventory",
-    accentColor: "from-orange-600/90 via-amber-600/80 to-slate-900/95",
+    accentColor: "from-orange-950/80 via-amber-950/60 to-slate-950/85",
   }
 ];
 
@@ -122,7 +122,7 @@ export const LOGISTICS_SLIDES: SlideItem[] = [
     tagIcon: Truck,
     image: "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&w=1920&q=80",
     ctaText: "View Available Jobs",
-    accentColor: "from-orange-600/90 via-amber-600/80 to-slate-900/95",
+    accentColor: "from-orange-950/80 via-amber-950/60 to-slate-950/85",
   },
   {
     id: "logistics-active",
@@ -132,7 +132,7 @@ export const LOGISTICS_SLIDES: SlideItem[] = [
     tagIcon: PackageCheck,
     image: "https://images.unsplash.com/photo-1616401784845-180882ba9ba8?auto=format&fit=crop&w=1920&q=80",
     ctaText: "View Active Deliveries",
-    accentColor: "from-blue-600/90 via-cyan-600/80 to-slate-900/95",
+    accentColor: "from-blue-950/80 via-cyan-950/60 to-slate-950/85",
   },
   {
     id: "logistics-earnings",
@@ -142,7 +142,7 @@ export const LOGISTICS_SLIDES: SlideItem[] = [
     tagIcon: Wallet,
     image: "https://images.unsplash.com/photo-1559526324-4b87b5e36e44?auto=format&fit=crop&w=1920&q=80",
     ctaText: "View Delivery History",
-    accentColor: "from-emerald-600/90 via-teal-600/80 to-slate-900/95",
+    accentColor: "from-emerald-950/80 via-teal-950/60 to-slate-950/85",
   },
   {
     id: "logistics-profile",
@@ -152,7 +152,7 @@ export const LOGISTICS_SLIDES: SlideItem[] = [
     tagIcon: ShieldCheck,
     image: "https://images.unsplash.com/photo-1526628953301-3e589a6a8b74?auto=format&fit=crop&w=1920&q=80",
     ctaText: "Update Partner Profile",
-    accentColor: "from-purple-600/90 via-indigo-600/80 to-slate-900/95",
+    accentColor: "from-purple-950/80 via-indigo-950/60 to-slate-950/85",
   }
 ];
 

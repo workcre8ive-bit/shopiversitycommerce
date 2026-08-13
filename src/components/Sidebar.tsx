@@ -31,6 +31,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { UserProfile } from "../types";
 import { auth } from "../firebase";
 import { signOut } from "firebase/auth";
+import Logo from "./Logo";
 
 interface SidebarProps {
   isOpen: boolean;
@@ -124,7 +125,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
         className="fixed top-0 left-0 bottom-0 w-[85vw] max-w-[365px] bg-white dark:bg-slate-900 text-slate-900 dark:text-white z-[210] flex flex-col shadow-2xl overflow-hidden"
       >
         {/* Header */}
-        <div className="bg-brand-gradient p-8 flex flex-col gap-4 shrink-0 relative overflow-hidden">
+        <div className="bg-brand-gradient p-6 sm:p-8 flex flex-col gap-4 shrink-0 relative overflow-hidden">
           <div className="absolute top-0 right-0 w-32 h-32 bg-white/20 rounded-full -mr-16 -mt-16 blur-2xl" />
           
           {/* Elegant Close Button Inside Visible Area */}
@@ -135,6 +136,18 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
           >
             <X className="w-5 h-5" />
           </button>
+
+          {/* Shopiversity Logo inside Drawer Header */}
+          <div className="relative z-10 pb-1">
+            <Logo 
+              showText={true} 
+              onClick={() => {
+                setActiveTab(activeRole === "seller" ? "dashboard" : "market");
+                onClose();
+              }}
+              className="text-white"
+            />
+          </div>
           
           <div className="flex items-center justify-between relative z-10">
             <button
@@ -196,12 +209,9 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
                    key={item.id}
                    onClick={() => {
                     setActiveTab(item.id);
-                    if (item.id === "support") {
-                      setTimeout(() => {
-                        const el = document.getElementById('support-form');
-                        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                      }, 100);
-                    }
+                    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+                    const mainEl = document.querySelector("main");
+                    if (mainEl) mainEl.scrollTop = 0;
                     onClose();
                   }}
                   className={cn(
@@ -232,12 +242,9 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
                   key={item.id}
                   onClick={() => {
                     setActiveTab(item.id);
-                    if (item.id === "support") {
-                      setTimeout(() => {
-                        const el = document.getElementById('support-form');
-                        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                      }, 100);
-                    }
+                    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+                    const mainEl = document.querySelector("main");
+                    if (mainEl) mainEl.scrollTop = 0;
                     onClose();
                   }}
                   className={cn(
