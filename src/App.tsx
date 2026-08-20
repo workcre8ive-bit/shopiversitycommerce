@@ -334,26 +334,6 @@ export default function App() {
     scrollToTop();
   }, [activeTab, settingsSubView, viewingProduct, viewingSellerId, scrollToTop]);
 
-  // Global click listener so clicking any link or button automatically scrolls to top
-  React.useEffect(() => {
-    const handleGlobalClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (!target) return;
-      const clickable = target.closest("button, a, [role='button']");
-      if (clickable) {
-        const isInputControl = clickable.closest("input, select, textarea, [data-no-scroll='true']");
-        if (!isInputControl) {
-          scrollToTop();
-        }
-      }
-    };
-
-    document.addEventListener("click", handleGlobalClick, { capture: true });
-    return () => {
-      document.removeEventListener("click", handleGlobalClick, { capture: true });
-    };
-  }, [scrollToTop]);
-
   const setActiveTab = React.useCallback((newTab: string) => {
     if (newTab === "settings") {
       setSettingsSubView("hub");
@@ -1575,9 +1555,9 @@ export default function App() {
                   {searchType === "products" ? (
                     <div className="flex flex-wrap items-center justify-center gap-2 text-xs font-medium text-slate-500">
                       <span className="text-slate-400">Try searching:</span>
-                      {["white shirt", "textbook", "jacket", "calculator"].map((tag) => (
+                      {["white shirt", "textbook", "jacket", "calculator"].map((tag, idx) => (
                         <button
-                          key={`suggest-tag-${tag}`}
+                          key={`suggest-tag-${tag}-${idx}`}
                           onClick={() => setSearchQuery(tag)}
                           className="px-3 py-1 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-full hover:border-[#ff6b00] dark:hover:border-[#ff6b00] hover:text-[#ff6b00] dark:hover:text-[#ff6b00] transition-colors cursor-pointer"
                         >
@@ -1588,9 +1568,9 @@ export default function App() {
                   ) : (
                     <div className="flex flex-wrap items-center justify-center gap-2 text-xs font-medium text-slate-500">
                       <span className="text-slate-400">Try searching:</span>
-                      {["Bites", "Store", "Fashion", "Tutor"].map((tag) => (
+                      {["Bites", "Store", "Fashion", "Tutor"].map((tag, idx) => (
                         <button
-                          key={`suggest-tag-store-${tag}`}
+                          key={`suggest-tag-store-${tag}-${idx}`}
                           onClick={() => setSearchQuery(tag)}
                           className="px-3 py-1 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-full hover:border-[#ff6b00] dark:hover:border-[#ff6b00] hover:text-[#ff6b00] dark:hover:text-[#ff6b00] transition-colors cursor-pointer"
                         >

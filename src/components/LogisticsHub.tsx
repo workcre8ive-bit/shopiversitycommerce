@@ -1172,12 +1172,12 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
               <div className="space-y-2">
                 <label className="text-xs font-bold text-slate-400 uppercase tracking-wider ml-1 block">Vehicles in your Fleet</label>
                 <div className="flex flex-wrap gap-2">
-                  {["Bicycle", "Motorcycle", "Car", "Mini-Van", "Truck"].map((vehicle) => {
+                  {["Bicycle", "Motorcycle", "Car", "Mini-Van", "Truck"].map((vehicle, idx) => {
                     const isSelected = selectedVehicles.includes(vehicle);
                     return (
                       <button
                         type="button"
-                        key={vehicle}
+                        key={`vehicle-opt-${vehicle}-${idx}`}
                         onClick={() => handleToggleVehicle(vehicle)}
                         className={cn(
                           "px-4 py-2.5 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer",
@@ -1213,12 +1213,12 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-44 overflow-y-auto border border-slate-100 dark:border-zinc-800 p-3 rounded-2xl bg-slate-50/50 dark:bg-zinc-900/50">
-                  {filteredCampuses.slice(0, 30).map((campus) => {
+                  {filteredCampuses.slice(0, 30).map((campus, idx) => {
                     const isSelected = selectedCampuses.includes(campus);
                     return (
                       <button
                         type="button"
-                        key={campus}
+                        key={`campus-opt-${campus}-${idx}`}
                         onClick={() => handleToggleCampus(campus)}
                         className={cn(
                           "p-2.5 rounded-xl text-left text-xs font-bold transition-all border flex items-center justify-between cursor-pointer",
@@ -1389,11 +1389,11 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                   { id: "active-deliveries", label: `Active Shipments (${activeDeliveries.length})`, icon: Truck },
                   { id: "history", label: "Completed Jobs", icon: Clock },
                   { id: "profile", label: "Company Fleet Profile", icon: Building }
-                ].map((tab) => {
+                ].map((tab, idx) => {
                   const isActive = activeTab === tab.id;
                   return (
                     <button
-                      key={tab.id}
+                      key={`logistics-tab-${tab.id}-${idx}`}
                       onClick={() => setActiveTab(tab.id as any)}
                       className={cn(
                         "w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl text-xs font-bold tracking-tight transition-all text-left cursor-pointer border-none",

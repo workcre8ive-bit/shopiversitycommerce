@@ -289,7 +289,7 @@ export default function DashboardSlideshow({
         <div className="flex items-center gap-2">
           {activeSlides.map((slide, idx) => (
             <button
-              key={slide.id}
+              key={`dash-slide-dot-${slide.id}-${idx}`}
               onClick={() => {
                 setDirection(idx > currentIndex ? "right" : "left");
                 setCurrentIndex(idx);

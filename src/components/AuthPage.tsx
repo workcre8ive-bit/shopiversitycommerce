@@ -1766,17 +1766,8 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
                       onClick={() => setShowTermsPage(true)}
                       className="text-[#0066c0] hover:underline hover:text-[#c45500] font-sans border-none bg-transparent cursor-pointer p-0"
                     >
-                      Conditions of Use
-                    </button>{" "}
-                    and{" "}
-                    <a 
-                      href="https://app.termly.io/dashboard/website/d47c888b-f6fa-4ac8-82cc-124513928d3f/privacy-policy#infosafe"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-[#0066c0] hover:underline hover:text-[#c45500] font-sans"
-                    >
-                      Privacy Policy
-                    </a>.
+                      Conditions of Use & Terms
+                    </button>.
                   </p>
                 </form>
 
@@ -2033,9 +2024,9 @@ function Input({ label, type, value, onChange, className, error, strength, right
 
       {isPassword && strength !== undefined && value.length > 0 && (
         <div className="flex gap-1 h-0.5 mt-1 px-0.5">
-          {[1, 2, 3, 4].map((level) => (
+          {[1, 2, 3, 4].map((level, idx) => (
             <div
-              key={level}
+              key={`auth-pw-level-${level}-${idx}`}
               className={cn(
                 "flex-1 rounded-sm transition-colors duration-550",
                 level <= strength 

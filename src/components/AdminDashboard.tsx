@@ -424,9 +424,9 @@ export default function AdminDashboard({ currentUser, onBack }: { currentUser: a
           { id: "products", label: "Product Moderation", icon: ShieldCheck },
           { id: "moderation", label: "Contact Protection Logs", icon: ShieldAlert },
           { id: "reports", label: "Reports", icon: AlertCircle }
-        ].map((tab) => (
+        ].map((tab, idx) => (
           <button
-            key={tab.id}
+            key={`admin-tab-${tab.id}-${idx}`}
             onClick={() => setActiveTab(tab.id as any)}
             className={cn(
               "flex items-center gap-2 px-6 py-3 rounded-2xl text-sm font-bold whitespace-nowrap transition-all",
@@ -550,9 +550,9 @@ export default function AdminDashboard({ currentUser, onBack }: { currentUser: a
           <div className="p-8 bg-slate-50 dark:bg-slate-800/50 rounded-[2.5rem] border border-slate-100 dark:border-slate-800">
              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-2">Quick Filter</p>
              <div className="flex flex-wrap gap-2 mt-4">
-               {["all", "pending", "approved", "paid", "rejected"].map((f) => (
+               {["all", "pending", "approved", "paid", "rejected"].map((f, idx) => (
                  <button
-                   key={f}
+                   key={`adm-payout-filter-${f}-${idx}`}
                    onClick={() => setFilter(f as any)}
                    className={cn(
                      "px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all",
@@ -868,8 +868,8 @@ export default function AdminDashboard({ currentUser, onBack }: { currentUser: a
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-sm">
-                  {moderationLogs.map((log) => (
-                    <tr key={log.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition-colors">
+                  {moderationLogs.map((log, lIdx) => (
+                    <tr key={`sec-log-${log.id || lIdx}-${lIdx}`} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition-colors">
                       <td className="py-4 px-4">
                         <div className="font-bold text-slate-900 dark:text-white">{log.senderName || "Unknown User"}</div>
                         <div className="text-[11px] text-slate-400 font-mono mt-0.5">{log.senderId}</div>

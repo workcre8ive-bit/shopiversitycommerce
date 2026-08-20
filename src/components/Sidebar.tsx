@@ -13,6 +13,7 @@ import {
   User,
   ShieldAlert,
   History,
+  Trash2,
   FileText,
   CalendarDays,
   ChevronRight,
@@ -65,7 +66,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
     { id: "logistics", label: "Campus Logistics", icon: Truck },
     { id: "orders", label: "My Orders", icon: ShoppingBag },
     { id: "referrals", label: "Referral Program", icon: Share2 },
-    { id: "history", label: "Product History", icon: History },
+    { id: "history", label: "Product Trash", icon: Trash2 },
     { id: "support", label: "Customer Support", icon: HeartHandshake },
     { id: "feedback-help", label: "Feedback & Help", icon: MessageSquare },
     { id: "notifications", label: "Notifications", icon: Bell },
@@ -96,7 +97,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
     { id: "referrals", label: "Referral Program", icon: Share2 },
     { id: "support", label: "Customer Support", icon: HeartHandshake },
     { id: "feedback-help", label: "Feedback & Help", icon: MessageSquare },
-    { id: "history", label: "Product History", icon: History },
+    { id: "history", label: "Product Trash", icon: Trash2 },
     { id: "notifications", label: "Notifications", icon: Bell },
     { id: "messages", label: "Messages", icon: MessageSquare },
     { id: "settings", label: "Profile", icon: User },
@@ -204,9 +205,9 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
                <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-widest">Your Experience</h3>
             </div>
             <div className="space-y-1">
-              {navItems.filter(item => ["settings", "orders", "notifications", "messages", "history", "referrals", "support", "feedback-help", "admin", "payouts"].includes(item.id)).map((item) => (
+              {navItems.filter(item => ["settings", "orders", "notifications", "messages", "history", "referrals", "support", "feedback-help", "admin", "payouts"].includes(item.id)).map((item, idx) => (
                 <button
-                   key={item.id}
+                   key={`nav-exp-${item.id}-${idx}`}
                    onClick={() => {
                     setActiveTab(item.id);
                     window.scrollTo({ top: 0, left: 0, behavior: "instant" });
@@ -237,9 +238,9 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
                <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-widest">Explore Campus</h3>
             </div>
             <div className="space-y-1">
-               {navItems.filter(item => ["market", "search", "dashboard", "add-product", "my-products", "storefront", "logistics"].includes(item.id)).map((item) => (
+               {navItems.filter(item => ["market", "search", "dashboard", "add-product", "my-products", "storefront", "logistics"].includes(item.id)).map((item, idx) => (
                 <button
-                  key={item.id}
+                  key={`nav-explore-${item.id}-${idx}`}
                   onClick={() => {
                     setActiveTab(item.id);
                     window.scrollTo({ top: 0, left: 0, behavior: "instant" });

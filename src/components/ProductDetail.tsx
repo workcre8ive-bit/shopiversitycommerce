@@ -1,6 +1,6 @@
 import React from "react";
 import { Product, Review, UserProfile } from "../types";
-import { X, ArrowLeft, Star, ShoppingCart, Truck, MapPin, Send, MessageSquare, Clock, User as UserIcon, ShieldCheck, ShieldAlert, Shield, CheckCircle, ShoppingBag, Sparkles, Layout, Minus, Plus, Hash, Trash2, RotateCcw, CalendarCheck, Store, ExternalLink, Loader2, Edit2, Tag, ChevronLeft, ChevronRight, Maximize2, Share2 } from "lucide-react";
+import { X, ArrowLeft, Star, ShoppingCart, Truck, MapPin, Send, MessageSquare, Clock, User as UserIcon, ShieldCheck, ShieldAlert, Shield, CheckCircle, CheckCircle2, ShoppingBag, Sparkles, Layout, Minus, Plus, Hash, Trash2, RotateCcw, CalendarCheck, Store, ExternalLink, Loader2, Edit2, Tag, ChevronLeft, ChevronRight, Maximize2, Share2 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { auth, db } from "../firebase";
 import { collection, query, where, orderBy, onSnapshot, addDoc, doc, getDoc, setDoc, getDocs, updateDoc, deleteDoc } from "firebase/firestore";
@@ -15,6 +15,7 @@ const GOOGLE_MAPS_API_KEY =
 
 import { cn } from "../lib/utils";
 import ReportModal from "./ReportModal";
+import ReviewSuccessModal from "./ReviewSuccessModal";
 import Logo from "./Logo";
 import { AlertTriangle } from "lucide-react";
 import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
@@ -108,8 +109,11 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
   const [submitting, setSubmitting] = React.useState(false);
   const [hasPurchased, setHasPurchased] = React.useState(false);
   const [isDelivered, setIsDelivered] = React.useState(false);
+  const [unreviewedOrders, setUnreviewedOrders] = React.useState<any[]>([]);
   const [sellerProfile, setSellerProfile] = React.useState<UserProfile | null>(null);
   const [isReportModalOpen, setIsReportModalOpen] = React.useState(false);
+  const [isReviewSuccessOpen, setIsReviewSuccessOpen] = React.useState(false);
+  const [submittedReviewInfo, setSubmittedReviewInfo] = React.useState<{ rating: number; comment: string } | null>(null);
   const [activeImageIndex, setActiveImageIndex] = React.useState(0);
   const [selectedTier, setSelectedTier] = React.useState<any>(null);
   const [formResponses, setFormResponses] = React.useState<Record<string, string>>({});
@@ -549,16 +553,44 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
       try {
         const q = query(
           collection(db, "orders"),
-          where("buyerId", "==", auth.currentUser.uid),
-          where("productId", "==", product.id)
+          where("buyerId", "==", auth.currentUser.uid)
         );
         const snapshot = await getDocs(q);
         if (!snapshot.empty) {
-          setHasPurchased(true);
-          const deliveredOrder = snapshot.docs.find(doc => doc.data().status === "completed");
-          if (deliveredOrder) {
-            setIsDelivered(true);
+          const matchingOrders = snapshot.docs.filter(docSnap => {
+            const data = docSnap.data();
+            const directMatch = data.productId === product.id;
+            const itemsMatch = Array.isArray(data.items) && data.items.some((it: any) => it.id === product.id || it.productId === product.id);
+            return directMatch || itemsMatch;
+          });
+
+          if (matchingOrders.length > 0) {
+            setHasPurchased(true);
+            const isCompletedStatus = (status: string) => 
+              status === "completed" || 
+              status === "delivered" || 
+              status === "acquired" || 
+              status === "Order Delivered" || 
+              status === "Order Picked Up";
+
+            const completedOrders = matchingOrders.filter(docSnap => isCompletedStatus(docSnap.data().status));
+            if (completedOrders.length > 0) {
+              setIsDelivered(true);
+              const unreviewed = completedOrders.filter(docSnap => docSnap.data().hasReviewed !== true);
+              setUnreviewedOrders(unreviewed.map(d => ({ id: d.id, ...d.data() })));
+            } else {
+              setIsDelivered(false);
+              setUnreviewedOrders([]);
+            }
+          } else {
+            setHasPurchased(false);
+            setIsDelivered(false);
+            setUnreviewedOrders([]);
           }
+        } else {
+          setHasPurchased(false);
+          setIsDelivered(false);
+          setUnreviewedOrders([]);
         }
       } catch (error) {
         handleFirestoreError(error, OperationType.GET, "orders");
@@ -602,9 +634,18 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
     }
 
     if (!isDelivered) {
-      alert("You can only review products after they have been completed.");
+      alert("You can only review products after your order has been completed/delivered.");
       return;
     }
+
+    if (unreviewedOrders.length === 0) {
+      alert("You have already submitted a review for your purchase. You can review again after making another purchase of this item!");
+      return;
+    }
+
+    const targetOrder = unreviewedOrders[0];
+    const submittedRating = rating;
+    const submittedComment = newReview.trim();
 
     setSubmitting(true);
     try {
@@ -612,12 +653,43 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
         productId: product.id,
         buyerId: auth.currentUser.uid,
         buyerName: currentUser?.displayName || "Anonymous",
-        rating,
-        comment: newReview.trim(),
+        rating: submittedRating,
+        comment: submittedComment,
         createdAt: new Date().toISOString(),
       };
 
-      await addDoc(collection(db, "reviews"), reviewData);
+      const reviewRef = await addDoc(collection(db, "reviews"), reviewData);
+
+      // Update product rating and review count aggregates
+      try {
+        const productRef = doc(db, "products", product.id);
+        const productSnap = await getDoc(productRef);
+        if (productSnap.exists()) {
+          const pData = productSnap.data();
+          const currentCount = pData.reviewCount || 0;
+          const currentRating = pData.rating || 5;
+          const newCount = currentCount + 1;
+          const newRating = ((currentRating * currentCount) + submittedRating) / newCount;
+          await updateDoc(productRef, {
+            rating: Number(newRating.toFixed(1)),
+            reviewCount: newCount
+          });
+        }
+      } catch (pErr) {
+        console.warn("Could not update product rating metrics:", pErr);
+      }
+
+      // Mark the corresponding order as reviewed
+      if (targetOrder?.id) {
+        try {
+          await updateDoc(doc(db, "orders", targetOrder.id), {
+            hasReviewed: true,
+            reviewId: reviewRef.id
+          });
+        } catch (oErr) {
+          console.warn("Could not mark order hasReviewed:", oErr);
+        }
+      }
 
       // Notify seller
       await addDoc(collection(db, "notifications"), {
@@ -628,6 +700,11 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
         isRead: false,
         createdAt: new Date().toISOString()
       });
+
+      // Update local unreviewed state so the review box closes immediately
+      setUnreviewedOrders(prev => prev.filter(o => o.id !== targetOrder?.id));
+      setSubmittedReviewInfo({ rating: submittedRating, comment: submittedComment });
+      setIsReviewSuccessOpen(true);
 
       setNewReview("");
       setRating(5);
@@ -874,8 +951,8 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                 <div className="mb-8">
                   <div className="flex items-center gap-2 mb-2">
                     <div className="flex text-amber-400">
-                      {[1, 2, 3, 4, 5].map((s) => (
-                        <Star key={`avg-star-${s}`} className={cn("w-4 h-4 fill-current", s > Math.round(averageRating) && "text-slate-200 dark:text-slate-700 fill-none")} />
+                      {[1, 2, 3, 4, 5].map((s, sIdx) => (
+                        <Star key={`avg-star-${s}-${sIdx}`} className={cn("w-4 h-4 fill-current", s > Math.round(averageRating) && "text-slate-200 dark:text-slate-700 fill-none")} />
                       ))}
                     </div>
                     <span className="text-xs font-bold text-slate-400 dark:text-slate-500">({reviews.length} Reviews)</span>
@@ -2041,25 +2118,35 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                   <div className="space-y-4">
                     {!hasPurchased ? (
                       <div className="p-6 bg-slate-50 dark:bg-slate-800/50 rounded-3xl border border-slate-100 dark:border-slate-700 text-center">
-                        <ShoppingBag className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                        <ShoppingBag className="w-8 h-8 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
                         <p className="text-sm font-bold text-slate-500 dark:text-slate-400">You must purchase this product before you can leave a review.</p>
                       </div>
                     ) : !isDelivered ? (
                       <div className="p-6 bg-slate-50 dark:bg-slate-800/50 rounded-3xl border border-slate-100 dark:border-slate-700 text-center">
-                        <Truck className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                        <p className="text-sm font-bold text-slate-500 dark:text-slate-400">You can leave a review once your order has been delivered.</p>
+                        <Truck className="w-8 h-8 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
+                        <p className="text-sm font-bold text-slate-500 dark:text-slate-400">You can leave a review once your order has been completed/delivered.</p>
+                      </div>
+                    ) : unreviewedOrders.length === 0 ? (
+                      <div className="p-6 bg-emerald-50/60 dark:bg-emerald-950/20 rounded-3xl border border-emerald-100 dark:border-emerald-900/30 text-center space-y-2">
+                        <div className="w-12 h-12 mx-auto rounded-2xl bg-emerald-100 dark:bg-emerald-900/40 flex items-center justify-center text-emerald-600 dark:text-emerald-400">
+                          <CheckCircle2 className="w-6 h-6" />
+                        </div>
+                        <p className="text-sm font-bold text-slate-900 dark:text-white">Review Submitted</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
+                          Thank you for reviewing your purchase of this {product.type === "service" ? "service" : "item"}! You will be able to review again when you make another purchase.
+                        </p>
                       </div>
                     ) : (
                       <form onSubmit={handleSubmitReview} className="p-6 bg-slate-50 dark:bg-slate-800/50 rounded-3xl border border-slate-100 dark:border-slate-700 space-y-4">
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Your Rating</span>
                           <div className="flex gap-1">
-                            {[1, 2, 3, 4, 5].map((s) => (
+                            {[1, 2, 3, 4, 5].map((s, sIdx) => (
                               <button
-                                key={`input-star-${s}`}
+                                key={`input-star-${s}-${sIdx}`}
                                 type="button"
                                 onClick={() => setRating(s)}
-                                className="p-1 transition-transform active:scale-125"
+                                className="p-1 transition-transform active:scale-125 cursor-pointer"
                               >
                                 <Star className={cn("w-6 h-6", s <= rating ? "text-amber-400 fill-current" : "text-slate-300 dark:text-slate-700")} />
                               </button>
@@ -2070,13 +2157,13 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                           value={newReview}
                           onChange={(e) => setNewReview(e.target.value)}
                           placeholder="Share your experience with this product..."
-                          className="w-full h-24 p-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all resize-none text-slate-900 dark:text-white placeholder:text-slate-400"
+                          className="w-full h-24 p-4 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all resize-none text-slate-900 dark:text-white placeholder:text-slate-400"
                           required
                         />
                         <button
                           type="submit"
-                          disabled={submitting}
-                          className="w-full py-3 bg-slate-900 dark:bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-slate-800 dark:hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                          disabled={submitting || !newReview.trim()}
+                          className="w-full py-3.5 bg-slate-900 hover:bg-slate-800 dark:bg-indigo-600 dark:hover:bg-indigo-700 text-white rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer shadow-md"
                         >
                           {submitting ? <Clock className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                           Post Review
@@ -2127,6 +2214,14 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
         vendorId={product.sellerId} 
         vendorName={product.sellerName} 
         productId={product.id}
+      />
+
+      <ReviewSuccessModal
+        isOpen={isReviewSuccessOpen}
+        onClose={() => setIsReviewSuccessOpen(false)}
+        rating={submittedReviewInfo?.rating || 5}
+        productName={product.name}
+        comment={submittedReviewInfo?.comment || ""}
       />
 
       {/* Immersive Fullscreen Lightbox Image Gallery Overlay */}

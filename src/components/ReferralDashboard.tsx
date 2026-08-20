@@ -793,8 +793,8 @@ export default function ReferralDashboard({ user, onBack }: ReferralDashboardPro
             { step: "01", title: "Invite Friends", desc: "Share your unique link or code with your campus mates." },
             { step: "02", title: "They Register", desc: "When they sign up and start shopping on Campuzly." },
             { step: "03", title: "Earn Forever", desc: "Get 1.3% of the platform fee on every single purchase they make." }
-          ].map((item) => (
-            <div key={item.step} className="p-6 bg-white dark:bg-slate-800 rounded-[2rem] border border-slate-100 dark:border-slate-800 relative group overflow-hidden">
+          ].map((item, idx) => (
+            <div key={`ref-step-${item.step}-${idx}`} className="p-6 bg-white dark:bg-slate-800 rounded-[2rem] border border-slate-100 dark:border-slate-800 relative group overflow-hidden">
               <span className="text-4xl font-black text-slate-100 dark:text-slate-700/50 absolute top-4 right-6 group-hover:text-purple-100 dark:group-hover:text-purple-900/20 transition-colors">{item.step}</span>
               <h4 className="font-black text-slate-900 dark:text-white mb-2">{item.title}</h4>
               <p className="text-xs text-slate-500 dark:text-slate-400 font-medium leading-relaxed">{item.desc}</p>

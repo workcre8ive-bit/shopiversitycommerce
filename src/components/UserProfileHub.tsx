@@ -6,6 +6,7 @@ import {
   ShoppingBag, 
   Share2, 
   History, 
+  Trash2,
   HeartHandshake, 
   MessageSquare, 
   ShieldAlert, 
@@ -108,10 +109,10 @@ export default function UserProfileHub({
         ...(activeRole === "buyer" ? [
           {
             id: "history",
-            label: "Product History & Views",
-            sublabel: "Review items you viewed recently",
-            icon: History,
-            color: "bg-slate-500/10 text-slate-600 dark:text-slate-400",
+            label: "Product Trash",
+            sublabel: "View and manage hidden or deleted product history",
+            icon: Trash2,
+            color: "bg-red-500/10 text-red-600 dark:text-red-400",
             onClick: () => onNavigateTab("history")
           }
         ] : [])
@@ -284,11 +285,11 @@ export default function UserProfileHub({
               {group.title}
             </h4>
             <div className="bg-white dark:bg-zinc-900/85 rounded-3xl border border-slate-150/60 dark:border-zinc-800/80 overflow-hidden shadow-sm divide-y divide-slate-100 dark:divide-zinc-800/60">
-              {group.items.map((item) => {
+              {group.items.map((item, itemIdx) => {
                 const Icon = item.icon;
                 return (
                   <button
-                    key={item.id}
+                    key={`hub-item-${item.id}-${gIdx}-${itemIdx}`}
                     onClick={item.onClick}
                     className="w-full px-4 py-3.5 hover:bg-orange-50/20 dark:hover:bg-zinc-800/45 transition-colors flex items-center justify-between text-left group cursor-pointer"
                   >

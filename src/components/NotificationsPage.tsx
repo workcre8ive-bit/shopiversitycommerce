@@ -176,9 +176,9 @@ export default function NotificationsPage({ onBack }: NotificationsPageProps) {
       </div>
 
       <div className="flex items-center gap-2 p-1 bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 w-fit">
-        {(["all", "unread", "read"] as const).map((f) => (
+        {(["all", "unread", "read"] as const).map((f, idx) => (
           <button
-            key={f}
+            key={`notif-filter-${f}-${idx}`}
             onClick={() => setFilter(f)}
             className={cn(
               "px-6 py-2 rounded-xl text-xs font-bold uppercase tracking-widest transition-all",

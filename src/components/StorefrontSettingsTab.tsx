@@ -327,12 +327,12 @@ export default function StorefrontSettingsTab({ user }: StorefrontSettingsTabPro
               One-Click Design Presets (Visual Themes)
             </label>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {PRESET_THEMES.map(preset => {
+              {PRESET_THEMES.map((preset, pIdx) => {
                 const isSelected = settings.theme === preset.theme && settings.customFont === preset.customFont && settings.primaryColor === preset.primaryColor;
                 return (
                   <button
                     type="button"
-                    key={preset.id}
+                    key={`preset-theme-${preset.id}-${pIdx}`}
                     onClick={() => applyPresetTheme(preset)}
                     className={cn(
                       "p-5 rounded-2xl border text-left transition-all duration-300 relative overflow-hidden group cursor-pointer",
@@ -367,10 +367,10 @@ export default function StorefrontSettingsTab({ user }: StorefrontSettingsTabPro
               </label>
               
               <div className="flex flex-wrap gap-2 mb-3">
-                {PRESET_COLORS.map(color => (
+                {PRESET_COLORS.map((color, idx) => (
                   <button
                     type="button"
-                    key={color.name}
+                    key={`color-preset-${color.name || idx}-${idx}`}
                     onClick={() => setSettings({ ...settings, primaryColor: color.value })}
                     className="w-8 h-8 rounded-full border-2 transition-transform hover:scale-110 flex items-center justify-center cursor-pointer shadow-sm relative"
                     style={{ backgroundColor: color.value, borderColor: settings.primaryColor === color.value ? "#ffffff" : "transparent" }}
@@ -411,8 +411,8 @@ export default function StorefrontSettingsTab({ user }: StorefrontSettingsTabPro
                 onChange={(e) => setSettings({ ...settings, customFont: e.target.value })}
                 className="w-full h-13 px-5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 focus:bg-white focus:border-orange-500 rounded-2xl text-sm font-bold text-slate-800 dark:text-zinc-200 outline-none cursor-pointer"
               >
-                {PRESET_FONTS.map(font => (
-                  <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" key={font.value} value={font.value}>{font.name}</option>
+                {PRESET_FONTS.map((font, idx) => (
+                  <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" key={`font-preset-${font.value || idx}-${idx}`} value={font.value}>{font.name}</option>
                 ))}
               </select>
               <div className="p-3 bg-slate-50 dark:bg-slate-850/60 rounded-xl border border-slate-200/50 dark:border-slate-800/60 text-slate-500">
@@ -453,10 +453,10 @@ export default function StorefrontSettingsTab({ user }: StorefrontSettingsTabPro
              </label>
              
              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-               {["small", "medium", "large"].map(height => (
+               {["small", "medium", "large"].map((height, idx) => (
                  <button
                    type="button"
-                   key={height}
+                   key={`banner-height-${height}-${idx}`}
                    onClick={() => setSettings({ ...settings, bannerHeight: height as any })}
                    className={cn(
                      "py-3 rounded-xl border text-xs font-black uppercase tracking-widest transition-all cursor-pointer",

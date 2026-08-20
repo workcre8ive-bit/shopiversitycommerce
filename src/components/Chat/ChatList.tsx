@@ -441,9 +441,9 @@ export default function ChatList({ onSelectChat, selectedChatId }: ChatListProps
               <p className="text-[10px] text-slate-400 mt-0.5">Try searching another name or business name!</p>
             </div>
           ) : (
-            filteredSellers.map((seller) => (
+            filteredSellers.map((seller, idx) => (
               <div
-                key={`seller-search-item-${seller.uid}`}
+                key={`seller-search-item-${seller.uid || idx}-${idx}`}
                 onClick={() => handleInitiateSellerChat(seller)}
                 className="w-full p-3 rounded-xl flex items-center gap-3 bg-white dark:bg-zinc-900 hover:bg-slate-50 dark:hover:bg-zinc-850/60 border border-slate-100 dark:border-zinc-850/70 transition-all cursor-pointer select-none"
               >

@@ -648,11 +648,11 @@ export default function SalesAnalytics({
           <div className="flex flex-wrap items-center gap-3">
             {/* Time Period Selector Tabs */}
             <div className="bg-slate-100 dark:bg-slate-800/80 p-1.5 rounded-2xl border border-slate-200/80 dark:border-slate-700/80 flex flex-wrap items-center gap-1">
-              {(['daily', 'weekly', 'monthly', 'quarterly', 'yearly'] as TimePeriod[]).map((p) => {
+              {(['daily', 'weekly', 'monthly', 'quarterly', 'yearly'] as TimePeriod[]).map((p, pIdx) => {
                 const isActive = period === p;
                 return (
                   <button
-                    key={p}
+                    key={`period-btn-${p}-${pIdx}`}
                     type="button"
                     onClick={() => setPeriod(p)}
                     className={cn(
@@ -679,11 +679,11 @@ export default function SalesAnalytics({
                   { id: 1, label: 'Quarter 2', shortLabel: 'Q2', range: 'Apr - Jun' },
                   { id: 2, label: 'Quarter 3', shortLabel: 'Q3', range: 'Jul - Sep' },
                   { id: 3, label: 'Quarter 4', shortLabel: 'Q4', range: 'Oct - Dec' },
-                ].map((q) => {
+                ].map((q, qIdx) => {
                   const isSelected = selectedQuarter === q.id;
                   return (
                     <button
-                      key={q.id}
+                      key={`quarter-opt-${q.id}-${qIdx}`}
                       type="button"
                       onClick={() => setSelectedQuarter(q.id)}
                       className={cn(
@@ -904,9 +904,9 @@ export default function SalesAnalytics({
                   { id: 1, label: 'Q2', range: 'Apr-Jun' },
                   { id: 2, label: 'Q3', range: 'Jul-Sep' },
                   { id: 3, label: 'Q4', range: 'Oct-Dec' },
-                ].map((q) => (
+                ].map((q, qIdx) => (
                   <button
-                    key={q.id}
+                    key={`chart-quarter-${q.id}-${qIdx}`}
                     type="button"
                     onClick={() => setSelectedQuarter(q.id)}
                     className={cn(

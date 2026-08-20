@@ -961,11 +961,11 @@ export default function SellerDashboard({
                   { id: "referrals", label: "Referral Hub", icon: Users, desc: "Earn commission rewards", color: "from-indigo-500 to-cyan-500" },
                   { id: "history", label: "Trash & Archive", icon: Trash2, desc: "Restore deleted items", color: "from-slate-500 to-zinc-500" },
                   { id: "settings", label: "Edit Profile", icon: UserCircle, desc: "Update shop & pickup info", color: "from-amber-500 to-yellow-500" }
-                ].map((item) => {
+                ].map((item, idx) => {
                   const Icon = item.icon;
                   return (
                     <button
-                      key={item.id}
+                      key={`seller-quick-nav-${item.id}-${idx}`}
                       type="button"
                       onClick={() => {
                         if (item.id === "settings") {
@@ -1212,9 +1212,8 @@ export default function SellerDashboard({
                   { id: "all", label: "All Items", icon: LayoutGrid },
                   { id: "good", label: "Goods", icon: Package },
                   { id: "service", label: "Services", icon: Sparkles }
-                ].map(tab => (
-                  <button
-                    key={tab.id}
+                ].map((tab, idx) => (
+                  <button key={`tab-${tab.id}-${idx}`}
                     onClick={() => setProductActiveType(tab.id as any)}
                     className={cn(
                       "flex items-center gap-2 px-4 sm:px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shrink-0 cursor-pointer",
@@ -1282,7 +1281,7 @@ export default function SellerDashboard({
           >
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="text-xl font-bold text-slate-900 dark:text-white">Product History (Trash)</h3>
+                <h3 className="text-xl font-bold text-slate-900 dark:text-white">Product Trash</h3>
                 <p className="text-sm text-slate-500 dark:text-slate-400">Manage your deleted products. You can restore them or delete permanently.</p>
               </div>
             </div>
@@ -4668,7 +4667,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
             const isActive = formStep === step.id;
             const isDone = ["details", "pricing", "logistics", "images"].indexOf(formStep) > ["details", "pricing", "logistics", "images"].indexOf(step.id);
             return (
-              <React.Fragment key={step.id}>
+              <React.Fragment key={`seller-step-${step.id}-${idx}`}>
                 {idx > 0 && <div className={`flex-1 h-0.5 mx-1 ${isDone ? "bg-purple-600" : "bg-slate-200 dark:bg-zinc-800"}`} />}
                 <button
                   type="button"
@@ -4740,10 +4739,10 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {mapping.fields.map((field) => {
+                    {mapping.fields.map((field, idx) => {
                       const stateVal = getFieldState(field.id);
                       return (
-                        <div key={field.id} className="space-y-2 col-span-1">
+                        <div key={`dyn-field-${field.id}-${idx}`} className="space-y-2 col-span-1">
                           <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 font-bold">
                             {field.label} {field.required && <span className="text-red-500">*</span>}
                           </label>
@@ -4753,8 +4752,8 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                               onChange={(e) => stateVal.onChange(e.target.value)}
                               className="w-full h-12 px-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm outline-none focus:border-indigo-500 transition-all text-slate-800 dark:text-slate-100"
                             >
-                              {field.options?.map(opt => (
-                                <option key={opt} value={opt}>{opt}</option>
+                              {field.options?.map((opt, optIdx) => (
+                                <option key={`dyn-opt-${opt}-${optIdx}`} value={opt}>{opt}</option>
                               ))}
                             </select>
                           ) : field.type === 'textarea' ? (
@@ -5123,11 +5122,11 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
             >
               <option value="" disabled className="bg-white dark:bg-slate-900">Select Category</option>
               {type === "good" 
-                ? GOODS_CATEGORIES.map(cat => (
-                    <option key={cat} value={cat} className="bg-white dark:bg-slate-900">{cat}</option>
+                ? GOODS_CATEGORIES.map((cat, catIdx) => (
+                    <option key={`goods-cat-${cat}-${catIdx}`} value={cat} className="bg-white dark:bg-slate-900">{cat}</option>
                   ))
-                : SERVICE_CATEGORIES.map(cat => (
-                    <option key={cat} value={cat} className="bg-white dark:bg-slate-900">{cat}</option>
+                : SERVICE_CATEGORIES.map((cat, catIdx) => (
+                    <option key={`srv-cat-${cat}-${catIdx}`} value={cat} className="bg-white dark:bg-slate-900">{cat}</option>
                   ))
               }
             </select>
@@ -5147,9 +5146,9 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
           <div className="space-y-2">
             <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">Condition</label>
             <div className="grid grid-cols-3 gap-2">
-              {["new", "refurbished", "used"].map((c) => (
+              {["new", "refurbished", "used"].map((c, cIdx) => (
                 <button
-                  key={c}
+                  key={`condition-opt-${c}-${cIdx}`}
                   type="button"
                   onClick={() => setCondition(c as any)}
                   className={cn(
@@ -5332,8 +5331,8 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                         className="w-full h-11 px-4 bg-slate-50 dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:bg-white dark:focus:bg-slate-900 focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white font-semibold shadow-sm"
                       >
                         <option value="">select state</option>
-                        {NIGERIAN_STATES.map((s) => (
-                          <option key={s} value={s}>{s}</option>
+                        {NIGERIAN_STATES.map((s, idx) => (
+                          <option key={`seller-state-${s}-${idx}`} value={s}>{s}</option>
                         ))}
                       </select>
                     </div>
@@ -5349,8 +5348,8 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                         className="w-full h-11 px-4 bg-slate-50 dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:bg-white dark:focus:bg-slate-900 focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white font-semibold disabled:opacity-50 shadow-sm"
                       >
                         <option value="">select local government</option>
-                        {addrState && (NIGERIAN_LGAS[addrState] || []).map((l) => (
-                          <option key={l} value={l}>{l}</option>
+                        {addrState && (NIGERIAN_LGAS[addrState] || []).map((l, idx) => (
+                          <option key={`seller-lga-${l}-${idx}`} value={l}>{l}</option>
                         ))}
                       </select>
                     </div>
@@ -5373,8 +5372,8 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                           className="flex-1 h-11 px-3 bg-slate-50 dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:bg-white dark:focus:bg-slate-900 focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white font-semibold disabled:opacity-50 shadow-sm"
                         >
                           <option value="">select town/ city</option>
-                          {addrState && (STATE_CITIES[addrState] || []).map((c) => (
-                            <option key={c} value={c}>{c}</option>
+                          {addrState && (STATE_CITIES[addrState] || []).map((c, idx) => (
+                            <option key={`seller-city-${c}-${idx}`} value={c}>{c}</option>
                           ))}
                           <option value="custom">✍️ Custom City...</option>
                         </select>
@@ -5496,9 +5495,9 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                           </button>
                           {NIGERIAN_CAMPUSES.filter(camp => 
                             camp.toLowerCase().includes(campusSearchQuery.toLowerCase())
-                          ).slice(0, 20).map((camp) => (
+                          ).slice(0, 20).map((camp, campIdx) => (
                             <button
-                              key={camp}
+                              key={`camp-opt-${camp}-${campIdx}`}
                               type="button"
                               onMouseDown={() => {
                                 setAddrSchool(camp);

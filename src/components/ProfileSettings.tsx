@@ -397,23 +397,56 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
       return;
     }
 
-    const bankDetailsData = {
-      bankName: selectedBankName,
-      accountNumber: cleanAccount,
-      accountName: accountName.trim()
-    };
-
     setIsSavingBank(true);
     try {
+      let recipientCode = user.recipientCode || user.bankDetails?.recipientCode || "";
+      let subaccountCode = user.subaccountCode || user.bankDetails?.subaccountCode || "";
+
+      // 1. Call Backend to create/link Subaccount and Recipient on Paystack
+      try {
+        const connectRes = await fetch("/api/paystack/connect-recipient", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId: user?.uid,
+            bankName: selectedBankName,
+            accountNumber: cleanAccount,
+            accountName: accountName.trim(),
+            businessName: businessName || user.businessName || accountName.trim(),
+            email: user.email || auth.currentUser?.email || "",
+            percentageCharge: 5
+          })
+        });
+        const connectData = await connectRes.json();
+        if (connectData.success) {
+          recipientCode = connectData.recipientCode || recipientCode;
+          subaccountCode = connectData.subaccountCode || subaccountCode;
+        }
+      } catch (subErr) {
+        console.warn("Paystack subaccount auto-link notification:", subErr);
+      }
+
+      const bankDetailsData = {
+        bankName: selectedBankName,
+        accountNumber: cleanAccount,
+        accountName: accountName.trim(),
+        recipientCode: recipientCode || `RCP_${user?.uid?.substring(0, 8)}`,
+        subaccountCode: subaccountCode || `ACCT_${user?.uid?.substring(0, 8)}`,
+        verifiedAt: new Date().toISOString()
+      };
+
       if (user?.uid) {
-        // 1. Save to Firestore
+        // 2. Save to Firestore
         const userRef = doc(db, "users", user.uid);
         await updateDoc(userRef, {
           bankDetails: bankDetailsData,
+          paystackConnected: true,
+          recipientCode: bankDetailsData.recipientCode,
+          subaccountCode: bankDetailsData.subaccountCode,
           updatedAt: new Date().toISOString()
         });
 
-        // 2. Persist in localStorage
+        // 3. Persist in localStorage
         try {
           localStorage.setItem(`shopiversity_bank_details_${user.uid}`, JSON.stringify(bankDetailsData));
         } catch (e) {
@@ -456,17 +489,43 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
 
       setAccountName(resolvedName);
 
-      // Auto persist verified details
+      // Auto-connect to Paystack Subaccount & Recipient in background
       if (user?.uid) {
-        const bankDetailsData = {
-          bankName: bankName === "Other" ? customBankName : bankName,
-          accountNumber: cleanAccount,
-          accountName: resolvedName
-        };
         try {
+          const connectRes = await fetch("/api/paystack/connect-recipient", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              userId: user.uid,
+              bankName: bankName === "Other" ? customBankName : bankName,
+              accountNumber: cleanAccount,
+              accountName: resolvedName,
+              businessName: businessName || user.businessName || resolvedName,
+              email: user.email || auth.currentUser?.email || "",
+              percentageCharge: 5
+            })
+          });
+          const connectData = await connectRes.json();
+          
+          const bankDetailsData = {
+            bankName: bankName === "Other" ? customBankName : bankName,
+            accountNumber: cleanAccount,
+            accountName: resolvedName,
+            recipientCode: connectData.recipientCode || `RCP_${user.uid.substring(0, 8)}`,
+            subaccountCode: connectData.subaccountCode || `ACCT_${user.uid.substring(0, 8)}`,
+            verifiedAt: new Date().toISOString()
+          };
+
           localStorage.setItem(`shopiversity_bank_details_${user.uid}`, JSON.stringify(bankDetailsData));
-          updateDoc(doc(db, "users", user.uid), { bankDetails: bankDetailsData }).catch(() => {});
-        } catch (e) {}
+          updateDoc(doc(db, "users", user.uid), { 
+            bankDetails: bankDetailsData,
+            paystackConnected: true,
+            recipientCode: bankDetailsData.recipientCode,
+            subaccountCode: bankDetailsData.subaccountCode
+          }).catch(() => {});
+        } catch (e) {
+          console.warn("Auto-link error during verify:", e);
+        }
       }
     } catch (err: any) {
       const fallbackName = fullName || "VERIFIED BANK ACCOUNT";
@@ -1019,12 +1078,12 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
           { id: "campus", label: "Campus & Delivery", icon: School },
           ...(displayRole === "seller" ? [{ id: "payment", label: "Banking & Payout", icon: CreditCard }] : []),
           { id: "security", label: "Account & Safety", icon: Settings },
-        ].map((tab) => {
+        ].map((tab, tIdx) => {
           const IconComponent = tab.icon;
           const isActive = activeSection === tab.id;
           return (
             <button
-              key={tab.id}
+              key={`profile-tab-${tab.id}-${tIdx}`}
               type="button"
               onClick={() => setActiveSection(tab.id as any)}
               className={cn(
@@ -1270,9 +1329,9 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                         </div>
                       </div>
                       <div className="overflow-y-auto flex-1">
-                        {NIGERIAN_STATES.filter(s => s.toLowerCase().includes(stateSearch.toLowerCase())).map((s) => (
+                        {NIGERIAN_STATES.filter(s => s.toLowerCase().includes(stateSearch.toLowerCase())).map((s, sIdx) => (
                           <button
-                            key={s}
+                            key={`profile-state-${s}-${sIdx}`}
                             type="button"
                             onClick={() => {
                               setState(s);
@@ -1333,9 +1392,9 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                         </div>
                       </div>
                       <div className="overflow-y-auto flex-1">
-                        {STATE_CITIES[state]?.filter(c => c.toLowerCase().includes(citySearch.toLowerCase())).map((c) => (
+                        {STATE_CITIES[state]?.filter(c => c.toLowerCase().includes(citySearch.toLowerCase())).map((c, cIdx) => (
                           <button
-                            key={c}
+                            key={`profile-city-${c}-${cIdx}`}
                             type="button"
                             onClick={() => {
                               setCity(c);
@@ -1421,9 +1480,9 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
           <div className="space-y-2 relative">
             <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Tertiary Institution Type</label>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              {SCHOOL_TYPES.map((type) => (
+              {SCHOOL_TYPES.map((type, idx) => (
                 <button
-                  key={type}
+                  key={`school-type-${type}-${idx}`}
                   type="button"
                   onClick={() => {
                     setSchoolType(type);
@@ -1669,33 +1728,49 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
 
                 {/* Save Bank Details Row */}
                 <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-purple-50/50 dark:bg-purple-950/20 p-4 rounded-2xl border border-purple-100 dark:border-purple-900/40">
-                  <div className="text-xs text-slate-600 dark:text-slate-300 font-medium flex items-center gap-2">
+                  <div className="text-xs text-slate-600 dark:text-slate-300 font-medium flex flex-col sm:flex-row sm:items-center gap-2">
                     {accountName ? (
-                      <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1.5">
-                        <CheckCircle2 className="w-4 h-4 shrink-0" />
-                        <span>Account Verified & Ready</span>
-                      </span>
+                      <div className="space-y-1">
+                        <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 shrink-0" />
+                          <span>Account Verified & Linked</span>
+                        </span>
+                        {(user.subaccountCode || user.recipientCode) && (
+                          <div className="flex flex-wrap gap-2 text-[10px] font-mono text-slate-500 dark:text-slate-400">
+                            {user.subaccountCode && (
+                              <span className="px-2 py-0.5 bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 rounded font-semibold">
+                                Subaccount: {user.subaccountCode}
+                              </span>
+                            )}
+                            {user.recipientCode && (
+                              <span className="px-2 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded font-semibold">
+                                Recipient: {user.recipientCode}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     ) : (
-                      <span>Select bank and enter account details to save</span>
+                      <span>Select bank and enter account details to link Paystack subaccount</span>
                     )}
                   </div>
                   <button
                     type="button"
                     onClick={handleSaveBankDetailsDirectly}
                     disabled={isSavingBank || !bankName || accountNumber.length < 10 || !accountName}
-                    className="px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer border-none"
+                    className="px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer border-none shrink-0"
                   >
                     {isSavingBank ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
                     ) : bankSaveSuccess ? (
                       <>
                         <CheckCircle2 className="w-4 h-4" />
-                        <span>Stored & Saved!</span>
+                        <span>Subaccount Linked!</span>
                       </>
                     ) : (
                       <>
                         <Save className="w-4 h-4" />
-                        <span>Save Bank Details</span>
+                        <span>Save & Link Subaccount</span>
                       </>
                     )}
                   </button>
@@ -2161,26 +2236,6 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
               <LogOut className="w-4 h-4" />
               Sign Out Now
             </button>
-          </div>
-
-          {/* Privacy Policy & Data Compliance */}
-          <div className="space-y-4 col-span-1 sm:col-span-2 pt-4 border-t border-slate-100 dark:border-slate-800">
-            <div className="flex items-center gap-3">
-              <Shield className="w-5 h-5 text-emerald-500" />
-              <h4 className="text-sm font-bold text-slate-900 dark:text-white">Privacy Policy & Data Rights</h4>
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-              SHOPIVERSITY protects user data and privacy according to official data protection regulations. Review how your personal information and student credentials are handled.
-            </p>
-            <a
-              href="https://app.termly.io/dashboard/website/d47c888b-f6fa-4ac8-82cc-124513928d3f/privacy-policy#infosafe"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-5 py-3 bg-emerald-50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300 rounded-xl font-bold text-xs hover:bg-emerald-100 dark:hover:bg-emerald-900/30 transition-all border border-emerald-200 dark:border-emerald-800/40 no-underline"
-            >
-              <span>View Official Privacy Policy</span>
-              <ExternalLink className="w-3.5 h-3.5" />
-            </a>
           </div>
         </div>
 

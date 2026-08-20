@@ -249,15 +249,15 @@ export default function ProductHistory({ onBack }: ProductHistoryProps) {
               <ArrowLeft className="w-5 h-5 group-hover:-translate-x-1 transition-transform" />
             </button>
           )}
-          <div className="w-12 h-12 bg-purple-50 dark:bg-purple-900/10 rounded-2xl flex items-center justify-center text-purple-600">
-            <History className="w-6 h-6" />
+          <div className="w-12 h-12 bg-red-50 dark:bg-red-950/30 rounded-2xl flex items-center justify-center text-red-600">
+            <Trash2 className="w-6 h-6" />
           </div>
           <div>
             <h2 className="text-2xl font-black text-slate-900 dark:text-white font-display tracking-tight">
-              {view === "recent" ? "Product History" : "Restore Hidden Items"}
+              {view === "recent" ? "Product Trash & History" : "Restore Trash / Hidden Items"}
             </h2>
             <p className="text-sm font-medium text-slate-500 dark:text-slate-400">
-              {view === "recent" ? "Delivered products and recently viewed items" : "Items you've hidden can be restored to your history here"}
+              {view === "recent" ? "Delivered products, viewed history, and removed items" : "Items moved to trash can be restored here"}
             </p>
           </div>
         </div>

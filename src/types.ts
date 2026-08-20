@@ -28,6 +28,10 @@ export interface UserProfile {
   schoolType?: string;
   schoolName?: string;
   verificationIdUrl?: string;
+  idType?: string;
+  idNumber?: string;
+  verificationMethod?: "id" | "face" | "both";
+  faceVerificationUrl?: string;
   isVerified: boolean;
   isSuspended: boolean;
   strikeCount?: number;
@@ -44,6 +48,8 @@ export interface UserProfile {
   sellerType?: "goods" | "services" | "both";
   gender?: "male" | "female" | "other";
   paystackConnected?: boolean;
+  recipientCode?: string;
+  subaccountCode?: string;
   hibernatedUntil?: string;
   profileCompleted?: boolean;
   hasMadePurchase?: boolean;
@@ -51,6 +57,10 @@ export interface UserProfile {
     bankName: string;
     accountNumber: string;
     accountName: string;
+    bankCode?: string;
+    recipientCode?: string;
+    subaccountCode?: string;
+    verifiedAt?: string;
   };
   theme?: "light" | "dark";
   storefrontSettings?: StorefrontSettings;

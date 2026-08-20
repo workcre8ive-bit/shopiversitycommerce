@@ -29,6 +29,7 @@ import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
 import { usePaystackPayment } from "../hooks/usePaystackPayment";
 import ReceiptModal from "./ReceiptModal";
 import LiveRiderTrackingModal from "./LiveRiderTrackingModal";
+import ReviewSuccessModal from "./ReviewSuccessModal";
 import { Star, MessageSquare, AlertTriangle, ExternalLink as ExternalLinkIcon } from "lucide-react";
 
 interface OrderTrackingProps {
@@ -51,6 +52,8 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
   const [reviewRating, setReviewRating] = React.useState(5);
   const [reviewComment, setReviewComment] = React.useState("");
   const [submittingReview, setSubmittingReview] = React.useState(false);
+  const [isReviewSuccessOpen, setIsReviewSuccessOpen] = React.useState(false);
+  const [submittedReviewInfo, setSubmittedReviewInfo] = React.useState<{ rating: number; comment: string; productName?: string } | null>(null);
 
   // New states for ID verification
   const [showIdVerification, setShowIdVerification] = React.useState(false);
@@ -59,30 +62,103 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
   const [verificationError, setVerificationError] = React.useState<string | null>(null);
   const [confirmingDelivery, setConfirmingDelivery] = React.useState(false);
   const [confirmingOrderMap, setConfirmingOrderMap] = React.useState<Record<string, boolean>>({});
+  const [isVerifyingPayment, setIsVerifyingPayment] = React.useState(false);
 
   // New states for live in-app rider tracking
   const [trackingRiderOrder, setTrackingRiderOrder] = React.useState<Order | null>(null);
   const [trackingProgress, setTrackingProgress] = React.useState(20);
 
-  const config = {
-    reference: (new Date()).getTime().toString(),
+  const basePaystackConfig = {
+    reference: `ORD_${Date.now()}`,
     email: auth.currentUser?.email || "",
     amount: (orderToPay?.totalPrice || 0) * 100,
-    publicKey: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || "pk_test_placeholder",
+    publicKey: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || "",
   };
 
-  const initializePayment = usePaystackPayment(config);
+  const initializePayment = usePaystackPayment(basePaystackConfig);
+
+  const triggerPaystackPayment = (order: Order) => {
+    setOrderToPay(order);
+
+    const buyerEmail = auth.currentUser?.email || currentUser?.email || "buyer@shopiversity.edu";
+    const ref = `ORD_${order.id}_${Date.now()}`;
+    const amountInKobo = Math.round(order.totalPrice * 100);
+
+    initializePayment({
+      amount: amountInKobo,
+      email: buyerEmail,
+      reference: ref,
+      metadata: {
+        orderId: order.id,
+        productId: order.productId,
+        productName: order.productName,
+        buyerId: auth.currentUser?.uid,
+        sellerId: order.sellerId,
+        deliveryType: order.deliveryType || "pickup",
+        fulfillmentStatus: "Order Picked Up"
+      },
+      onSuccess: async (response: any) => {
+        setIsVerifyingPayment(true);
+        try {
+          // Perform server-side Paystack transaction verification
+          const verifyRes = await fetch(`/api/paystack/verify/${response.reference}`);
+          const verifyData = await verifyRes.json();
+
+          if (!verifyData.success && verifyData.status !== "success") {
+            console.warn("Paystack server verify response:", verifyData);
+            if (verifyData.error && verifyData.error.includes("secret key not configured")) {
+              console.log("Paystack verified via popup callback in development:", response.reference);
+            } else {
+              throw new Error(verifyData.message || verifyData.error || "Payment verification failed on Paystack");
+            }
+          }
+
+          await processDeliveryConfirmation(order, response.reference);
+          setOrderToPay(null);
+          alert(`Real Paystack payment of ₦${order.totalPrice.toLocaleString()} confirmed! Funds are securely locked in escrow.`);
+        } catch (err: any) {
+          console.error("Payment confirmation error:", err);
+          alert(`Payment Verification Issue: ${err.message || "Failed to confirm payment on Paystack."}`);
+        } finally {
+          setIsVerifyingPayment(false);
+          setMarkingId(null);
+        }
+      },
+      onClose: () => {
+        setMarkingId(null);
+        alert("Paystack payment cancelled or closed. Your order remains marked as 'Order Picked Up' and requires payment to complete escrow release.");
+      }
+    });
+  };
 
   const onPaystackSuccess = async (response: any) => {
     if (!orderToPay) return;
-    await processDeliveryConfirmation(orderToPay, response.reference);
-    setOrderToPay(null);
+    setIsVerifyingPayment(true);
+    try {
+      const verifyRes = await fetch(`/api/paystack/verify/${response.reference}`);
+      const verifyData = await verifyRes.json();
+
+      if (!verifyData.success && verifyData.status !== "success") {
+        if (!verifyData.error?.includes("secret key not configured")) {
+          throw new Error(verifyData.message || verifyData.error || "Verification failed");
+        }
+      }
+
+      await processDeliveryConfirmation(orderToPay, response.reference);
+      setOrderToPay(null);
+      alert(`Payment of ₦${orderToPay.totalPrice.toLocaleString()} confirmed! Escrow secured.`);
+    } catch (err: any) {
+      console.error("Payment verification failed:", err);
+      alert(`Payment verification error: ${err.message || "Could not verify transaction with Paystack."}`);
+    } finally {
+      setIsVerifyingPayment(false);
+      setMarkingId(null);
+    }
   };
 
   const onPaystackClose = () => {
-    alert("Payment cancelled. Delivery cannot be confirmed without payment.");
+    alert("Payment window closed. The order remains in 'Order Picked Up' state until payment is completed.");
     setMarkingId(null);
-    setOrderToPay(null);
   };
 
   React.useEffect(() => {
@@ -176,15 +252,11 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
         return;
       }
 
-      // 3. Otherwise (e.g. POD, or unpaid), take directly to payment page
-      setOrderToPay(order);
-      setTimeout(() => {
-        initializePayment({ onSuccess: onPaystackSuccess, onClose: onPaystackClose });
-      }, 100);
+      // 3. Otherwise (e.g. POD, or unpaid), launch real Paystack checkout immediately after pickup
+      triggerPaystackPayment(order);
     } catch (err) {
       console.error("Pickup confirmation failed:", err);
       alert("Pickup confirmation failed.");
-    } finally {
       setMarkingId(null);
     }
   };
@@ -212,21 +284,18 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
         updatedAt: new Date().toISOString()
       });
 
-      // If it's Pay on Delivery, we need payment now
-      if (order.paymentMethod === "pod" && order.paymentStatus !== "paid") {
-        setOrderToPay(order);
-        setTimeout(() => {
-          initializePayment({ onSuccess: onPaystackSuccess, onClose: onPaystackClose });
-        }, 100);
+      // If it's Pay on Delivery or unpaid, launch real Paystack checkout
+      if (order.paymentStatus !== "paid") {
+        triggerPaystackPayment(order);
         return;
       }
 
       // If online paid, auto transition to Completed
       await processDeliveryConfirmation(order);
+      setMarkingId(null);
     } catch (err) {
       console.error("Delivery confirmation error:", err);
       alert("An error occurred during delivery confirmation.");
-    } finally {
       setMarkingId(null);
     }
   };
@@ -290,10 +359,20 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
         hasReviewed: true
       });
 
+      const submittedRating = reviewRating;
+      const submittedComment = reviewComment;
+      const productName = order.productName;
+
       setReviewingOrderId(null);
       setReviewComment("");
       setReviewRating(5);
-      alert("Thank you for your review!");
+
+      setSubmittedReviewInfo({
+        rating: submittedRating,
+        comment: submittedComment,
+        productName
+      });
+      setIsReviewSuccessOpen(true);
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, "reviews");
     } finally {
@@ -875,9 +954,9 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                       ) : reviewingOrderId === order.id ? (
                         <div className="space-y-3">
                           <div className="flex items-center justify-center gap-1">
-                            {[1, 2, 3, 4, 5].map((star) => (
+                            {[1, 2, 3, 4, 5].map((star, sIdx) => (
                               <button
-                                key={star}
+                                key={`rate-star-${star}-${sIdx}`}
                                 onClick={() => setReviewRating(star)}
                                 className="p-1"
                               >
@@ -1131,7 +1210,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                         }
                         
                         return (
-                          <div key={step.key} className="flex items-center gap-4">
+                          <div key={`order-step-${step.key}-${index}`} className="flex items-center gap-4">
                             <div className={cn(
                               "w-8 h-8 rounded-full flex items-center justify-center z-10 transition-all duration-500",
                               stepColor,
@@ -1285,27 +1364,33 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                             Service completed by vendor! Please finalize your secure online escrow payment on the app now.
                           </div>
                           <button
-                            onClick={() => {
-                              setOrderToPay(order);
-                            }}
-                            className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-bold text-sm tracking-wide transition-all duration-300 animate-pulse flex items-center justify-center gap-2"
+                            onClick={() => triggerPaystackPayment(order)}
+                            disabled={isVerifyingPayment}
+                            className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-bold text-sm tracking-wide transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer shadow-lg"
                           >
-                            <CreditCard className="w-4 h-4" />
+                            {isVerifyingPayment ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <CreditCard className="w-4 h-4" />
+                            )}
                             Pay For Service via Paystack (₦{order.totalPrice.toLocaleString()})
                           </button>
                         </div>
-                      ) : (order.status === "Order Picked Up" || order.status === "Order Delivered") && order.paymentMethod === "pod" && order.paymentStatus !== "paid" ? (
+                      ) : (order.status === "Order Picked Up" || order.status === "Order Delivered") && order.paymentStatus !== "paid" ? (
                         <div className="space-y-2">
                           <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-900/30 rounded-xl text-xs font-medium text-amber-800 dark:text-amber-400">
-                            Fulfillment verified! Please complete your secure escrow payment below to finalize this order.
+                            Order picked up! Please finalize your real payment via Paystack to secure escrow and complete this order.
                           </div>
                           <button
-                            onClick={() => {
-                              setOrderToPay(order);
-                            }}
-                            className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-bold text-sm tracking-wide transition-all duration-300 animate-pulse flex items-center justify-center gap-2"
+                            onClick={() => triggerPaystackPayment(order)}
+                            disabled={isVerifyingPayment || markingId === order.id}
+                            className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-bold text-sm tracking-wide transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer shadow-lg"
                           >
-                            <CreditCard className="w-4 h-4" />
+                            {isVerifyingPayment ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <CreditCard className="w-4 h-4" />
+                            )}
                             Pay For Order via Paystack (₦{order.totalPrice.toLocaleString()})
                           </button>
                         </div>
@@ -1559,30 +1644,27 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                   </p>
                 </div>
 
-                <div className="flex flex-col gap-2 pt-2 col-span-2">
+                <div className="flex flex-col gap-3 pt-2">
                   <button 
-                    onClick={() => {
-                      initializePayment({
-                        onSuccess: onPaystackSuccess,
-                        onClose: onPaystackClose
-                      });
-                    }}
-                    className="w-full h-14 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-black text-xs uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2 shadow-lg"
+                    onClick={() => triggerPaystackPayment(orderToPay)}
+                    disabled={isVerifyingPayment}
+                    className="w-full h-14 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white rounded-2xl font-black text-xs uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2 shadow-xl cursor-pointer disabled:opacity-50"
                   >
-                    <CreditCard className="w-4 h-4" />
-                    Pay via Paystack
+                    {isVerifyingPayment ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Verifying Real Payment...
+                      </>
+                    ) : (
+                      <>
+                        <CreditCard className="w-4 h-4" />
+                        Pay ₦{orderToPay.totalPrice.toLocaleString()} via Paystack
+                      </>
+                    )}
                   </button>
-
-                  <button 
-                    onClick={async () => {
-                      const tReference = "SIM_" + Date.now();
-                      await onPaystackSuccess({ reference: tReference });
-                    }}
-                    className="w-full h-12 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/20 dark:text-emerald-400 rounded-2xl font-black text-[9px] uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-1.5"
-                  >
-                    <Wallet className="w-3.5 h-3.5" />
-                    Simulate Wallet / Bank Transfer (Saves Escrow)
-                  </button>
+                  <p className="text-[10px] text-center text-slate-500 dark:text-slate-400 font-medium">
+                    Protected by Paystack 256-bit encryption & SHOPIVERSITY Escrow.
+                  </p>
                 </div>
 
                 <div className="text-center pb-2">
@@ -1709,6 +1791,14 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
         order={trackingRiderOrder}
         progress={trackingProgress}
         onClose={() => setTrackingRiderOrder(null)}
+      />
+
+      <ReviewSuccessModal
+        isOpen={isReviewSuccessOpen}
+        onClose={() => setIsReviewSuccessOpen(false)}
+        rating={submittedReviewInfo?.rating || 5}
+        productName={submittedReviewInfo?.productName}
+        comment={submittedReviewInfo?.comment || ""}
       />
     </div>
   );

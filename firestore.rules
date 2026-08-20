@@ -170,6 +170,8 @@ service cloud.firestore {
              (!('businessName' in data) || data.businessName == null || data.businessName is string) &&
              (!('gender' in data) || data.gender == null || data.gender is string) &&
              (!('paystackConnected' in data) || data.paystackConnected == null || data.paystackConnected is bool) &&
+             (!('recipientCode' in data) || data.recipientCode == null || data.recipientCode is string) &&
+             (!('subaccountCode' in data) || data.subaccountCode == null || data.subaccountCode is string) &&
              (!('photoURL' in data) || data.photoURL == null || data.photoURL is string) &&
              (!('profileCompleted' in data) || data.profileCompleted == null || data.profileCompleted is bool) &&
              (!('bankDetails' in data) || data.bankDetails == null || data.bankDetails is map) &&
@@ -315,13 +317,17 @@ service cloud.firestore {
     }
 
     function isValidPayoutRequest(data) {
-      return hasOnlyAllowedFields(data, ['sellerId', 'amount', 'bankDetails', 'status', 'createdAt', 'processedAt']) &&
-             data.sellerId is string &&
+      return data.sellerId is string &&
              data.amount is number && data.amount > 0 &&
              data.bankDetails is map &&
              data.status in ['pending', 'approved', 'rejected', 'paid'] &&
              isValidDateString(data.createdAt) &&
-             (!('processedAt' in data) || isValidDateString(data.processedAt));
+             (!('sellerName' in data) || data.sellerName == null || data.sellerName is string) &&
+             (!('payoutType' in data) || data.payoutType in ['standard', 'referral', 'seller']) &&
+             (!('rejectionReason' in data) || data.rejectionReason == null || data.rejectionReason is string) &&
+             (!('approvedAt' in data) || data.approvedAt == null || isValidDateString(data.approvedAt)) &&
+             (!('rejectedAt' in data) || data.rejectedAt == null || isValidDateString(data.rejectedAt)) &&
+             (!('processedAt' in data) || data.processedAt == null || isValidDateString(data.processedAt));
     }
 
     function isValidProductHistory(data) {
@@ -477,8 +483,8 @@ service cloud.firestore {
     match /payoutRequests/{requestId} {
       allow get: if isAdmin() || (isAuthenticated() && request.auth.uid == resource.data.sellerId);
       allow list: if isAdminEmail() || (isAuthenticated() && request.auth.uid == resource.data.sellerId);
-      allow create: if isSeller() && isValidPayoutRequest(request.resource.data) && request.resource.data.sellerId == request.auth.uid;
-      allow update: if isAdmin() || (isAuthenticated() && request.auth.uid == resource.data.sellerId);
+      allow create: if isAuthenticated() && !isSuspended() && isValidPayoutRequest(request.resource.data) && request.resource.data.sellerId == request.auth.uid;
+      allow update: if isAdmin() || (isAuthenticated() && request.auth.uid == resource.data.sellerId && isValidPayoutRequest(request.resource.data));
       allow delete: if isAdmin() || (isAuthenticated() && request.auth.uid == resource.data.sellerId);
     }
 
