@@ -138,6 +138,75 @@ export default function ChatBox({ chatId, recipientId, recipientName, onBack }: 
   // Recipient Settings Profile Photo State
   const [recipientPhotoURL, setRecipientPhotoURL] = React.useState<string | null>(null);
 
+  // Current User Chat Suspension State & 3-strike Moderation Tracking
+  const [currentUserData, setCurrentUserData] = React.useState<any>(null);
+
+  React.useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    const unsub = onSnapshot(doc(db, 'users', uid), (snap) => {
+      if (snap.exists()) {
+        setCurrentUserData(snap.data());
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  const isChatLocked = React.useMemo(() => {
+    if (!currentUserData?.chatSuspendedUntil) return false;
+    return new Date(currentUserData.chatSuspendedUntil).getTime() > Date.now();
+  }, [currentUserData]);
+
+  const getRemainingLockTime = () => {
+    if (!currentUserData?.chatSuspendedUntil) return "";
+    const diff = new Date(currentUserData.chatSuspendedUntil).getTime() - Date.now();
+    if (diff <= 0) return "";
+    const hours = Math.floor(diff / (1000 * 60 * 60));
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+    return `${hours}h ${minutes}m`;
+  };
+
+  const recordStrikeAndCheckLockout = async (senderId: string, senderName: string, reason: string) => {
+    try {
+      const userRef = doc(db, 'users', senderId);
+      const userSnap = await getDoc(userRef);
+      const userData = userSnap.data() || {};
+      
+      const currentStrikes = (userData.chatViolationCount || 0) + 1;
+
+      if (currentStrikes >= 3) {
+        const lockExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+        await updateDoc(userRef, {
+          chatViolationCount: 0,
+          chatSuspendedUntil: lockExpiry,
+          lastChatViolationAt: new Date().toISOString()
+        });
+
+        await addDoc(collection(db, 'notifications'), {
+          userId: senderId,
+          title: '🚫 Chat Suspended for 24 Hours',
+          message: 'You have been temporarily locked from chat for 24 hours after 3 attempts to input email, phone numbers, or social media handles.',
+          type: 'moderation',
+          isRead: false,
+          createdAt: new Date().toISOString()
+        });
+
+        setWarningText('🚫 Chat Locked for 24 Hours: You reached 3 strikes for inputting emails, phone numbers, or social media handles.');
+        setShowWarning(true);
+      } else {
+        await updateDoc(userRef, {
+          chatViolationCount: currentStrikes,
+          lastChatViolationAt: new Date().toISOString()
+        });
+
+        setWarningText(`⚠️ Strike ${currentStrikes} of 3: Sharing emails, phone numbers, or social handles is prohibited. 3 strikes will lock you out of chat for 24 hours.`);
+        setShowWarning(true);
+      }
+    } catch (err) {
+      console.error("Error recording chat violation strike:", err);
+    }
+  };
+
   React.useEffect(() => {
     if (!recipientId) return;
     const fetchRecipientPhoto = async () => {
@@ -419,6 +488,11 @@ export default function ChatBox({ chatId, recipientId, recipientName, onBack }: 
   };
 
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (isChatLocked) {
+      alert(`Chat suspended. You have ${getRemainingLockTime() || "some time"} remaining on your 24-hour lockout.`);
+      return;
+    }
+
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -442,9 +516,11 @@ export default function ChatBox({ chatId, recipientId, recipientName, onBack }: 
 
         const data = await res.json();
         if (data.isBlocked) {
-          setWarningText(data.warningMessage || CONTACT_WARNING_MESSAGE);
-          setShowWarning(true);
-          setTimeout(() => setShowWarning(false), 5000);
+          await recordStrikeAndCheckLockout(
+            currentUserId,
+            senderName,
+            data.reason || 'Contact information detected in image'
+          );
 
           await logBlockedAttempt({
             senderId: currentUserId,
@@ -481,6 +557,11 @@ export default function ChatBox({ chatId, recipientId, recipientName, onBack }: 
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isChatLocked) {
+      alert(`Chat access temporarily locked for 24 hours due to 3 contact policy violations. Time remaining: ${getRemainingLockTime()}`);
+      return;
+    }
+
     if ((!newMessage.trim() && !selectedImage) || sending || scanningImage) return;
 
     const currentUserId = auth.currentUser?.uid;
@@ -515,9 +596,11 @@ export default function ChatBox({ chatId, recipientId, recipientName, onBack }: 
 
       const localDetection = detectMultiMessageContactSharing(newMessage, senderRecentMessages);
       if (localDetection.isBlocked) {
-        setWarningText(CONTACT_WARNING_MESSAGE);
-        setShowWarning(true);
-        setTimeout(() => setShowWarning(false), 5000);
+        await recordStrikeAndCheckLockout(
+          currentUserId,
+          senderName,
+          localDetection.reason || 'Contact details detected'
+        );
 
         await logBlockedAttempt({
           senderId: currentUserId,
@@ -548,9 +631,11 @@ export default function ChatBox({ chatId, recipientId, recipientName, onBack }: 
 
         const modData = await modRes.json();
         if (modData.isBlocked) {
-          setWarningText(modData.warningMessage || CONTACT_WARNING_MESSAGE);
-          setShowWarning(true);
-          setTimeout(() => setShowWarning(false), 5000);
+          await recordStrikeAndCheckLockout(
+            currentUserId,
+            senderName,
+            modData.reason || 'Disguised contact attempt detected'
+          );
 
           await logBlockedAttempt({
             senderId: currentUserId,
@@ -962,27 +1047,46 @@ export default function ChatBox({ chatId, recipientId, recipientName, onBack }: 
 
       {/* Chat Footer Input Area */}
       <div className="p-4 bg-transparent shrink-0 select-none">
-        <form onSubmit={handleSendMessage} className="flex gap-2.5 items-center bg-white/95 dark:bg-slate-900/95 backdrop-blur-md hover:bg-white dark:hover:bg-slate-900 shadow-xl shadow-slate-200/40 dark:shadow-none border border-slate-150 dark:border-slate-800/80 rounded-2xl p-2 transition-all">
-          {/* Input Rounded Box */}
-          <div className="flex-1 flex items-center bg-slate-50 dark:bg-slate-950/50 rounded-xl px-3.5 h-10 border-none transition-all select-text">
-            <input
-              value={newMessage}
-              onChange={(e) => setNewMessage(e.target.value)}
-              placeholder={selectedImage ? "Add a caption..." : "Type your message safely..."}
-              className="flex-1 h-full bg-transparent border-0 focus:ring-0 focus:ring-offset-0 focus:outline-none focus:border-0 focus:bg-transparent shadow-none focus:shadow-none rounded-none w-full text-xs sm:text-sm font-semibold text-slate-800 dark:text-white placeholder-slate-450"
-            />
+        {isChatLocked ? (
+          <div className="p-4 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left shadow-md">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-red-500 text-white flex items-center justify-center shrink-0 shadow">
+                <ShieldAlert className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-xs font-black text-red-600 dark:text-red-400 uppercase tracking-wider">Chat Temporarily Blocked (24 Hours)</h4>
+                <p className="text-[11px] text-slate-600 dark:text-zinc-300 font-medium">
+                  3 strikes received for attempting to share off-platform emails, phone numbers, or social media handles.
+                </p>
+              </div>
+            </div>
+            <span className="px-3 py-1.5 bg-red-600 text-white text-xs font-mono font-bold rounded-xl whitespace-nowrap shadow-sm">
+              ⏳ {getRemainingLockTime() || "Under 24h"} remaining
+            </span>
           </div>
+        ) : (
+          <form onSubmit={handleSendMessage} className="flex gap-2.5 items-center bg-white/95 dark:bg-slate-900/95 backdrop-blur-md hover:bg-white dark:hover:bg-slate-900 shadow-xl shadow-slate-200/40 dark:shadow-none border border-slate-150 dark:border-slate-800/80 rounded-2xl p-2 transition-all">
+            {/* Input Rounded Box */}
+            <div className="flex-1 flex items-center bg-slate-50 dark:bg-slate-950/50 rounded-xl px-3.5 h-10 border-none transition-all select-text">
+              <input
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+                placeholder={selectedImage ? "Add a caption..." : "Type your message safely..."}
+                className="flex-1 h-full bg-transparent border-0 focus:ring-0 focus:ring-offset-0 focus:outline-none focus:border-0 focus:bg-transparent shadow-none focus:shadow-none rounded-none w-full text-xs sm:text-sm font-semibold text-slate-800 dark:text-white placeholder-slate-450"
+              />
+            </div>
 
-          {/* Send button always visible, disabled if no text & no attachment */}
-          <button
-            type="submit"
-            disabled={sending || (!newMessage.trim() && !selectedImage)}
-            className="w-10 h-10 bg-[#ff6b00] hover:bg-orange-650 text-white disabled:bg-slate-100 dark:disabled:bg-slate-800/50 disabled:text-slate-350 dark:disabled:text-slate-700 rounded-xl flex items-center justify-center transition-all active:scale-95 cursor-pointer shrink-0 shadow-sm"
-            title="Send Message"
-          >
-            <Send className="w-4.5 h-4.5" />
-          </button>
-        </form>
+            {/* Send button always visible, disabled if no text & no attachment */}
+            <button
+              type="submit"
+              disabled={sending || (!newMessage.trim() && !selectedImage)}
+              className="w-10 h-10 bg-[#ff6b00] hover:bg-orange-650 text-white disabled:bg-slate-100 dark:disabled:bg-slate-800/50 disabled:text-slate-350 dark:disabled:text-slate-700 rounded-xl flex items-center justify-center transition-all active:scale-95 cursor-pointer shrink-0 shadow-sm"
+              title="Send Message"
+            >
+              <Send className="w-4.5 h-4.5" />
+            </button>
+          </form>
+        )}
       </div>
 
       {/* Call Simulator Interactive Full Screen Overlay (voice & video modes) */}
