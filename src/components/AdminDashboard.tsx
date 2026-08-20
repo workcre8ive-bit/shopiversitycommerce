@@ -1,783 +1,790 @@
-import React from "react";
-import { db } from "../firebase";
-import { 
-  collection, 
-  query, 
-  onSnapshot, 
-  doc, 
-  updateDoc, 
-  orderBy, 
-  where,
-  getDocs,
-  limit,
-  addDoc,
-  increment
-} from "firebase/firestore";
+import React, { useState, useEffect, useMemo } from "react";
 import { 
   ShieldCheck, 
-  ShieldAlert,
-  Wallet, 
+  Search, 
+  Users, 
+  Package, 
+  AlertTriangle, 
   CheckCircle, 
   XCircle, 
-  Loader2, 
-  Search, 
-  ArrowUpRight,
-  TrendingUp,
-  AlertCircle,
+  TrendingUp, 
+  TrendingDown,
+  DollarSign, 
+  Filter, 
+  ChevronRight, 
+  ArrowUpDown, 
+  X, 
+  Plus, 
+  Building2, 
+  Phone, 
+  Mail, 
+  Calendar, 
+  User, 
+  Check, 
+  ShieldAlert, 
+  FileText, 
+  HelpCircle, 
+  MessageSquare, 
+  Send, 
   ExternalLink,
-  ChevronRight,
-  User,
+  Wallet,
   Clock,
-  Filter,
-  ArrowLeft
+  ArrowRight,
+  Loader2,
+  RefreshCw,
+  Copy,
+  BarChart2,
+  Sparkles,
+  KeyRound,
+  Ban,
+  Layers,
+  ShoppingBag,
+  SlidersHorizontal,
+  SortAsc,
+  SortDesc
 } from "lucide-react";
-import { motion, AnimatePresence } from "motion/react";
+import { collection, onSnapshot, query, doc, updateDoc, deleteDoc, addDoc, getDoc } from "firebase/firestore";
+import { db } from "../firebase";
+import { UserProfile, Product, Order } from "../types";
 import { cn } from "../lib/utils";
 import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
-import Logo from "./Logo";
+import AdminSuspendModal from "./AdminSuspendModal";
+import AdminUserDetailModal from "./AdminUserDetailModal";
+import AdminAnalyticsCharts from "./AdminAnalyticsCharts";
+import AdminSecurityRenewalModal from "./AdminSecurityRenewalModal";
 
-const FALLBACK_BANKS = [
-  { name: "Access Bank", code: "044" },
-  { name: "Guaranty Trust Bank", code: "058" },
-  { name: "Zenith Bank", code: "057" },
-  { name: "United Bank for Africa", code: "033" },
-  { name: "First Bank of Nigeria", code: "011" },
-  { name: "Union Bank of Nigeria", code: "032" },
-  { name: "Sterling Bank", code: "232" },
-  { name: "Wema Bank", code: "035" },
-  { name: "Fidelity Bank", code: "070" },
-  { name: "Polaris Bank", code: "076" },
-  { name: "Stanbic IBTC Bank", code: "221" },
-  { name: "Keystone Bank", code: "082" },
-  { name: "Ecobank Nigeria", code: "050" },
-  { name: "First City Monument Bank", code: "214" },
-  { name: "Jaiz Bank", code: "301" },
-  { name: "Providus Bank", code: "101" },
-  { name: "TAJ Bank", code: "302" },
-  { name: "Globus Bank", code: "103" },
-  { name: "OPay Digital Services (OPay)", code: "999992" },
-  { name: "PalmPay", code: "999991" },
-  { name: "Kuda Bank", code: "50211" },
-  { name: "Moniepoint Microfinance Bank", code: "50515" },
-  { name: "VFD Microfinance Bank", code: "566" },
-  { name: "Other", code: "other" }
-];
+interface AdminDashboardProps {
+  currentUser: any;
+  onBack?: () => void;
+}
 
-export default function AdminDashboard({ currentUser, onBack }: { currentUser: any, onBack?: () => void }) {
-  // Strict check for builder email only
-  if (currentUser?.email !== "tommzypolaris@gmail.com") {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900">
-        <div className="text-center space-y-4">
-          <ShieldCheck className="w-16 h-16 text-red-500 mx-auto opacity-20" />
-          <h2 className="text-xl font-bold text-slate-900 dark:text-white">Access Denied</h2>
-          <p className="text-slate-500">This area is reserved for the system builder.</p>
-        </div>
-      </div>
-    );
-  }
+export default function AdminDashboard({ currentUser, onBack }: AdminDashboardProps) {
+  const [activeTab, setActiveTab] = useState<"analytics" | "users" | "products" | "payouts" | "reports" | "moderation">("analytics");
+  
+  // Real Firestore Collections State
+  const [users, setUsers] = useState<UserProfile[]>([]);
+  const [allProducts, setAllProducts] = useState<Product[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [payouts, setPayouts] = useState<any[]>([]);
+  const [reports, setReports] = useState<any[]>([]);
+  const [moderationLogs, setModerationLogs] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const [payoutRequests, setPayoutRequests] = React.useState<any[]>([]);
-  const [loading, setLoading] = React.useState(true);
-  const [processingId, setProcessingId] = React.useState<string | null>(null);
-  const [filter, setFilter] = React.useState<"all" | "pending" | "approved" | "paid" | "rejected">("pending");
-  const [activeTab, setActiveTab] = React.useState<"overview" | "payouts" | "users" | "products" | "reports" | "moderation">("overview");
-  const [moderationLogs, setModerationLogs] = React.useState<any[]>([]);
-  const [users, setUsers] = React.useState<any[]>([]);
-  const [allProducts, setAllProducts] = React.useState<any[]>([]);
-  const [reports, setReports] = React.useState<any[]>([]);
-  const [banks, setBanks] = React.useState<any[]>(FALLBACK_BANKS);
-  const [systemStats, setSystemStats] = React.useState({
-    totalUsers: 0,
-    totalProducts: 0,
-    totalOrders: 0,
-    totalRevenue: 0,
-    activeSellers: 0
-  });
+  // User Management Filters & Controls
+  const [userCategoryFilter, setUserCategoryFilter] = useState<"all" | "buyer" | "seller" | "logistics" | "admin">("all");
+  const [userSearchQuery, setUserSearchQuery] = useState("");
+  const [userSortOrder, setUserSortOrder] = useState<"asc" | "desc" | "recent">("asc");
+  const [selectedUserForDetail, setSelectedUserForDetail] = useState<UserProfile | null>(null);
+  const [selectedUserForSuspend, setSelectedUserForSuspend] = useState<UserProfile | null>(null);
+  const [isSuspendModalOpen, setIsSuspendModalOpen] = useState(false);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [isSecurityRenewalOpen, setIsSecurityRenewalOpen] = useState(false);
 
-  React.useEffect(() => {
-    // Fetch system-wide overview stats
-      const unsubUsers = onSnapshot(collection(db, "users"), (snap) => {
-        const usersData = Array.from(new Map(snap.docs.map(doc => [doc.id, { id: doc.id, ...doc.data() }])).values());
-        const activeSellers = usersData.filter((d: any) => d.role === "seller" || d.role === "both").length;
-        setSystemStats(prev => ({ ...prev, totalUsers: usersData.length, activeSellers }));
-      }, (error) => {
-        console.error("AdminDashboard total users subscription failed:", error);
-      });
+  // Action / State Processing Feedback
+  const [processingId, setProcessingId] = useState<string | null>(null);
+  const [actionSuccessMessage, setActionSuccessMessage] = useState<string | null>(null);
+  const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
 
-      const unsubProducts = onSnapshot(collection(db, "products"), (snap) => {
-        const productsData = Array.from(new Map(snap.docs.map(doc => [doc.id, { id: doc.id, ...doc.data() }])).values());
-        setSystemStats(prev => ({ ...prev, totalProducts: productsData.filter((d: any) => !d.isDeleted).length }));
-      }, (error) => {
-        console.error("AdminDashboard products subscription failed:", error);
-      });
+  // Real-time Firestore Listeners
+  useEffect(() => {
+    setLoading(true);
 
-      const unsubOrders = onSnapshot(collection(db, "orders"), (snap) => {
-        const ordersData = Array.from(new Map(snap.docs.map(doc => [doc.id, { id: doc.id, ...doc.data() }])).values());
-        const totalRev = ordersData.reduce((acc: number, d: any) => acc + (d.totalPrice || 0), 0);
-        setSystemStats(prev => ({ ...prev, totalOrders: ordersData.length, totalRevenue: totalRev }));
-      }, (error) => {
-        console.error("AdminDashboard orders subscription failed:", error);
-      });
+    const unsubUsers = onSnapshot(collection(db, "users"), (snapshot) => {
+      const uList = snapshot.docs.map(doc => ({ id: doc.id, uid: doc.id, ...doc.data() } as unknown as UserProfile));
+      setUsers(uList);
+    }, (err) => handleFirestoreError(err, OperationType.LIST, "users"));
 
-      const unsubModeration = onSnapshot(query(collection(db, "contact_moderation_logs"), orderBy("createdAt", "desc"), limit(50)), (snap) => {
-        const logs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setModerationLogs(logs);
-      }, (err) => {
-        console.error("Moderation logs subscription error:", err);
-      });
+    const unsubProducts = onSnapshot(collection(db, "products"), (snapshot) => {
+      const pList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Product));
+      setAllProducts(pList);
+    }, (err) => handleFirestoreError(err, OperationType.LIST, "products"));
+
+    const unsubOrders = onSnapshot(collection(db, "orders"), (snapshot) => {
+      const oList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
+      setOrders(oList);
+      setLoading(false);
+    }, (err) => {
+      handleFirestoreError(err, OperationType.LIST, "orders");
+      setLoading(false);
+    });
+
+    const unsubPayouts = onSnapshot(collection(db, "payoutRequests"), (snapshot) => {
+      const payList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setPayouts(payList);
+    }, (err) => handleFirestoreError(err, OperationType.LIST, "payoutRequests"));
+
+    const unsubReports = onSnapshot(collection(db, "reports"), (snapshot) => {
+      const rList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setReports(rList);
+    }, (err) => handleFirestoreError(err, OperationType.LIST, "reports"));
+
+    const unsubLogs = onSnapshot(collection(db, "contact_moderation_logs"), (snapshot) => {
+      const logs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setModerationLogs(logs);
+    }, (err) => handleFirestoreError(err, OperationType.LIST, "contact_moderation_logs"));
 
     return () => {
       unsubUsers();
       unsubProducts();
       unsubOrders();
-      unsubModeration();
+      unsubPayouts();
+      unsubReports();
+      unsubLogs();
     };
   }, []);
 
-  React.useEffect(() => {
-    const fetchBanks = async () => {
-      try {
-        const res = await fetch("/api/paystack/banks");
-        const data = await res.json();
-        if (data.status) setBanks(data.data);
-      } catch (err) {
-        console.error("Failed to fetch banks", err);
+  // Filtered and Alphabetically Sorted Users
+  const processedUsers = useMemo(() => {
+    let result = [...users];
+
+    // Category filtering
+    if (userCategoryFilter === "buyer") {
+      result = result.filter(u => u.role === "buyer" || (!u.role && u.state !== "Logistics Partner"));
+    } else if (userCategoryFilter === "seller") {
+      result = result.filter(u => u.role === "seller");
+    } else if (userCategoryFilter === "logistics") {
+      result = result.filter(u => u.state === "Logistics Partner");
+    } else if (userCategoryFilter === "admin") {
+      result = result.filter(u => u.role === "admin" || u.email === "tommzypolaris@gmail.com" || u.email === "fashinaayomide2005@gmail.com" || u.email === "fashinaayomide@2005@gmail.com" || u.email === "fashinaayomide12005@gmail.com");
+    }
+
+    // Search query matching (Name, Email, Unique Code, Phone, School)
+    if (userSearchQuery.trim()) {
+      const query = userSearchQuery.toLowerCase().trim();
+      result = result.filter(u => {
+        const name = (u.displayName || "").toLowerCase();
+        const email = (u.email || "").toLowerCase();
+        const code = (u.uniqueCode || u.userCode || `USR-${(u.uid || u.id || "").substring(0, 6)}`).toLowerCase();
+        const phone = (u.phoneNumber || u.phone || "").toLowerCase();
+        const school = (u.school || "").toLowerCase();
+        return name.includes(query) || email.includes(query) || code.includes(query) || phone.includes(query) || school.includes(query);
+      });
+    }
+
+    // Alphabetical or Chronological Sorting
+    result.sort((a, b) => {
+      const nameA = (a.displayName || a.email || "Unknown").toLowerCase();
+      const nameB = (b.displayName || b.email || "Unknown").toLowerCase();
+
+      if (userSortOrder === "asc") {
+        return nameA.localeCompare(nameB);
+      } else if (userSortOrder === "desc") {
+        return nameB.localeCompare(nameA);
+      } else {
+        // Recent
+        const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return dateB - dateA;
       }
-    };
-    fetchBanks();
-  }, []);
-
-  React.useEffect(() => {
-    if (activeTab === "users") {
-      const q = query(collection(db, "users"), orderBy("createdAt", "desc"), limit(50));
-      const unsub = onSnapshot(q, (snap) => {
-        const usersData = Array.from(new Map(snap.docs.map(doc => [doc.id, { id: doc.id, ...doc.data() }])).values());
-        setUsers(usersData);
-      }, (error) => {
-        console.error("AdminDashboard users tab subscription failed:", error);
-      });
-      return () => unsub();
-    }
-  }, [activeTab]);
-
-  React.useEffect(() => {
-    if (activeTab === "products") {
-      const q = query(collection(db, "products"), orderBy("createdAt", "desc"), limit(50));
-      const unsub = onSnapshot(q, (snap) => {
-        const productsData = Array.from(new Map(snap.docs.map(doc => [doc.id, { id: doc.id, ...doc.data() }])).values());
-        setAllProducts(productsData);
-      }, (error) => {
-        console.error("AdminDashboard products tab subscription failed:", error);
-      });
-      return () => unsub();
-    }
-  }, [activeTab]);
-
-  React.useEffect(() => {
-    if (activeTab === "reports") {
-      const q = query(collection(db, "reports"), orderBy("createdAt", "desc"));
-      const unsub = onSnapshot(q, (snap) => {
-        const reportsData = Array.from(new Map(snap.docs.map(doc => [doc.id, { id: doc.id, ...doc.data() }])).values());
-        setReports(reportsData);
-      }, (error) => {
-        console.error("AdminDashboard reports tab subscription failed:", error);
-      });
-      return () => unsub();
-    }
-  }, [activeTab]);
-
-  const handleToggleUserSuspension = async (userId: string, isSuspended: boolean) => {
-    try {
-      await updateDoc(doc(db, "users", userId), { isSuspended: !isSuspended });
-      alert(isSuspended ? "User unsuspended!" : "User suspended!");
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `users/${userId}`);
-    }
-  };
-
-  const handleToggleVerification = async (userId: string, isVerified: boolean) => {
-    try {
-      await updateDoc(doc(db, "users", userId), { isVerified: !isVerified });
-      alert(isVerified ? "Verification removed!" : "User verified!");
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `users/${userId}`);
-    }
-  };
-
-  const handleRemoveProduct = async (product: any) => {
-    if (!confirm(`Are you sure you want to remove "${product.name}"? This will soft-delete the product.`)) return;
-    try {
-      await updateDoc(doc(db, "products", product.id), { 
-        isDeleted: true,
-        deletedAt: new Date().toISOString(),
-        deletedBy: "admin"
-      });
-      
-      // Notify seller
-      await addDoc(collection(db, "notifications"), {
-        userId: product.sellerId,
-        title: "Product Removed by Admin",
-        message: `Your product "${product.name}" has been removed by an admin for moderation purposes.`,
-        type: "moderation",
-        isRead: false,
-        createdAt: new Date().toISOString()
-      });
-      
-      alert("Product removed.");
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `products/${product.id}`);
-    }
-  };
-
-  const handleDismissReport = async (reportId: string) => {
-    try {
-      await updateDoc(doc(db, "reports", reportId), { status: "dismissed" });
-      alert("Report dismissed.");
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `reports/${reportId}`);
-    }
-  };
-
-  React.useEffect(() => {
-    const q = filter === "all" 
-      ? query(collection(db, "payoutRequests"), orderBy("createdAt", "desc"))
-      : query(collection(db, "payoutRequests"), where("status", "==", filter), orderBy("createdAt", "desc"));
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setPayoutRequests(data);
-      setLoading(false);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, "payoutRequests");
-      setLoading(false);
     });
 
-    return () => unsubscribe();
-  }, [filter]);
+    return result;
+  }, [users, userCategoryFilter, userSearchQuery, userSortOrder]);
 
+  // Copy unique user code helper
+  const handleCopyCode = (code: string, id: string) => {
+    navigator.clipboard.writeText(code);
+    setCopiedCodeId(id);
+    setTimeout(() => setCopiedCodeId(null), 2000);
+  };
+
+  // Toggle user verified status
+  const handleToggleVerification = async (userId: string, currentStatus: boolean) => {
+    try {
+      const userRef = doc(db, "users", userId);
+      await updateDoc(userRef, { isVerified: !currentStatus });
+      setActionSuccessMessage(`User verification status updated to ${!currentStatus ? "Verified" : "Unverified"}`);
+      setTimeout(() => setActionSuccessMessage(null), 3000);
+    } catch (err: any) {
+      handleFirestoreError(err, OperationType.UPDATE, `users/${userId}`);
+    }
+  };
+
+  // Payout Actions
   const handleApprovePayout = async (payout: any) => {
     setProcessingId(payout.id);
     try {
-      await updateDoc(doc(db, "payoutRequests", payout.id), {
+      const payoutRef = doc(db, "payoutRequests", payout.id);
+      await updateDoc(payoutRef, {
         status: "approved",
-        approvedAt: new Date().toISOString()
+        approvedAt: new Date().toISOString(),
+        approvedBy: currentUser?.email || "Admin"
       });
-      
-      // Notify seller
-      await addDoc(collection(db, "notifications"), {
-        userId: payout.sellerId,
-        title: "Payout Approved!",
-        message: `Your payout request for ₦${payout.amount.toLocaleString()} has been approved and is being processed.`,
-        type: "payout",
-        isRead: false,
-        createdAt: new Date().toISOString()
-      });
-      
-      alert("Payout marked as approved!");
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `payoutRequests/${payout.id}`);
+      setActionSuccessMessage(`Payout ₦${payout.amount.toLocaleString()} approved.`);
+      setTimeout(() => setActionSuccessMessage(null), 3000);
+    } catch (err: any) {
+      handleFirestoreError(err, OperationType.UPDATE, `payoutRequests/${payout.id}`);
     } finally {
       setProcessingId(null);
     }
   };
 
   const handleRejectPayout = async (payout: any) => {
-    const reason = prompt("Reason for rejection:");
-    if (reason === null) return;
-    
+    const reason = prompt("Enter reason for payout rejection:") || "Rejected by administrator";
     setProcessingId(payout.id);
     try {
-      await updateDoc(doc(db, "payoutRequests", payout.id), {
+      const payoutRef = doc(db, "payoutRequests", payout.id);
+      await updateDoc(payoutRef, {
         status: "rejected",
         rejectionReason: reason,
-        rejectedAt: new Date().toISOString()
+        rejectedAt: new Date().toISOString(),
+        rejectedBy: currentUser?.email || "Admin"
       });
-
-      // If it is a referral payout, refund user's referral balance
-      if (payout.payoutType === "referral") {
-        await updateDoc(doc(db, "users", payout.sellerId), {
-          referralWalletBalance: increment(payout.amount)
-        });
-      }
-      
-      // Notify seller
-      await addDoc(collection(db, "notifications"), {
-        userId: payout.sellerId,
-        title: "Payout Rejected",
-        message: `Your payout request for ₦${payout.amount.toLocaleString()} was rejected: ${reason}`,
-        type: "payout",
-        isRead: false,
-        createdAt: new Date().toISOString()
-      });
-      
-      alert("Payout rejected.");
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `payoutRequests/${payout.id}`);
+    } catch (err: any) {
+      handleFirestoreError(err, OperationType.UPDATE, `payoutRequests/${payout.id}`);
     } finally {
       setProcessingId(null);
     }
   };
 
   const handleProcessTransfer = async (payout: any) => {
-    if (!confirm(`Are you sure you want to initiate a REAL transfer of ₦${payout.amount.toLocaleString()} to ${payout.bankDetails.accountName}?`)) {
-      return;
-    }
-
     setProcessingId(payout.id);
     try {
-      const bankCode = banks.find(b => b.name === payout.bankDetails.bankName)?.code;
-      if (!bankCode) throw new Error("Could not find bank code for " + payout.bankDetails.bankName);
-
-      const res = await fetch("/api/paystack/transfer", {
+      const res = await fetch("/api/admin/process-transfer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          amount: payout.amount,
-          bankCode: bankCode,
-          accountNumber: payout.bankDetails.accountNumber,
-          accountName: payout.bankDetails.accountName,
-          reason: `SHOPIVERSITY Payout for ${payout.sellerName || 'Seller'}`
-        })
+        body: JSON.stringify({ payoutId: payout.id })
       });
-
       const data = await res.json();
-
-      if (data.status) {
-        await updateDoc(doc(db, "payoutRequests", payout.id), {
-          status: "paid",
-          paidAt: new Date().toISOString(),
-          transferReference: data.data.reference,
-          transferData: data.data
-        });
-
-        // Notify seller
-        await addDoc(collection(db, "notifications"), {
-          userId: payout.sellerId,
-          title: "Payment Disbursed!",
-          message: `₦${payout.amount.toLocaleString()} has been sent to your bank account (${payout.bankDetails.bankName}).`,
-          type: "payout",
-          isRead: false,
-          createdAt: new Date().toISOString()
-        });
-
-        alert("Transfer successful! Payment is on its way.");
-      } else {
-        throw new Error(data.error || "Transfer failed at Paystack");
-      }
-    } catch (error: any) {
-      alert("Transfer Error: " + error.message);
-      console.error("Transfer error:", error);
+      if (!res.ok) throw new Error(data.error || "Failed to process transfer");
+      setActionSuccessMessage(`Payout settled successfully! Ref: ${data.transferCode || "Done"}`);
+      setTimeout(() => setActionSuccessMessage(null), 3000);
+    } catch (err: any) {
+      alert("Transfer Error: " + err.message);
     } finally {
       setProcessingId(null);
     }
   };
 
-  const stats = React.useMemo(() => {
-    const pending = payoutRequests.filter(p => p.status === "pending" || p.status === "approved");
-    const totalPending = pending.reduce((acc, p) => acc + p.amount, 0);
-    return {
-      pendingCount: pending.length,
-      totalPendingAmount: totalPending,
-      totalPaid: payoutRequests.filter(p => p.status === "paid").reduce((acc, p) => acc + p.amount, 0)
-    };
-  }, [payoutRequests]);
+  // Product removal
+  const handleRemoveProduct = async (product: Product) => {
+    if (!confirm(`Are you sure you want to remove "${product.name}"?`)) return;
+    try {
+      await updateDoc(doc(db, "products", product.id), {
+        isDeleted: true,
+        deletedAt: new Date().toISOString()
+      });
+      setActionSuccessMessage(`Product "${product.name}" removed from marketplace.`);
+      setTimeout(() => setActionSuccessMessage(null), 3000);
+    } catch (err: any) {
+      handleFirestoreError(err, OperationType.UPDATE, `products/${product.id}`);
+    }
+  };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <Loader2 className="w-8 h-8 animate-spin text-slate-400" />
-      </div>
-    );
-  }
+  // Report dismissal
+  const handleDismissReport = async (reportId: string) => {
+    try {
+      await updateDoc(doc(db, "reports", reportId), {
+        status: "dismissed",
+        dismissedAt: new Date().toISOString(),
+        dismissedBy: currentUser?.email || "Admin"
+      });
+    } catch (err: any) {
+      handleFirestoreError(err, OperationType.UPDATE, `reports/${reportId}`);
+    }
+  };
+
+  // Metrics summary
+  const totalGrossVolume = orders.reduce((sum, o) => sum + (o.totalPrice || 0), 0);
+  const pendingPayoutsTotal = payouts.filter(p => p.status === "pending").reduce((sum, p) => sum + (p.amount || 0), 0);
+  const buyerCount = users.filter(u => u.role === "buyer" || (!u.role && u.state !== "Logistics Partner")).length;
+  const sellerCount = users.filter(u => u.role === "seller").length;
+  const logisticsCount = users.filter(u => u.state === "Logistics Partner").length;
 
   return (
-    <div className="max-w-7xl mx-auto p-4 sm:p-8 space-y-8 pb-20">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-4">
-          {onBack && (
-            <button 
-              onClick={onBack}
-              className="p-3 bg-white dark:bg-slate-900 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm hover:scale-105 transition-all text-slate-600 dark:text-slate-400 group"
-              title="Back"
-            >
-              <ArrowLeft className="w-5 h-5 group-hover:-translate-x-1 transition-transform" />
-            </button>
-          )}
-          <div>
-            <div className="flex flex-wrap items-center gap-3 mb-1">
-               <Logo showText={true} />
-               <span className="text-slate-300 dark:text-slate-700">|</span>
-               <ShieldCheck className="w-7 h-7 text-[#ff6b00]" />
-               <h1 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white tracking-tight">Admin Control</h1>
-            </div>
-            <p className="text-slate-500 font-medium text-xs sm:text-sm">System-wide payout management and oversight</p>
+    <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8 min-h-screen">
+      {/* Action Notification Alert */}
+      {actionSuccessMessage && (
+        <div className="p-4 rounded-2xl bg-emerald-500 text-white shadow-lg text-xs font-black flex items-center justify-between animate-in fade-in slide-in-from-top-4">
+          <div className="flex items-center gap-2">
+            <CheckCircle className="w-4 h-4" />
+            <span>{actionSuccessMessage}</span>
           </div>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-2 overflow-x-auto pb-4 scrollbar-hide">
-        {[
-          { id: "overview", label: "Overview", icon: TrendingUp },
-          { id: "payouts", label: "Payouts", icon: Wallet },
-          { id: "users", label: "User Management", icon: User },
-          { id: "products", label: "Product Moderation", icon: ShieldCheck },
-          { id: "moderation", label: "Contact Protection Logs", icon: ShieldAlert },
-          { id: "reports", label: "Reports", icon: AlertCircle }
-        ].map((tab, idx) => (
-          <button
-            key={`admin-tab-${tab.id}-${idx}`}
-            onClick={() => setActiveTab(tab.id as any)}
-            className={cn(
-              "flex items-center gap-2 px-6 py-3 rounded-2xl text-sm font-bold whitespace-nowrap transition-all",
-              activeTab === tab.id 
-                ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-xl" 
-                : "bg-white dark:bg-slate-800 text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-700"
-            )}
-          >
-            <tab.icon className="w-4 h-4" />
-            {tab.label}
-            {tab.id === "payouts" && stats.pendingCount > 0 && (
-              <span className="ml-1 px-2 py-0.5 bg-indigo-500 text-white rounded-full text-[10px]">
-                {stats.pendingCount}
-              </span>
-            )}
-            {tab.id === "reports" && reports.filter(r => r.status === "pending").length > 0 && (
-              <span className="ml-1 px-2 py-0.5 bg-red-500 text-white rounded-full text-[10px]">
-                {reports.filter(r => r.status === "pending").length}
-              </span>
-            )}
+          <button onClick={() => setActionSuccessMessage(null)} className="p-1 hover:bg-white/20 rounded cursor-pointer">
+            <X className="w-3.5 h-3.5" />
           </button>
-        ))}
+        </div>
+      )}
+
+      {/* Main Header & Admin Banner */}
+      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 rounded-[2.5rem] p-6 sm:p-10 text-white shadow-2xl relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-96 h-96 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20" />
+        
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 relative z-10">
+          <div className="space-y-2">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-indigo-600/80 backdrop-blur-md rounded-2xl shadow-lg shadow-indigo-600/30">
+                <ShieldCheck className="w-7 h-7 text-white" />
+              </div>
+              <span className="px-3.5 py-1 rounded-full bg-indigo-500/20 border border-indigo-400/30 text-indigo-200 text-xs font-black uppercase tracking-widest">
+                Root System Controller
+              </span>
+            </div>
+            <h1 className="text-3xl sm:text-4xl font-black tracking-tight text-white">
+              Executive Admin Operations Hub
+            </h1>
+            <p className="text-sm text-slate-300 max-w-2xl font-medium">
+              Real-time user intelligence, alphabetical directory, custom suspension & ban timeframes, live sales charts, and credentials renewal protocol.
+            </p>
+          </div>
+
+          {/* Quick Actions & Security Session Renewal */}
+          <div className="flex flex-wrap items-center gap-3 shrink-0">
+            <button
+              onClick={() => setIsSecurityRenewalOpen(true)}
+              className="px-5 py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-black text-xs uppercase tracking-wider flex items-center gap-2.5 shadow-xl shadow-indigo-600/30 active:scale-95 transition-all cursor-pointer"
+            >
+              <KeyRound className="w-4 h-4" />
+              Renew Login Details
+            </button>
+            {onBack && (
+              <button
+                onClick={onBack}
+                className="px-5 py-3.5 bg-white/10 hover:bg-white/20 text-white rounded-2xl font-bold text-xs transition-all cursor-pointer"
+              >
+                Back to Market
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Global Metric Cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-8 pt-8 border-t border-white/10">
+          <div>
+            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Total Registered Users</span>
+            <p className="text-2xl font-black text-white mt-1">{users.length}</p>
+            <p className="text-[10px] text-indigo-300 font-bold">{buyerCount} Buyers • {sellerCount} Sellers</p>
+          </div>
+          <div>
+            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Confirmed Orders</span>
+            <p className="text-2xl font-black text-white mt-1">{orders.length}</p>
+            <p className="text-[10px] text-emerald-400 font-bold">₦{totalGrossVolume.toLocaleString()} Gross Vol</p>
+          </div>
+          <div>
+            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Active Listings</span>
+            <p className="text-2xl font-black text-white mt-1">{allProducts.filter(p => !p.isDeleted).length}</p>
+            <p className="text-[10px] text-slate-400 font-bold">{allProducts.filter(p => p.isDeleted).length} removed</p>
+          </div>
+          <div>
+            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Pending Escrow Payouts</span>
+            <p className="text-2xl font-black text-amber-400 mt-1">₦{pendingPayoutsTotal.toLocaleString()}</p>
+            <p className="text-[10px] text-amber-300 font-bold">{payouts.filter(p => p.status === "pending").length} requests</p>
+          </div>
+        </div>
       </div>
 
-      {/* Overview Tab */}
-      {activeTab === "overview" && (
-        <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2 space-y-6">
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-                <div className="bg-white dark:bg-slate-900 p-6 rounded-[2rem] border border-slate-100 dark:border-slate-800 shadow-sm">
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Total Trading Volume</p>
-                  <p className="text-2xl font-black text-slate-900 dark:text-white">₦{systemStats.totalRevenue.toLocaleString()}</p>
-                </div>
-                <div className="bg-white dark:bg-slate-900 p-6 rounded-[2rem] border border-slate-100 dark:border-slate-800 shadow-sm">
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Total Users</p>
-                  <p className="text-2xl font-black text-slate-900 dark:text-white">{systemStats.totalUsers.toLocaleString()}</p>
-                </div>
-                <div className="bg-white dark:bg-slate-900 p-6 rounded-[2rem] border border-slate-100 dark:border-slate-800 shadow-sm">
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Active Sellers</p>
-                  <p className="text-2xl font-black text-indigo-600 tracking-tight">{systemStats.activeSellers.toLocaleString()}</p>
-                </div>
-              </div>
+      {/* Main Navigation Tabs */}
+      <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
+        <button
+          onClick={() => setActiveTab("analytics")}
+          className={cn(
+            "px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer",
+            activeTab === "analytics"
+              ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-md"
+              : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200"
+          )}
+        >
+          <BarChart2 className="w-4 h-4" />
+          General Details & Analytics
+        </button>
 
-              <div className="bg-brand-gradient p-8 rounded-[2.5rem] text-white relative overflow-hidden shadow-xl">
-                 <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full -mr-32 -mt-32 blur-3xl" />
-                 <div className="relative z-10">
-                   <h3 className="text-2xl font-black mb-2 tracking-tight !text-white">Admin Control Center</h3>
-                   <p className="text-white/80 text-sm font-medium mb-6 leading-relaxed max-w-xl">
-                     Welcome to the SHOPIVERSITY Command Center. From here, you have complete oversight of the platform's ecosystem.
-                   </p>
-                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                     <div className="p-4 bg-white/10 backdrop-blur-md rounded-2xl border border-white/20">
-                       <h4 className="font-bold flex items-center gap-2 mb-1 !text-white">
-                         <ShieldCheck className="w-4 h-4" />
-                         Trust & Safety
-                       </h4>
-                       <p className="text-[10px] text-white/70">Verify campus celebrities, suspend non-compliant accounts, and moderate suspicious listings.</p>
-                     </div>
-                     <div className="p-4 bg-white/10 backdrop-blur-md rounded-2xl border border-white/20">
-                       <h4 className="font-bold flex items-center gap-2 mb-1 !text-white">
-                         <Wallet className="w-4 h-4" />
-                         Financial Integrity
-                       </h4>
-                       <p className="text-[10px] text-white/70">Process verified payouts to sellers and ensure ecosystem-wide payment security.</p>
-                     </div>
-                   </div>
-                 </div>
-              </div>
-            </div>
+        <button
+          onClick={() => setActiveTab("users")}
+          className={cn(
+            "px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer",
+            activeTab === "users"
+              ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-md"
+              : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200"
+          )}
+        >
+          <Users className="w-4 h-4" />
+          User Directory ({users.length})
+        </button>
 
-            <div className="space-y-6">
-              <div className="bg-white dark:bg-slate-900 p-8 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 shadow-sm h-full">
-                <h3 className="text-lg font-black text-slate-900 dark:text-white mb-4 tracking-tight flex items-center gap-2">
-                  <TrendingUp className="w-5 h-5 text-emerald-500" />
-                  Ecosystem Health
-                </h3>
-                <div className="space-y-6">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-xs font-bold text-slate-400">Total Products</p>
-                      <p className="text-lg font-black text-slate-900 dark:text-white">{systemStats.totalProducts}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-xs font-bold text-slate-400">Total Orders</p>
-                      <p className="text-lg font-black text-slate-900 dark:text-white">{systemStats.totalOrders}</p>
-                    </div>
-                  </div>
-                  <div className="pt-4 border-t border-slate-50 dark:border-slate-800">
-                    <p className="text-[10px] text-slate-400 font-medium italic">
-                      Platform commission is set at 5% for all transactions.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <button
+          onClick={() => setActiveTab("products")}
+          className={cn(
+            "px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer",
+            activeTab === "products"
+              ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-md"
+              : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200"
+          )}
+        >
+          <Package className="w-4 h-4" />
+          Products ({allProducts.length})
+        </button>
+
+        <button
+          onClick={() => setActiveTab("payouts")}
+          className={cn(
+            "px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer",
+            activeTab === "payouts"
+              ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-md"
+              : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200"
+          )}
+        >
+          <DollarSign className="w-4 h-4" />
+          Payouts ({payouts.filter(p => p.status === "pending").length})
+        </button>
+
+        <button
+          onClick={() => setActiveTab("reports")}
+          className={cn(
+            "px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer",
+            activeTab === "reports"
+              ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-md"
+              : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200"
+          )}
+        >
+          <AlertTriangle className="w-4 h-4" />
+          Reports ({reports.filter(r => r.status !== "dismissed").length})
+        </button>
+
+        <button
+          onClick={() => setActiveTab("moderation")}
+          className={cn(
+            "px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer",
+            activeTab === "moderation"
+              ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-md"
+              : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200"
+          )}
+        >
+          <ShieldAlert className="w-4 h-4 text-red-500" />
+          Contact Logs ({moderationLogs.length})
+        </button>
+      </div>
+
+      {/* TAB 1: ANALYTICS & GENERAL DETAILS */}
+      {activeTab === "analytics" && (
+        <AdminAnalyticsCharts orders={orders} products={allProducts} />
       )}
 
-      {activeTab === "payouts" && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-          <div className="p-8 bg-black dark:bg-slate-900 rounded-[2.5rem] text-white">
-            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-2">Pending Payouts</p>
-            <p className="text-4xl font-black mb-1">₦{stats.totalPendingAmount.toLocaleString()}</p>
-            <div className="flex items-center gap-2 text-slate-400">
-              <Clock className="w-3 h-3" />
-              <span className="text-xs font-bold">{stats.pendingCount} requests waiting</span>
-            </div>
-          </div>
-          <div className="p-8 bg-emerald-50 dark:bg-emerald-900/10 border border-emerald-100 dark:border-emerald-900/20 rounded-[2.5rem]">
-            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-600 mb-2">Total Paid Out</p>
-            <p className="text-4xl font-black text-slate-900 dark:text-white mb-1">₦{stats.totalPaid.toLocaleString()}</p>
-            <div className="flex items-center gap-2 text-emerald-600">
-              <CheckCircle className="w-3 h-3" />
-              <span className="text-xs font-bold">Successfully settled</span>
-            </div>
-          </div>
-          <div className="p-8 bg-slate-50 dark:bg-slate-800/50 rounded-[2.5rem] border border-slate-100 dark:border-slate-800">
-             <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-2">Quick Filter</p>
-             <div className="flex flex-wrap gap-2 mt-4">
-               {["all", "pending", "approved", "paid", "rejected"].map((f, idx) => (
-                 <button
-                   key={`adm-payout-filter-${f}-${idx}`}
-                   onClick={() => setFilter(f as any)}
-                   className={cn(
-                     "px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all",
-                     filter === f 
-                      ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900" 
-                      : "bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-500"
-                   )}
-                 >
-                   {f}
-                 </button>
-               ))}
-             </div>
-          </div>
-        </div>
-      )}
+      {/* TAB 2: USER DIRECTORY & MANAGEMENT */}
+      {activeTab === "users" && (
+        <div className="space-y-6">
+          {/* Filters, Categories & Search */}
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 shadow-sm space-y-5">
+            {/* Category Pills */}
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => setUserCategoryFilter("all")}
+                  className={cn(
+                    "px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer",
+                    userCategoryFilter === "all"
+                      ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/20"
+                      : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200"
+                  )}
+                >
+                  All Users ({users.length})
+                </button>
+                <button
+                  onClick={() => setUserCategoryFilter("buyer")}
+                  className={cn(
+                    "px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer",
+                    userCategoryFilter === "buyer"
+                      ? "bg-blue-600 text-white shadow-md shadow-blue-600/20"
+                      : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200"
+                  )}
+                >
+                  Buyers ({buyerCount})
+                </button>
+                <button
+                  onClick={() => setUserCategoryFilter("seller")}
+                  className={cn(
+                    "px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer",
+                    userCategoryFilter === "seller"
+                      ? "bg-amber-500 text-white shadow-md shadow-amber-500/20"
+                      : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200"
+                  )}
+                >
+                  Sellers ({sellerCount})
+                </button>
+                <button
+                  onClick={() => setUserCategoryFilter("logistics")}
+                  className={cn(
+                    "px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer",
+                    userCategoryFilter === "logistics"
+                      ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
+                      : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200"
+                  )}
+                >
+                  Logistics ({logisticsCount})
+                </button>
+                <button
+                  onClick={() => setUserCategoryFilter("admin")}
+                  className={cn(
+                    "px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer",
+                    userCategoryFilter === "admin"
+                      ? "bg-purple-600 text-white shadow-md shadow-purple-600/20"
+                      : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200"
+                  )}
+                >
+                  Admins ({users.filter(u => u.role === "admin" || u.email === "tommzypolaris@gmail.com" || u.email === "fashinaayomide12005@gmail.com").length})
+                </button>
+              </div>
 
-      {activeTab === "payouts" && (
-        <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 overflow-hidden shadow-sm transition-colors">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead>
-                <tr className="border-b border-slate-50 dark:border-slate-800">
-                  <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">Seller</th>
-                  <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">Request Details</th>
-                  <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">Bank info</th>
-                  <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">Status</th>
-                  <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
-                {payoutRequests.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="px-8 py-20 text-center text-slate-400 font-medium">
-                      No requests matching the current filter.
-                    </td>
+              {/* Alphabetical / Recent Sorting Toggle */}
+              <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
+                <button
+                  onClick={() => setUserSortOrder("asc")}
+                  title="Alphabetical A to Z"
+                  className={cn(
+                    "px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition-all cursor-pointer",
+                    userSortOrder === "asc" ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm" : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
+                  )}
+                >
+                  <SortAsc className="w-3.5 h-3.5" />
+                  <span>A-Z</span>
+                </button>
+                <button
+                  onClick={() => setUserSortOrder("desc")}
+                  title="Alphabetical Z to A"
+                  className={cn(
+                    "px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition-all cursor-pointer",
+                    userSortOrder === "desc" ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm" : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
+                  )}
+                >
+                  <SortDesc className="w-3.5 h-3.5" />
+                  <span>Z-A</span>
+                </button>
+                <button
+                  onClick={() => setUserSortOrder("recent")}
+                  title="Recently Registered"
+                  className={cn(
+                    "px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition-all cursor-pointer",
+                    userSortOrder === "recent" ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm" : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
+                  )}
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>Recent</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Instant Search Bar */}
+            <div className="relative">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+              <input
+                type="text"
+                value={userSearchQuery}
+                onChange={(e) => setUserSearchQuery(e.target.value)}
+                placeholder="Search user by name, email, unique code (e.g. USR-...), phone number, or university..."
+                className="w-full pl-12 pr-10 py-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white text-sm placeholder:text-slate-400 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+              />
+              {userSearchQuery && (
+                <button 
+                  onClick={() => setUserSearchQuery("")} 
+                  className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Users Table */}
+          <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 overflow-hidden shadow-sm">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-100 dark:border-slate-800 text-[10px] font-black text-slate-400 uppercase tracking-widest bg-slate-50/50 dark:bg-slate-850/50">
+                    <th className="px-6 py-5">User Information</th>
+                    <th className="px-6 py-5">Unique Code</th>
+                    <th className="px-6 py-5">Role & Category</th>
+                    <th className="px-6 py-5">Status & Suspension</th>
+                    <th className="px-6 py-5 text-right">Moderation Actions</th>
                   </tr>
-                ) : (
-                  payoutRequests.map((payout, pIdx) => (
-                    <tr key={`adm-payout-${payout.id}-${pIdx}`} className="group hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
-                      <td className="px-8 py-6">
-                         <div className="flex items-center gap-3">
-                           <div className="w-10 h-10 bg-slate-100 dark:bg-slate-800 rounded-full flex items-center justify-center">
-                             <User className="w-5 h-5 text-slate-400" />
-                           </div>
-                           <div>
-                              <p className="text-sm font-bold text-slate-900 dark:text-white leading-none mb-1">{payout.sellerName || "Anonymous Seller"}</p>
-                              <p className="text-[10px] text-slate-400 font-mono">{payout.sellerId.substring(0, 8)}...</p>
-                           </div>
-                         </div>
-                      </td>
-                      <td className="px-8 py-6">
-                         <div className="flex flex-col">
-                            <span className="text-lg font-black text-slate-900 dark:text-white">₦{payout.amount.toLocaleString()}</span>
-                            <span className="text-[10px] text-slate-400 font-bold">{new Date(payout.createdAt).toLocaleDateString()}</span>
-                         </div>
-                      </td>
-                      <td className="px-8 py-6">
-                         <div className="flex flex-col gap-1">
-                            <p className="text-xs font-bold text-slate-700 dark:text-slate-300 leading-none">{payout.bankDetails.accountName}</p>
-                            <p className="text-[10px] text-slate-500">{payout.bankDetails.bankName}</p>
-                            <p className="text-[10px] font-mono font-bold text-slate-900 dark:text-white tracking-widest">{payout.bankDetails.accountNumber}</p>
-                         </div>
-                      </td>
-                      <td className="px-8 py-6">
-                         <div className={cn(
-                           "inline-flex items-center gap-2 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest leading-none",
-                           payout.status === "paid" ? "bg-emerald-100 text-emerald-600" :
-                           payout.status === "approved" ? "bg-blue-100 text-blue-600" :
-                           payout.status === "rejected" ? "bg-red-100 text-red-600" :
-                           "bg-amber-100 text-amber-600"
-                         )}>
-                            {payout.status}
-                         </div>
-                      </td>
-                      <td className="px-8 py-6 text-right">
-                         <div className="flex items-center justify-end gap-2">
-                            {payout.status === "pending" && (
-                              <>
-                                <button
-                                  onClick={() => handleApprovePayout(payout)}
-                                  disabled={processingId === payout.id}
-                                  className="px-4 py-2 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-xl font-bold text-[10px] uppercase tracking-widest disabled:opacity-50"
-                                >
-                                  Approve
-                                </button>
-                                <button
-                                  onClick={() => handleRejectPayout(payout)}
-                                  disabled={processingId === payout.id}
-                                  className="p-2 border border-red-100 dark:border-red-900/20 text-red-600 rounded-xl hover:bg-red-50 dark:hover:bg-red-900/10 transition-colors disabled:opacity-50"
-                                >
-                                  <XCircle className="w-4 h-4" />
-                                </button>
-                              </>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-sm">
+                  {processedUsers.map((u, uIdx) => {
+                    const uniqueCode = u.uniqueCode || u.userCode || `USR-${(u.uid || u.id || "").substring(0, 6).toUpperCase()}`;
+                    const isSuspended = u.isSuspended;
+                    const isPermanent = !u.suspendedUntil || u.banType === "permanent";
+                    const isExpired = u.suspendedUntil && new Date(u.suspendedUntil).getTime() <= Date.now();
+                    const suspensionExpiry = u.suspendedUntil ? new Date(u.suspendedUntil).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" }) : null;
+
+                    return (
+                      <tr 
+                        key={`adm-user-${u.uid || u.id || uIdx}`} 
+                        className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors"
+                      >
+                        {/* User Details */}
+                        <td className="px-6 py-5">
+                          <div className="flex items-center gap-3">
+                            <div className="w-11 h-11 rounded-2xl overflow-hidden bg-slate-100 dark:bg-slate-800 shrink-0 border border-slate-200 dark:border-slate-700">
+                              <img 
+                                src={u.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(u.displayName || "User")}&background=6366f1&color=fff`} 
+                                alt=""
+                                className="w-full h-full object-cover" 
+                              />
+                            </div>
+                            <div className="min-w-0">
+                              <p className="font-bold text-slate-900 dark:text-white leading-tight truncate">
+                                {u.displayName || "Unnamed User"}
+                              </p>
+                              <p className="text-xs text-slate-400 truncate mt-0.5">{u.email || "No email"}</p>
+                              {u.school && (
+                                <p className="text-[10px] text-slate-500 font-medium truncate flex items-center gap-1 mt-0.5">
+                                  <Building2 className="w-3 h-3 text-slate-400" />
+                                  {u.school}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Unique Code */}
+                        <td className="px-6 py-5">
+                          <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono text-xs font-black tracking-wider text-slate-900 dark:text-white">
+                            <span>{uniqueCode}</span>
+                            <button
+                              onClick={() => handleCopyCode(uniqueCode, u.uid || u.id)}
+                              className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-slate-400 hover:text-slate-700 dark:hover:text-white transition-colors cursor-pointer"
+                              title="Copy unique code"
+                            >
+                              {copiedCodeId === (u.uid || u.id) ? (
+                                <Check className="w-3.5 h-3.5 text-emerald-500" />
+                              ) : (
+                                <Copy className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                          </div>
+                        </td>
+
+                        {/* Role & Category */}
+                        <td className="px-6 py-5">
+                          <div className="flex flex-col gap-1">
+                            <span className={cn(
+                              "inline-flex items-center self-start px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider",
+                              u.role === "seller" ? "bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300" :
+                              u.role === "admin" ? "bg-purple-100 text-purple-800 dark:bg-purple-950/50 dark:text-purple-300" :
+                              u.state === "Logistics Partner" ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300" :
+                              "bg-blue-100 text-blue-800 dark:bg-blue-950/50 dark:text-blue-300"
+                            )}>
+                              {u.state === "Logistics Partner" ? "Logistics Rider" : u.role || "Buyer"}
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-bold">
+                              {u.reportCount || 0} Reports • {u.strikeCount || 0} Strikes
+                            </span>
+                          </div>
+                        </td>
+
+                        {/* Status & Suspension */}
+                        <td className="px-6 py-5">
+                          <div className="space-y-1">
+                            {isSuspended && !isExpired ? (
+                              <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-red-100 dark:bg-red-950/50 text-red-700 dark:text-red-300 rounded-full text-[10px] font-black uppercase tracking-wider">
+                                <ShieldAlert className="w-3 h-3" />
+                                <span>{isPermanent ? "Permanently Banned" : `Suspended: until ${suspensionExpiry}`}</span>
+                              </div>
+                            ) : (
+                              <div className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 rounded-full text-[10px] font-black uppercase tracking-wider">
+                                <CheckCircle className="w-3 h-3" />
+                                <span>Active</span>
+                              </div>
                             )}
-                            {payout.status === "approved" && (
-                              <button
-                                onClick={() => handleProcessTransfer(payout)}
-                                disabled={processingId === payout.id}
-                                className="px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-[10px] uppercase tracking-widest flex items-center gap-2 disabled:opacity-50"
-                              >
-                                 {processingId === payout.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wallet className="w-3 h-3" />}
-                                 Pay Now
-                              </button>
-                            )}
-                            {payout.status === "paid" && (
-                              <span className="text-[10px] font-bold text-emerald-600 flex items-center gap-1">
-                                 <CheckCircle className="w-3 h-3" /> Settled
-                              </span>
-                            )}
-                         </div>
+
+                            <div>
+                              {u.isVerified ? (
+                                <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400">✓ Verified Account</span>
+                              ) : (
+                                <span className="text-[10px] font-medium text-slate-400">Unverified</span>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Actions */}
+                        <td className="px-6 py-5 text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            {/* View Dossier Button */}
+                            <button
+                              onClick={() => {
+                                setSelectedUserForDetail(u);
+                                setIsDetailModalOpen(true);
+                              }}
+                              className="px-3.5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-900 dark:text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                            >
+                              View Dossier
+                            </button>
+
+                            {/* Ban / Suspend Button */}
+                            <button
+                              onClick={() => {
+                                setSelectedUserForSuspend(u);
+                                setIsSuspendModalOpen(true);
+                              }}
+                              className={cn(
+                                "px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer shadow-sm",
+                                isSuspended
+                                  ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+                                  : "bg-red-600 hover:bg-red-700 text-white shadow-red-600/20"
+                              )}
+                            >
+                              <ShieldAlert className="w-3.5 h-3.5" />
+                              {isSuspended ? "Modify Ban" : "Ban / Suspend"}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {processedUsers.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="py-16 text-center text-slate-400">
+                        <Users className="w-10 h-10 mx-auto opacity-30 mb-2" />
+                        <p className="font-bold text-sm">No users found matching your search or filters.</p>
                       </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
 
-      {activeTab === "users" && (
-        <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 overflow-hidden shadow-sm">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead>
-                <tr className="border-b border-slate-50 dark:border-slate-800">
-                  <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">User Details</th>
-                  <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">Role / Stats</th>
-                  <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">Status</th>
-                  <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
-                {users.map((u, uIdx) => (
-                  <tr key={`adm-user-${u.uid || u.id || uIdx}-${uIdx}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                    <td className="px-8 py-6">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl overflow-hidden bg-slate-100">
-                          <img src={u.photoURL || `https://ui-avatars.com/api/?name=${u.displayName}`} className="w-full h-full object-cover" />
-                        </div>
-                        <div>
-                          <p className="text-sm font-bold text-slate-900 dark:text-white leading-none mb-1">{u.displayName}</p>
-                          <p className="text-[10px] text-slate-400 font-medium">{u.email}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-8 py-6">
-                      <div className="flex flex-col gap-1">
-                        <span className="text-xs font-black uppercase tracking-widest text-slate-900 dark:text-white">{u.role}</span>
-                        <span className="text-[10px] text-slate-400 font-bold">{u.reportCount || 0} Reports | {u.strikeCount || 0} Strikes</span>
-                      </div>
-                    </td>
-                    <td className="px-8 py-6">
-                      <div className="flex gap-2">
-                        {u.isVerified ? (
-                          <span className="px-3 py-1 bg-blue-100 text-blue-600 rounded-full text-[10px] font-black uppercase tracking-widest">Verified</span>
-                        ) : (
-                          <span className="px-3 py-1 bg-slate-100 text-slate-400 rounded-full text-[10px] font-black uppercase tracking-widest">Unverified</span>
-                        )}
-                        {u.isSuspended && (
-                          <span className="px-3 py-1 bg-red-100 text-red-600 rounded-full text-[10px] font-black uppercase tracking-widest">Suspended</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-8 py-6 text-right">
-                       <div className="flex items-center justify-end gap-2">
-                        <button 
-                          onClick={() => handleToggleVerification(u.id, u.isVerified)}
-                          className="px-3 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-slate-50 transition-all"
-                        >
-                          {u.isVerified ? "Revoke" : "Verify"}
-                        </button>
-                        <button 
-                          onClick={() => handleToggleUserSuspension(u.id, u.isSuspended)}
-                          className={cn(
-                            "px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all",
-                            u.isSuspended ? "bg-emerald-500 text-white" : "bg-red-500 text-white"
-                          )}
-                        >
-                          {u.isSuspended ? "Unsuspend" : "Suspend"}
-                        </button>
-                       </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
+      {/* TAB 3: PRODUCT INVENTORY MODERATION */}
       {activeTab === "products" && (
         <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 overflow-hidden shadow-sm">
           <div className="overflow-x-auto">
-            <table className="w-full text-left">
+            <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="border-b border-slate-50 dark:border-slate-800">
-                  <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">Product</th>
-                  <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">Seller</th>
-                  <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">Category</th>
-                  <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">Price</th>
-                  <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Actions</th>
+                <tr className="border-b border-slate-100 dark:border-slate-800 text-[10px] font-black text-slate-400 uppercase tracking-widest bg-slate-50/50 dark:bg-slate-850/50">
+                  <th className="px-6 py-5">Product</th>
+                  <th className="px-6 py-5">Seller</th>
+                  <th className="px-6 py-5">Category</th>
+                  <th className="px-6 py-5">Price</th>
+                  <th className="px-6 py-5 text-right">Moderation</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-sm">
                 {allProducts.map((p, pIdx) => (
-                  <tr key={`adm-prod-${p.id}-${pIdx}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                    <td className="px-8 py-6">
+                  <tr key={`adm-prod-${p.id}-${pIdx}`} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
+                    <td className="px-6 py-5">
                       <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-lg bg-slate-100 overflow-hidden">
+                        <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 overflow-hidden shrink-0">
                           <img src={p.imageUrl} alt="" className="w-full h-full object-cover" />
                         </div>
-                        <span className="text-sm font-bold text-slate-900 dark:text-white">{p.name}</span>
+                        <span className="font-bold text-slate-900 dark:text-white">{p.name}</span>
                       </div>
                     </td>
-                    <td className="px-8 py-6 text-sm text-slate-500">{p.sellerName}</td>
-                    <td className="px-8 py-6 text-[10px] font-bold uppercase text-slate-400">{p.category}</td>
-                    <td className="px-8 py-6 font-black text-slate-900 dark:text-white">₦{p.price.toLocaleString()}</td>
-                    <td className="px-8 py-6 text-right">
+                    <td className="px-6 py-5 text-xs text-slate-500 font-medium">{p.sellerName || "Anonymous Seller"}</td>
+                    <td className="px-6 py-5">
+                      <span className="px-2.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-[10px] font-black uppercase text-slate-500">
+                        {p.category}
+                      </span>
+                    </td>
+                    <td className="px-6 py-5 font-black text-slate-900 dark:text-white font-mono">₦{p.price.toLocaleString()}</td>
+                    <td className="px-6 py-5 text-right">
                       {!p.isDeleted ? (
                         <button 
                           onClick={() => handleRemoveProduct(p)}
-                          className="p-2 text-slate-400 hover:text-red-500 transition-colors"
+                          className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 dark:bg-red-950/40 dark:text-red-300 rounded-xl text-xs font-bold transition-all cursor-pointer"
                         >
-                          <XCircle className="w-5 h-5" />
+                          Remove Listing
                         </button>
                       ) : (
                         <span className="text-[10px] font-bold text-red-600 uppercase">Removed</span>
@@ -791,37 +798,83 @@ export default function AdminDashboard({ currentUser, onBack }: { currentUser: a
         </div>
       )}
 
-      {activeTab === "reports" && (
+      {/* TAB 4: PAYOUTS */}
+      {activeTab === "payouts" && (
         <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 overflow-hidden shadow-sm">
           <div className="overflow-x-auto">
-            <table className="w-full text-left">
+            <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="border-b border-slate-50 dark:border-slate-800">
-                  <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">Reason</th>
-                  <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">Reported Item</th>
-                  <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">Reporter</th>
-                  <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">Date</th>
-                  <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Actions</th>
+                <tr className="border-b border-slate-100 dark:border-slate-800 text-[10px] font-black text-slate-400 uppercase tracking-widest bg-slate-50/50 dark:bg-slate-850/50">
+                  <th className="px-6 py-5">Seller</th>
+                  <th className="px-6 py-5">Requested Amount</th>
+                  <th className="px-6 py-5">Bank Account Info</th>
+                  <th className="px-6 py-5">Status</th>
+                  <th className="px-6 py-5 text-right">Settlement Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
-                {reports.map((r, rIdx) => (
-                  <tr key={`adm-report-${r.id}-${rIdx}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                    <td className="px-8 py-6 text-sm font-bold text-red-600">{r.reason}</td>
-                    <td className="px-8 py-6 text-xs text-slate-500">{r.productName || r.productId}</td>
-                    <td className="px-8 py-6 text-xs text-slate-500">{r.reporterName || r.reporterId}</td>
-                    <td className="px-8 py-6 text-[10px] font-bold text-slate-400">{new Date(r.createdAt).toLocaleDateString()}</td>
-                    <td className="px-8 py-6 text-right">
-                       {r.status !== "dismissed" ? (
-                         <button 
-                           onClick={() => handleDismissReport(r.id)}
-                           className="px-3 py-1 bg-slate-900 text-white rounded-lg text-[10px] font-black uppercase tracking-widest"
-                         >
-                            Dismiss
-                         </button>
-                       ) : (
-                         <span className="text-[10px] font-bold text-slate-400 uppercase">Dismissed</span>
-                       )}
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-sm">
+                {payouts.map((payout, pIdx) => (
+                  <tr key={`adm-payout-${payout.id}-${pIdx}`} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
+                    <td className="px-6 py-5">
+                      <p className="font-bold text-slate-900 dark:text-white leading-none mb-1">{payout.sellerName || "Anonymous"}</p>
+                      <p className="text-[10px] text-slate-400 font-mono">{payout.sellerId?.substring(0, 8)}...</p>
+                    </td>
+                    <td className="px-6 py-5">
+                      <span className="text-base font-black text-slate-900 dark:text-white font-mono">₦{payout.amount.toLocaleString()}</span>
+                      <p className="text-[10px] text-slate-400 font-bold">{new Date(payout.createdAt).toLocaleDateString()}</p>
+                    </td>
+                    <td className="px-6 py-5">
+                      <p className="text-xs font-bold text-slate-700 dark:text-slate-300 leading-none">{payout.bankDetails?.accountName}</p>
+                      <p className="text-[10px] text-slate-500">{payout.bankDetails?.bankName}</p>
+                      <p className="text-[10px] font-mono font-bold text-slate-900 dark:text-white">{payout.bankDetails?.accountNumber}</p>
+                    </td>
+                    <td className="px-6 py-5">
+                      <span className={cn(
+                        "inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider",
+                        payout.status === "paid" ? "bg-emerald-100 text-emerald-700" :
+                        payout.status === "approved" ? "bg-blue-100 text-blue-700" :
+                        payout.status === "rejected" ? "bg-red-100 text-red-700" :
+                        "bg-amber-100 text-amber-700"
+                      )}>
+                        {payout.status}
+                      </span>
+                    </td>
+                    <td className="px-6 py-5 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        {payout.status === "pending" && (
+                          <>
+                            <button
+                              onClick={() => handleApprovePayout(payout)}
+                              disabled={processingId === payout.id}
+                              className="px-3.5 py-1.5 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-xl font-bold text-xs uppercase tracking-wider cursor-pointer disabled:opacity-50"
+                            >
+                              Approve
+                            </button>
+                            <button
+                              onClick={() => handleRejectPayout(payout)}
+                              disabled={processingId === payout.id}
+                              className="p-1.5 border border-red-200 text-red-600 rounded-xl hover:bg-red-50 cursor-pointer disabled:opacity-50"
+                            >
+                              <XCircle className="w-4 h-4" />
+                            </button>
+                          </>
+                        )}
+                        {payout.status === "approved" && (
+                          <button
+                            onClick={() => handleProcessTransfer(payout)}
+                            disabled={processingId === payout.id}
+                            className="px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-xs uppercase tracking-wider flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          >
+                            {processingId === payout.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wallet className="w-3.5 h-3.5" />}
+                            Pay Out
+                          </button>
+                        )}
+                        {payout.status === "paid" && (
+                          <span className="text-xs font-bold text-emerald-600 flex items-center gap-1">
+                            <CheckCircle className="w-3.5 h-3.5" /> Settled
+                          </span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -831,34 +884,75 @@ export default function AdminDashboard({ currentUser, onBack }: { currentUser: a
         </div>
       )}
 
+      {/* TAB 5: REPORTS QUEUE */}
+      {activeTab === "reports" && (
+        <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 overflow-hidden shadow-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-slate-100 dark:border-slate-800 text-[10px] font-black text-slate-400 uppercase tracking-widest bg-slate-50/50 dark:bg-slate-850/50">
+                  <th className="px-6 py-5">Reason</th>
+                  <th className="px-6 py-5">Reported Item</th>
+                  <th className="px-6 py-5">Reporter</th>
+                  <th className="px-6 py-5">Date</th>
+                  <th className="px-6 py-5 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-sm">
+                {reports.map((r, rIdx) => (
+                  <tr key={`adm-report-${r.id}-${rIdx}`} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
+                    <td className="px-6 py-5 font-bold text-red-600">{r.reason}</td>
+                    <td className="px-6 py-5 text-xs text-slate-500 font-medium">{r.productName || r.productId}</td>
+                    <td className="px-6 py-5 text-xs text-slate-500 font-medium">{r.reporterName || r.reporterId}</td>
+                    <td className="px-6 py-5 text-[10px] font-bold text-slate-400">{new Date(r.createdAt).toLocaleDateString()}</td>
+                    <td className="px-6 py-5 text-right">
+                      {r.status !== "dismissed" ? (
+                        <button 
+                          onClick={() => handleDismissReport(r.id)}
+                          className="px-3.5 py-1.5 bg-slate-900 text-white rounded-xl text-xs font-bold uppercase tracking-wider cursor-pointer"
+                        >
+                          Dismiss
+                        </button>
+                      ) : (
+                        <span className="text-[10px] font-bold text-slate-400 uppercase">Dismissed</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 6: CONTACT MODERATION LOGS */}
       {activeTab === "moderation" && (
-        <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 sm:p-8 border border-slate-100 dark:border-slate-800 shadow-xl space-y-6">
+        <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-6 sm:p-8 border border-slate-100 dark:border-slate-800 shadow-sm space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-6">
             <div>
               <h2 className="text-xl font-black text-slate-900 dark:text-white flex items-center gap-2">
                 <ShieldAlert className="w-5 h-5 text-red-500" />
                 Contact Information Protection Logs
               </h2>
-              <p className="text-sm text-slate-500 font-medium mt-1">
+              <p className="text-xs text-slate-500 font-medium mt-1">
                 Real-time review of messages and image uploads blocked for sharing off-platform contact details.
               </p>
             </div>
-            <span className="px-4 py-1.5 bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded-full text-xs font-black self-start sm:self-auto">
+            <span className="px-3.5 py-1.5 bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded-full text-xs font-black self-start sm:self-auto">
               {moderationLogs.length} Blocked Attempt{moderationLogs.length === 1 ? "" : "s"}
             </span>
           </div>
 
           {moderationLogs.length === 0 ? (
-            <div className="text-center py-16 text-slate-400 space-y-3">
+            <div className="text-center py-16 text-slate-400 space-y-2">
               <ShieldCheck className="w-12 h-12 text-emerald-500 mx-auto opacity-40" />
               <p className="font-bold text-slate-600 dark:text-slate-300">No blocked contact attempts logged yet.</p>
-              <p className="text-xs text-slate-400">The Contact Protection System actively monitors text messages and images 24/7.</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
-                  <tr className="border-b border-slate-100 dark:border-slate-800 text-[11px] font-black text-slate-400 uppercase tracking-widest">
+                  <tr className="border-b border-slate-100 dark:border-slate-800 text-[10px] font-black text-slate-400 uppercase tracking-widest">
                     <th className="pb-4 px-4">User / Sender</th>
                     <th className="pb-4 px-4">Type</th>
                     <th className="pb-4 px-4">Content / Snippet</th>
@@ -867,12 +961,12 @@ export default function AdminDashboard({ currentUser, onBack }: { currentUser: a
                     <th className="pb-4 px-4 text-right">Date & Time</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-sm">
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
                   {moderationLogs.map((log, lIdx) => (
-                    <tr key={`sec-log-${log.id || lIdx}-${lIdx}`} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition-colors">
+                    <tr key={`sec-log-${log.id || lIdx}-${lIdx}`} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/50">
                       <td className="py-4 px-4">
                         <div className="font-bold text-slate-900 dark:text-white">{log.senderName || "Unknown User"}</div>
-                        <div className="text-[11px] text-slate-400 font-mono mt-0.5">{log.senderId}</div>
+                        <div className="text-[10px] text-slate-400 font-mono mt-0.5">{log.senderId}</div>
                       </td>
                       <td className="py-4 px-4">
                         <span className={cn(
@@ -915,6 +1009,44 @@ export default function AdminDashboard({ currentUser, onBack }: { currentUser: a
         </div>
       )}
 
+      {/* MODAL 1: BAN / SUSPEND ACCOUNT */}
+      <AdminSuspendModal
+        isOpen={isSuspendModalOpen}
+        onClose={() => {
+          setIsSuspendModalOpen(false);
+          setSelectedUserForSuspend(null);
+        }}
+        user={selectedUserForSuspend}
+        currentUser={currentUser}
+        onSuccess={() => {
+          setActionSuccessMessage("User moderation status updated successfully.");
+          setTimeout(() => setActionSuccessMessage(null), 3000);
+        }}
+      />
+
+      {/* MODAL 2: USER DOSSIER & INDIVIDUAL ANALYTICS */}
+      <AdminUserDetailModal
+        isOpen={isDetailModalOpen}
+        onClose={() => {
+          setIsDetailModalOpen(false);
+          setSelectedUserForDetail(null);
+        }}
+        user={selectedUserForDetail}
+        orders={orders}
+        products={allProducts}
+        onOpenSuspendModal={(u) => {
+          setSelectedUserForSuspend(u);
+          setIsSuspendModalOpen(true);
+        }}
+        onToggleVerification={handleToggleVerification}
+      />
+
+      {/* MODAL 3: ADMIN SECURITY CREDENTIALS RENEWAL */}
+      <AdminSecurityRenewalModal
+        isOpen={isSecurityRenewalOpen}
+        onClose={() => setIsSecurityRenewalOpen(false)}
+        currentUser={currentUser}
+      />
     </div>
   );
 }

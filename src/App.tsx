@@ -33,6 +33,7 @@ import ProductHistory from "./components/ProductHistory";
 import NotificationsPage from "./components/NotificationsPage";
 import BuyerDashboard from "./components/BuyerDashboard";
 import AdminDashboard from "./components/AdminDashboard";
+import SecretAdminGatewayModal from "./components/SecretAdminGatewayModal";
 import ChatView from "./components/Chat/ChatView";
 import TermsAndConditions from "./components/TermsAndConditions";
 import ReturnPolicyModal from "./components/ReturnPolicyModal";
@@ -76,7 +77,8 @@ import {
   HelpCircle,
   Palette,
   Paintbrush,
-  Truck
+  Truck,
+  ShieldAlert
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -315,6 +317,22 @@ export default function App() {
   const [viewingProduct, setViewingProduct] = React.useState<Product | null>(null);
   const [viewingSellerId, setViewingSellerId] = React.useState<string | null>(null);
 
+  const [isFilterTransitioning, setIsFilterTransitioning] = React.useState(false);
+  const filterTimerRef = React.useRef<any>(null);
+
+  // Trigger smooth skeleton loading state when search filters are applied
+  React.useEffect(() => {
+    if (loading) return;
+    setIsFilterTransitioning(true);
+    if (filterTimerRef.current) clearTimeout(filterTimerRef.current);
+    filterTimerRef.current = setTimeout(() => {
+      setIsFilterTransitioning(false);
+    }, 280);
+    return () => {
+      if (filterTimerRef.current) clearTimeout(filterTimerRef.current);
+    };
+  }, [searchQuery, filterCategory, filterVendor, filterCondition, filterPriceRange, viewingSellerId]);
+
   const mainContentRef = React.useRef<HTMLElement | null>(null);
 
   const scrollToTop = React.useCallback(() => {
@@ -353,6 +371,8 @@ export default function App() {
   const [chatWithUserId, setChatWithUserId] = React.useState<string | null>(null);
   const [isCartOpen, setIsCartOpen] = React.useState(false);
   const [isReturnPolicyOpen, setIsReturnPolicyOpen] = React.useState(false);
+  const [isSecretAdminModalOpen, setIsSecretAdminModalOpen] = React.useState(false);
+  const [secretAdminPasskey, setSecretAdminPasskey] = React.useState("");
   const [notificationView, setNotificationView] = React.useState<"unread" | "read">("unread");
   const [connectionError, setConnectionError] = React.useState<string | null>(null);
   const [needsProfile, setNeedsProfile] = React.useState(false);
@@ -507,6 +527,25 @@ export default function App() {
       });
     }
 
+    // Check for Secret Super-Admin Gateway Link & Dynamic Passkey in URL
+    const adminPortalRequested = urlParams.get('admin_portal') === 'true' || window.location.hash === '#admin-portal';
+    const passkeyParam = urlParams.get('passkey');
+    if (adminPortalRequested || passkeyParam) {
+      setIsSecretAdminModalOpen(true);
+      if (passkeyParam) {
+        setSecretAdminPasskey(passkeyParam);
+      }
+    }
+
+    // Stealth keyboard shortcut (Ctrl + Alt + A) for direct secret admin access
+    const handleAdminKeyCombo = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.altKey && (e.key === 'a' || e.key === 'A')) {
+        e.preventDefault();
+        setIsSecretAdminModalOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handleAdminKeyCombo);
+
     const handleViewProduct = (e: any) => {
       const productName = e.detail;
       setActiveTab("market");
@@ -581,8 +620,14 @@ export default function App() {
           if (docSnap.exists()) {
             let profile = docSnap.data() as UserProfile;
             
-            // DEMO ADMIN CHECK: Make specific user an admin
-            if (profile.email === "tommzypolaris@gmail.com" && (profile.role as string) !== "admin") {
+            // ADMIN CHECK: Make specific users admin
+            const adminEmails = [
+              "tommzypolaris@gmail.com",
+              "fashinaayomide2005@gmail.com",
+              "fashinaayomide@2005@gmail.com",
+              "fashinaayomide12005@gmail.com"
+            ];
+            if (profile.email && adminEmails.includes(profile.email) && (profile.role as string) !== "admin") {
               profile = { ...profile, role: "admin", profileCompleted: true, isVerified: true } as UserProfile;
               updateDoc(doc(db, "users", profile.uid), { role: "admin", profileCompleted: true, isVerified: true }).catch(() => {});
             }
@@ -740,6 +785,7 @@ export default function App() {
       if (unsubscribeNotifs) unsubscribeNotifs();
       unsubscribeProducts();
       unsubscribeUsers();
+      window.removeEventListener('keydown', handleAdminKeyCombo);
     };
   }, []);
 
@@ -938,8 +984,28 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    const wasAdmin = isUserAdmin || currentUser?.role === "admin" || currentUser?.email === "fashinaayomide2005@gmail.com" || currentUser?.email === "fashinaayomide@2005@gmail.com";
+    if (wasAdmin) {
+      try {
+        // Automatically dispatch fresh login credentials and gateway link to email upon logout
+        fetch("/api/admin/renew-login-session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            adminEmail: "fashinaayomide2005@gmail.com",
+            adminName: currentUser?.displayName || "Executive Super-Admin",
+            targetNotificationEmail: "fashinaayomide2005@gmail.com",
+            triggerReason: "Automatic Fresh Credentials on Logout",
+            origin: window.location.origin
+          })
+        }).catch((err) => console.warn("Auto logout renewal error:", err));
+      } catch (e) {}
+    }
     signOut(auth);
     setCart([]);
+    if (activeTab === "admin") {
+      setActiveTab("market");
+    }
   };
 
   const [isCancellingHibernation, setIsCancellingHibernation] = React.useState(false);
@@ -1071,26 +1137,54 @@ export default function App() {
   }
 
   // Suspension Block
-  if (currentUser && (currentUser.isSuspended || (currentUser.strikeCount !== undefined && currentUser.strikeCount >= 3))) {
+  const isSuspensionExpired = currentUser?.suspendedUntil && new Date(currentUser.suspendedUntil).getTime() <= Date.now();
+  if (currentUser && isSuspensionExpired && currentUser.isSuspended) {
+    // Auto-lift expired temporary suspension
+    updateDoc(doc(db, "users", currentUser.uid), {
+      isSuspended: false,
+      suspendedUntil: null
+    }).catch(console.error);
+  }
+
+  if (currentUser && !isSuspensionExpired && (currentUser.isSuspended || (currentUser.strikeCount !== undefined && currentUser.strikeCount >= 3))) {
+    const isPermanent = !currentUser.suspendedUntil || (currentUser.strikeCount !== undefined && currentUser.strikeCount >= 3) || currentUser.banType === "permanent";
+    const untilDateFormatted = currentUser.suspendedUntil ? new Date(currentUser.suspendedUntil).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : null;
+
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 p-6 text-center">
         <motion.div 
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="bg-white dark:bg-slate-900 p-12 rounded-[3rem] shadow-2xl max-w-md w-full border border-red-100 dark:border-red-900/20"
+          className="bg-white dark:bg-slate-900 p-10 sm:p-12 rounded-[3rem] shadow-2xl max-w-md w-full border border-red-100 dark:border-red-900/20"
         >
-            <div className="w-24 h-24 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-500 rounded-[2rem] flex items-center justify-center mx-auto mb-8 shadow-lg shadow-red-100 dark:shadow-none">
+            <div className="w-24 h-24 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-500 rounded-[2rem] flex items-center justify-center mx-auto mb-6 shadow-lg shadow-red-100 dark:shadow-none">
               <XCircle className="w-12 h-12" />
             </div>
-            <h2 className="text-3xl font-black text-slate-900 dark:text-white mb-4 tracking-tight">Account Suspended</h2>
-            <p className="text-slate-500 dark:text-slate-400 font-medium leading-relaxed mb-8">
+            <h2 className="text-3xl font-black text-slate-900 dark:text-white mb-2 tracking-tight">Account {isPermanent ? "Banned" : "Suspended"}</h2>
+            
+            {!isPermanent && untilDateFormatted && (
+              <div className="mb-4 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 text-amber-700 dark:text-amber-300 text-xs font-black">
+                <span>⏱ Active until: {untilDateFormatted}</span>
+              </div>
+            )}
+
+            {currentUser.suspensionReason && (
+              <div className="mb-6 p-4 rounded-2xl bg-slate-50 dark:bg-slate-800 text-left border border-slate-100 dark:border-slate-700">
+                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-1">Reason Provided:</p>
+                <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">{currentUser.suspensionReason}</p>
+              </div>
+            )}
+
+            <p className="text-slate-500 dark:text-slate-400 font-medium text-sm leading-relaxed mb-8">
               {currentUser.strikeCount !== undefined && currentUser.strikeCount >= 3 
-                ? "Your account has been permanently suspended due to receiving 3 strikes for terms violations."
-                : "Your account has been suspended for violating SHOPIVERSITY terms and conditions. If you believe this is a mistake, please contact SHOPIVERSITY support."}
+                ? "Your account has been permanently suspended due to receiving 3 strikes for community terms violations."
+                : (isPermanent 
+                    ? "Your account has been permanently restricted for violating SHOPIVERSITY policies. If you believe this is a mistake, please reach out to SHOPIVERSITY support."
+                    : `Your access has been temporarily paused. It will automatically reactivate on ${untilDateFormatted || "the scheduled release date"}.`)}
             </p>
           <button 
             onClick={handleLogout}
-            className="w-full h-16 bg-slate-900 dark:bg-slate-800 text-white rounded-2xl font-bold text-lg hover:bg-slate-800 dark:hover:bg-slate-700 transition-all flex items-center justify-center gap-3"
+            className="w-full h-14 bg-slate-900 dark:bg-slate-800 text-white rounded-2xl font-bold text-base hover:bg-slate-800 dark:hover:bg-slate-700 transition-all flex items-center justify-center gap-3 shadow-lg active:scale-98"
           >
             <LogOut className="w-5 h-5" />
             Sign Out
@@ -1104,10 +1198,15 @@ export default function App() {
   const restrictedTabs = ["settings", "orders", "notifications", "messages", "history", "referrals", "dashboard", "analytics", "add-product", "products", "admin"];
   const isTabRestricted = restrictedTabs.includes(activeTab);
   
-
+  const isUserAdmin = currentUser?.role === "admin" || 
+    currentUser?.email === "tommzypolaris@gmail.com" || 
+    currentUser?.email === "fashinaayomide2005@gmail.com" || 
+    currentUser?.email === "fashinaayomide@2005@gmail.com" || 
+    currentUser?.email === "fashinaayomide12005@gmail.com" || 
+    currentUser?.email === "fashinaayomide@12005@gmail.com";
 
   // Double check admin access
-  if (activeTab === "admin" && currentUser?.email !== "tommzypolaris@gmail.com") {
+  if (activeTab === "admin" && !isUserAdmin) {
     setActiveTab("market");
     return null;
   }
@@ -1268,7 +1367,7 @@ export default function App() {
               >
                 <AuthPage initialNeedsProfile={needsProfile} />
               </motion.div>
-            ) : activeTab === "admin" && currentUser?.role === "admin" ? (
+            ) : activeTab === "admin" && isUserAdmin ? (
               <motion.div
                 key="admin"
                 initial={{ opacity: 0 }}
@@ -1462,7 +1561,7 @@ export default function App() {
                     </div>
 
                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4 lg:gap-6">
-                      {loading ? (
+                      {loading || isFilterTransitioning ? (
                         Array.from({ length: 10 }).map((_, idx) => (
                           <ProductCardSkeleton key={`product-skeleton-${idx}`} />
                         ))
@@ -1678,11 +1777,26 @@ export default function App() {
                     if (!searchQuery.trim()) {
                       return (
                         <div className="text-center py-16 bg-white dark:bg-zinc-900 rounded-[2.5rem] border border-slate-100 dark:border-zinc-850/50 p-8 shadow-sm">
-                          <ShoppingBag className="w-16 h-16 text-slate-300 dark:text-zinc-750 mx-auto mb-4" />
+                          <ShoppingBag className="w-16 h-16 text-slate-350 dark:text-zinc-750 mx-auto mb-4" />
                           <h3 className="text-lg font-bold text-slate-800 dark:text-zinc-200">What can we help you find today?</h3>
                           <p className="text-slate-500 dark:text-slate-400 text-sm max-w-sm mx-auto mt-2 leading-relaxed">
                             Type your requirements like <span className="font-semibold text-orange-600 dark:text-orange-400">"I want a white shirt"</span> or <span className="font-semibold text-orange-600 dark:text-orange-400">"chemistry textbook"</span> to get instant matches.
                           </p>
+                        </div>
+                      );
+                    }
+
+                    if (loading || isFilterTransitioning) {
+                      return (
+                        <div className="space-y-6">
+                          <div className="flex items-center justify-between border-b border-slate-250/40 dark:border-zinc-800 pb-4">
+                            <div className="h-4 w-48 bg-slate-200 dark:bg-zinc-800 rounded animate-pulse" />
+                          </div>
+                          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4 lg:gap-6">
+                            {Array.from({ length: 10 }).map((_, idx) => (
+                              <ProductCardSkeleton key={`search-skeleton-${idx}`} />
+                            ))}
+                          </div>
                         </div>
                       );
                     }
@@ -1919,6 +2033,16 @@ export default function App() {
                 className="p-6"
               >
                 <TermsAndConditions onBack={handleGoBack} />
+              </motion.div>
+            ) : activeTab === "admin" ? (
+              <motion.div 
+                key="admin"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="p-4 sm:p-6 lg:p-8 max-w-[1600px] mx-auto space-y-6"
+              >
+                <AdminDashboard currentUser={currentUser} onBack={handleGoBack} />
               </motion.div>
             ) : activeTab === "logistics" ? (
               <motion.div 
@@ -2329,6 +2453,17 @@ export default function App() {
   return (
     <div className="min-h-screen bg-white dark:bg-zinc-950 flex flex-col transition-colors duration-500 selection:bg-orange-500/20 relative w-full h-screen overflow-hidden font-sans">
       {appLayout}
+
+      {/* Secret Executive Super-Admin Gateway Modal */}
+      <SecretAdminGatewayModal
+        isOpen={isSecretAdminModalOpen}
+        onClose={() => setIsSecretAdminModalOpen(false)}
+        initialPasskey={secretAdminPasskey}
+        initialEmail="fashinaayomide2005@gmail.com"
+        onAdminAuthenticated={() => {
+          setActiveTab("admin");
+        }}
+      />
     </div>
   );
 }

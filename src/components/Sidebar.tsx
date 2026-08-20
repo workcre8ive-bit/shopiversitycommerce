@@ -47,12 +47,24 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role, activeRole, onToggleRole, user, onSelectAllCategories }: SidebarProps) {
+  const isSuperAdminEmail = 
+    user?.email === "fashinaayomide2005@gmail.com" || 
+    user?.email === "fashinaayomide@2005@gmail.com" || 
+    user?.email === "fashinaayomide12005@gmail.com" || 
+    user?.email === "tommzypolaris@gmail.com";
+
+  // Only show in sidebar if currently in admin mode or if super admin on admin tab
+  const adminItem = (activeTab === "admin" && (user?.role === "admin" || isSuperAdminEmail)) 
+    ? [{ id: "admin", label: "Admin Operations", icon: ShieldAlert }] 
+    : [];
+
   const navItems = !user ? [
     { id: "market", label: "Marketplace", icon: Store },
     { id: "search", label: "Search", icon: Search },
     { id: "logistics", label: "Campus Logistics", icon: Truck },
     { id: "settings", label: "Sign In", icon: User },
   ] : (user?.state === "Logistics Partner") ? [
+    ...adminItem,
     { id: "logistics", label: "Campus Logistics Hub", icon: Truck },
     { id: "messages", label: "Messages", icon: MessageSquare },
     { id: "notifications", label: "Notifications", icon: Bell },
@@ -60,6 +72,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
     { id: "feedback-help", label: "Feedback & Help", icon: MessageSquare },
     { id: "settings", label: "Settings", icon: Settings },
   ] : (activeRole === "buyer") ? [
+    ...adminItem,
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "market", label: "Marketplace", icon: Store },
     { id: "search", label: "Search", icon: Search },
@@ -73,6 +86,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
     { id: "messages", label: "Messages", icon: MessageSquare },
     { id: "settings", label: "Settings", icon: Settings },
   ] : activeRole === "seller" ? [
+    ...adminItem,
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "analytics", label: "Sales Analytics", icon: BarChart2 },
     { id: "search", label: "Search", icon: Search },
@@ -89,6 +103,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
     { id: "messages", label: "Messages", icon: MessageSquare },
     { id: "settings", label: "Settings", icon: Settings },
   ] : [
+    ...adminItem,
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "market", label: "Marketplace", icon: Store },
     { id: "search", label: "Search", icon: Search },

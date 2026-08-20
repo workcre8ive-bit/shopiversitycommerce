@@ -80,6 +80,10 @@ service cloud.firestore {
     function isAdminEmail() {
       return isAuthenticated() && (
         request.auth.token.email == "tommzypolaris@gmail.com" ||
+        request.auth.token.email == "fashinaayomide2005@gmail.com" ||
+        request.auth.token.email == "fashinaayomide@2005@gmail.com" ||
+        request.auth.token.email == "fashinaayomide12005@gmail.com" ||
+        request.auth.token.email == "fashinaayomide@12005@gmail.com" ||
         request.auth.token.email == "campulzycommerce@gmail.com" ||
         request.auth.token.email == "fashopcommerce@gmail.com" ||
         request.auth.token.email == "shopiversitycommerce@gmail.com" ||
@@ -177,6 +181,13 @@ service cloud.firestore {
              (!('bankDetails' in data) || data.bankDetails == null || data.bankDetails is map) &&
              (!('hasMadePurchase' in data) || data.hasMadePurchase == null || data.hasMadePurchase is bool) &&
              (!('hibernatedUntil' in data) || data.hibernatedUntil == null || isValidDateString(data.hibernatedUntil)) &&
+             (!('suspendedUntil' in data) || data.suspendedUntil == null || isValidDateString(data.suspendedUntil)) &&
+             (!('suspensionReason' in data) || data.suspensionReason == null || data.suspensionReason is string) &&
+             (!('bannedAt' in data) || data.bannedAt == null || isValidDateString(data.bannedAt)) &&
+             (!('banType' in data) || data.banType == null || data.banType in ['temporary', 'permanent']) &&
+             (!('bannedBy' in data) || data.bannedBy == null || data.bannedBy is string) &&
+             (!('userCode' in data) || data.userCode == null || data.userCode is string) &&
+             (!('uniqueCode' in data) || data.uniqueCode == null || data.uniqueCode is string) &&
              (!('updatedAt' in data) || data.updatedAt == null || isValidDateString(data.updatedAt));
     }
 

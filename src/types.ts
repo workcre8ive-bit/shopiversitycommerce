@@ -12,10 +12,12 @@ export interface StorefrontSettings {
 
 export interface UserProfile {
   uid: string;
+  id?: string;
   displayName: string;
   username: string;
   email: string;
   phoneNumber: string;
+  phone?: string;
   photoURL?: string;
   role: "buyer" | "seller" | "admin" | "both";
   activeRole?: "buyer" | "seller";
@@ -25,6 +27,7 @@ export interface UserProfile {
   referralCount?: number;
   referralWalletBalance?: number;
   campus?: string;
+  school?: string;
   schoolType?: string;
   schoolName?: string;
   verificationIdUrl?: string;
@@ -34,6 +37,13 @@ export interface UserProfile {
   faceVerificationUrl?: string;
   isVerified: boolean;
   isSuspended: boolean;
+  suspendedUntil?: string;
+  suspensionReason?: string;
+  bannedAt?: string;
+  banType?: "temporary" | "permanent";
+  bannedBy?: string;
+  uniqueCode?: string;
+  userCode?: string;
   strikeCount?: number;
   reportCount: number;
   createdAt: string;

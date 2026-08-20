@@ -278,59 +278,61 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
   );
 }
 
-export const ProductCardSkeleton: React.FC = () => {
+export const ProductCardSkeleton: React.FC<{ customColor?: string }> = ({ customColor = "#ff6b00" }) => {
   return (
-    <div className="relative flex flex-col bg-white dark:bg-zinc-900/70 rounded-2xl overflow-hidden h-full shadow-sm border border-slate-200/90 dark:border-zinc-805 p-3.5 select-none animate-pulse">
+    <div className="relative flex flex-col bg-white dark:bg-zinc-900 rounded-[2.5rem] overflow-hidden h-full shadow-md border border-slate-200/80 dark:border-zinc-800 p-4 select-none animate-pulse">
       {/* Product image container skeleton */}
-      <div className="aspect-[1.1] w-full bg-slate-100/80 dark:bg-zinc-950/40 rounded-xl relative flex items-center justify-center p-4 mb-3 border border-slate-100 dark:border-zinc-900/30">
+      <div className="aspect-square w-full bg-slate-100 dark:bg-zinc-850/60 rounded-2xl relative flex items-center justify-center mb-3 sm:mb-4 overflow-hidden border border-slate-100/80 dark:border-zinc-800/40">
         {/* Floating Category Badge Shimmer */}
-        <div className="absolute top-2.5 left-2.5 w-14 h-4 bg-slate-200 dark:bg-zinc-800 rounded shadow-sm" />
+        <div 
+          className="absolute top-3 left-3 w-16 h-5 rounded-lg opacity-30 shadow-sm"
+          style={{ backgroundColor: customColor }}
+        />
         
         {/* Save button Shimmer */}
-        <div className="absolute top-2.5 right-2.5 w-8 h-8 rounded-full bg-slate-200 dark:bg-zinc-800 shadow-sm" />
+        <div className="absolute top-2.5 right-2.5 w-8 h-8 rounded-full bg-slate-200/80 dark:bg-zinc-800/80 shadow-sm" />
 
         {/* Center icon outline for context */}
-        <Package className="w-10 h-10 text-slate-200 dark:text-zinc-850" />
+        <Package className="w-12 h-12 text-slate-200 dark:text-zinc-800" />
       </div>
 
       {/* Product info details skeleton */}
-      <div className="flex flex-col flex-grow px-1.5">
+      <div className="relative z-10 flex flex-col flex-grow">
         {/* Title Shimmer lines */}
-        <div className="h-3 w-5/6 bg-slate-200 dark:bg-zinc-800 rounded-md mb-2" />
-        <div className="h-3 w-4/6 bg-slate-200 dark:bg-zinc-800 rounded-md mb-3" />
+        <div className="h-4 w-4/5 bg-slate-200 dark:bg-zinc-800 rounded-md mb-2" />
+        <div className="h-3.5 w-3/5 bg-slate-200/70 dark:bg-zinc-800/70 rounded-md mb-3" />
 
         {/* Condition Tag Shimmer */}
         <div className="mb-4">
-          <div className="w-12 h-4 bg-orange-50/70 dark:bg-orange-950/10 rounded" />
+          <div className="w-14 h-4 bg-orange-100/60 dark:bg-orange-950/30 rounded-md" />
         </div>
 
         {/* Pricing and Action bottom block Shimmer */}
-        <div className="flex items-end justify-between mt-auto pt-1">
+        <div className="flex items-end justify-between mt-auto pt-2">
           <div className="flex flex-col gap-1.5">
-            <div className="h-2 w-6 bg-slate-150 dark:bg-zinc-800 rounded" />
-            <div className="flex items-center gap-1">
-              <div className="h-3 w-2 bg-slate-200 dark:bg-zinc-800 rounded" />
-              <div className="h-5 w-16 bg-slate-200 dark:bg-zinc-800 rounded" />
-            </div>
+            <div className="h-2 w-8 bg-slate-200 dark:bg-zinc-800 rounded" />
+            <div className="h-6 w-24 bg-slate-200 dark:bg-zinc-800 rounded-lg" />
           </div>
 
           {/* Quick action button Shimmer */}
-          <div className="w-9 h-9 rounded-xl bg-slate-200 dark:bg-zinc-800" />
+          <div 
+            className="w-10 h-10 rounded-2xl opacity-25 shadow-sm"
+            style={{ backgroundColor: customColor }}
+          />
         </div>
 
         {/* Seller and location footer Shimmer */}
-        <div className="flex items-center justify-between pt-2.5 mt-3.5 border-t border-slate-150/55 dark:border-zinc-800/40">
+        <div className="flex items-center justify-between pt-3 mt-3 border-t border-slate-100 dark:border-zinc-800/60">
           <div className="flex items-center gap-1.5">
-            <div className="w-3.5 h-3.5 rounded-full bg-slate-150 dark:bg-zinc-800" />
-            <div className="h-2 w-12 bg-slate-150 dark:bg-zinc-800 rounded" />
+            <div className="w-4 h-4 rounded-full bg-slate-200 dark:bg-zinc-800" />
+            <div className="h-2.5 w-16 bg-slate-200 dark:bg-zinc-800 rounded" />
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="h-2.5 w-6 bg-slate-150 dark:bg-zinc-800 rounded" />
-            <div className="h-2.5 w-8 bg-slate-150 dark:bg-zinc-800 rounded" />
+          <div className="flex items-center gap-2">
+            <div className="h-2.5 w-8 bg-slate-200 dark:bg-zinc-800 rounded" />
           </div>
         </div>
       </div>
     </div>
   );
-}
+};

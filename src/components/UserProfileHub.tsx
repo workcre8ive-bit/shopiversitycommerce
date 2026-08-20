@@ -144,17 +144,7 @@ export default function UserProfileHub({
           icon: ShieldAlert,
           color: "bg-red-500/10 text-red-600 dark:text-red-400",
           onClick: () => onNavigateTab("terms")
-        },
-        ...(user?.email === "tommzypolaris@gmail.com" ? [
-          {
-            id: "admin",
-            label: "Administrator Console",
-            sublabel: "Manage disputes, reviews, and users",
-            icon: ShieldCheck,
-            color: "bg-teal-500/10 text-teal-600 dark:text-teal-400",
-            onClick: () => onNavigateTab("admin")
-          }
-        ] : [])
+        }
       ]
     }
   ];

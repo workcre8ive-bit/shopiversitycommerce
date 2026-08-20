@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/utils";
-import { ProductCard } from "./ProductCard";
+import { ProductCard, ProductCardSkeleton } from "./ProductCard";
 
 interface SellerStorefrontProps {
   sellerId: string;
@@ -38,8 +38,19 @@ export default function SellerStorefront({ sellerId, currentUser, previewSetting
   const [seller, setSeller] = React.useState<UserProfile | null>(null);
   const [products, setProducts] = React.useState<Product[]>([]);
   const [loading, setLoading] = React.useState(true);
+  const [isCategoryTransitioning, setIsCategoryTransitioning] = React.useState(false);
+  const catTimerRef = React.useRef<any>(null);
   const [activeType, setActiveType] = React.useState<"all" | "good" | "service" | "event">("all");
   const [activeCategory, setActiveCategory] = React.useState("All");
+
+  const handleCategoryChange = (cat: string) => {
+    setActiveCategory(cat);
+    setIsCategoryTransitioning(true);
+    if (catTimerRef.current) clearTimeout(catTimerRef.current);
+    catTimerRef.current = setTimeout(() => {
+      setIsCategoryTransitioning(false);
+    }, 250);
+  };
 
   React.useEffect(() => {
     if (!sellerId) {
@@ -352,7 +363,7 @@ export default function SellerStorefront({ sellerId, currentUser, previewSetting
               {availableCategories.map((cat, cIdx) => (
                 <button
                   key={`sf-cat-${cat}-${cIdx}`}
-                  onClick={() => setActiveCategory(cat)}
+                  onClick={() => handleCategoryChange(cat)}
                   className={cn(
                     "px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest whitespace-nowrap transition-all border-2 cursor-pointer",
                     activeCategory === cat
@@ -370,38 +381,44 @@ export default function SellerStorefront({ sellerId, currentUser, previewSetting
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4 md:gap-6">
-        <AnimatePresence mode="popLayout">
-          {filteredItems.length === 0 ? (
-            <motion.div 
-              key="empty-state"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="col-span-full py-20 text-center bg-white dark:bg-slate-900 rounded-[3rem] border border-slate-100 dark:border-slate-800 w-full"
-            >
-              <Package className="w-16 h-16 text-slate-200 dark:text-slate-800 mx-auto mb-4" />
-              <h3 className="text-xl font-bold text-slate-900 dark:text-white">No items found</h3>
-              <p className="text-sm text-slate-500">Check back later or browse other categories.</p>
-            </motion.div>
-          ) : (
-            filteredItems.map((product, pIdx) => (
-              <motion.div
-                key={`sf-product-${product.id || pIdx}-${pIdx}`}
-                layout
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.9 }}
+        {loading || isCategoryTransitioning ? (
+          Array.from({ length: 8 }).map((_, idx) => (
+            <ProductCardSkeleton key={`sf-skeleton-${idx}`} customColor={colors.primary} />
+          ))
+        ) : (
+          <AnimatePresence mode="popLayout">
+            {filteredItems.length === 0 ? (
+              <motion.div 
+                key="empty-state"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="col-span-full py-20 text-center bg-white dark:bg-slate-900 rounded-[3rem] border border-slate-100 dark:border-slate-800 w-full"
               >
-                <ProductCard 
-                  product={product} 
-                  onAddToCart={onAddToCart}
-                  isOwner={currentUser?.uid === product.sellerId}
-                  currentUser={currentUser}
-                  customColor={colors.primary}
-                />
+                <Package className="w-16 h-16 text-slate-200 dark:text-slate-800 mx-auto mb-4" />
+                <h3 className="text-xl font-bold text-slate-900 dark:text-white">No items found</h3>
+                <p className="text-sm text-slate-500">Check back later or browse other categories.</p>
               </motion.div>
-            ))
-          )}
-        </AnimatePresence>
+            ) : (
+              filteredItems.map((product, pIdx) => (
+                <motion.div
+                  key={`sf-product-${product.id || pIdx}-${pIdx}`}
+                  layout
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.9 }}
+                >
+                  <ProductCard 
+                    product={product} 
+                    onAddToCart={onAddToCart}
+                    isOwner={currentUser?.uid === product.sellerId}
+                    currentUser={currentUser}
+                    customColor={colors.primary}
+                  />
+                </motion.div>
+              ))
+            )}
+          </AnimatePresence>
+        )}
       </div>
     </div>
   );

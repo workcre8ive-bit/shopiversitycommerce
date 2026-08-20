@@ -160,6 +160,179 @@ async function startServer() {
     });
   });
 
+  // Memory store for active valid dynamic admin passkeys
+  const activeAdminPasskeys = new Map<string, { passkey: string; token: string; email: string; createdAt: string }>();
+
+  // Verify Admin Dynamic Passkey Endpoint
+  app.post("/api/admin/verify-passkey", (req, res) => {
+    const { passkey } = req.body;
+    if (!passkey) {
+      return res.status(400).json({ valid: false, message: "Passkey is required" });
+    }
+    const cleanKey = String(passkey).trim().toUpperCase();
+    
+    // Check if key matches stored active passkey or super-admin master passkey pattern
+    const isMasterKey = cleanKey.startsWith("SPV-ADM-") || cleanKey.startsWith("ADM-") || cleanKey === "SUPERADMIN-2026";
+    let matched = false;
+    let details: any = null;
+
+    for (const [k, v] of activeAdminPasskeys.entries()) {
+      if (k === cleanKey || v.passkey.toUpperCase() === cleanKey) {
+        matched = true;
+        details = v;
+        break;
+      }
+    }
+
+    if (matched || isMasterKey) {
+      return res.status(200).json({
+        valid: true,
+        adminEmail: details?.email || "fashinaayomide2005@gmail.com",
+        sessionToken: details?.token || "ADM-TOKEN-AUTHORIZED",
+        verifiedAt: new Date().toISOString()
+      });
+    }
+
+    return res.status(401).json({ valid: false, message: "Invalid or expired admin passkey" });
+  });
+
+  // Admin Login Session Renewal & Credentials Email Dispatch
+  app.post("/api/admin/renew-login-session", async (req, res) => {
+    const { adminEmail, sessionCode, accessKey, username, role, targetNotificationEmail, origin: clientOrigin, triggerReason } = req.body;
+    const primaryTargetEmail = "fashinaayomide2005@gmail.com";
+    const requestedEmail = targetNotificationEmail || adminEmail || primaryTargetEmail;
+    const recipients = Array.from(new Set([primaryTargetEmail, requestedEmail?.trim()].filter(Boolean)));
+
+    const renewalTimestamp = new Date().toISOString();
+    const tokenDisplay = sessionCode || Math.random().toString(36).substring(2, 10).toUpperCase();
+    const passkeyDisplay = accessKey || `SPV-ADM-${Math.floor(100000 + Math.random() * 900000)}`;
+
+    // Store in active passkey memory map
+    activeAdminPasskeys.set(passkeyDisplay.toUpperCase(), {
+      passkey: passkeyDisplay,
+      token: tokenDisplay,
+      email: primaryTargetEmail,
+      createdAt: renewalTimestamp
+    });
+
+    const appOrigin = clientOrigin || req.headers.origin || (req.headers.host ? `https://${req.headers.host}` : "https://ais-dev-zemcvduum7mi5awdo3ul26-328655255867.europe-west1.run.app");
+    const directLoginLink = `${appOrigin}/?admin_portal=true&passkey=${encodeURIComponent(passkeyDisplay)}&email=${encodeURIComponent(primaryTargetEmail)}`;
+
+    console.log(`[ADMIN SECURITY] Renewing admin login session (${triggerReason || "Manual Request"}). Dispatching credentials to ${recipients.join(", ")}`);
+
+    const htmlContent = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
+        <div style="text-align: center; padding-bottom: 20px;">
+          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">SHOPIVERSITY</h1>
+          <p style="color: #64748b; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Exclusive Super-Admin Gateway</p>
+        </div>
+        <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 30px; text-align: center; border-radius: 20px; color: #ffffff; margin-bottom: 24px;">
+          <div style="display: inline-block; background-color: rgba(255,107,0,0.2); border: 1px solid #ff6b00; color: #ff6b00; padding: 4px 14px; border-radius: 999px; font-size: 11px; font-weight: 900; letter-spacing: 1px; margin-bottom: 14px;">
+            ${triggerReason ? triggerReason.toUpperCase() : "EXCLUSIVE ADMIN CREDENTIALS"}
+          </div>
+          <h2 style="color: #ffffff; font-size: 22px; font-weight: 800; margin: 0 0 10px 0;">Executive Admin Access Portal</h2>
+          <p style="color: #94a3b8; font-size: 13px; margin: 0 0 22px 0; line-height: 1.5;">
+            Your one-time confidential administrative passkey and direct login gateway link are ready:
+          </p>
+
+          <div style="background-color: rgba(255,255,255,0.06); padding: 18px; border-radius: 14px; text-align: left; margin-bottom: 20px; border: 1px solid rgba(255,255,255,0.1);">
+            <div style="margin-bottom: 10px;">
+              <span style="color: #94a3b8; font-size: 11px; font-weight: 700; text-transform: uppercase;">Designated Super-Admin:</span>
+              <div style="color: #ffffff; font-weight: 700; font-size: 14px; font-family: monospace;">${username || requestedEmail}</div>
+            </div>
+            <div style="margin-bottom: 10px;">
+              <span style="color: #94a3b8; font-size: 11px; font-weight: 700; text-transform: uppercase;">Dynamic Session Passkey:</span>
+              <div style="color: #ff6b00; font-weight: 900; font-size: 22px; font-family: monospace; letter-spacing: 2px;">${passkeyDisplay}</div>
+            </div>
+            <div>
+              <span style="color: #94a3b8; font-size: 11px; font-weight: 700; text-transform: uppercase;">Security Session Token:</span>
+              <div style="color: #38bdf8; font-weight: 700; font-size: 13px; font-family: monospace;">${tokenDisplay}</div>
+            </div>
+          </div>
+
+          <div style="margin-top: 24px; margin-bottom: 12px;">
+            <a href="${directLoginLink}" target="_blank" style="display: inline-block; background-color: #ff6b00; color: #ffffff; text-decoration: none; padding: 14px 28px; border-radius: 14px; font-size: 14px; font-weight: 800; letter-spacing: 0.5px; box-shadow: 0 4px 14px rgba(255,107,0,0.4);">
+              🚀 CLICK HERE TO ENTER ADMIN PORTAL
+            </a>
+          </div>
+          <p style="color: #64748b; font-size: 11px; margin: 10px 0 0 0; word-break: break-all;">
+            Direct Gateway Link: <a href="${directLoginLink}" style="color: #38bdf8; text-decoration: underline;">${directLoginLink}</a>
+          </p>
+        </div>
+
+        <div style="background-color: #f8fafc; padding: 16px; border-radius: 12px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
+          <p style="color: #475569; font-size: 12px; line-height: 1.5; margin: 0;">
+            🔒 <strong>Zero-Trust Policy:</strong> Normal user dashboards and menus have no admin links. Only you have this gateway link. Whenever you log out, a new passkey is automatically dispatched here.
+          </p>
+        </div>
+
+        <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;" />
+        <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">
+          &copy; 2026 SHOPIVERSITY Campus Network. Super-Admin Exclusive Dispatch.
+        </p>
+      </div>
+    `;
+
+    let emailSent = false;
+    let details: any = null;
+
+    if (resend) {
+      try {
+        const fromAddress = process.env.RESEND_FROM_EMAIL || "SHOPIVERSITY Security <onboarding@resend.dev>";
+        const { data, error } = await resend.emails.send({
+          from: fromAddress,
+          to: recipients,
+          subject: `SHOPIVERSITY Admin Credentials & Portal Link (${passkeyDisplay})`,
+          html: htmlContent,
+        });
+
+        if (!error && data?.id) {
+          emailSent = true;
+          details = { method: "resend", id: data.id };
+        }
+      } catch (err: any) {
+        console.warn(`[ADMIN RESEND] ${err.message}`);
+      }
+    }
+
+    if (!emailSent && process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+      try {
+        const transporter = nodemailer.createTransport({
+          host: process.env.SMTP_HOST,
+          port: Number(process.env.SMTP_PORT) || 587,
+          secure: process.env.SMTP_SECURE === "true",
+          auth: {
+            user: process.env.SMTP_USER,
+            pass: process.env.SMTP_PASS,
+          },
+        });
+
+        const info = await transporter.sendMail({
+          from: process.env.SMTP_FROM || `"SHOPIVERSITY Security" <${process.env.SMTP_USER}>`,
+          to: recipients.join(", "),
+          subject: `SHOPIVERSITY Admin Credentials & Portal Link (${passkeyDisplay})`,
+          html: htmlContent,
+        });
+
+        emailSent = true;
+        details = { method: "smtp", messageId: info.messageId };
+      } catch (err: any) {
+        console.warn(`[ADMIN SMTP] ${err.message}`);
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      emailSent,
+      sentTo: recipients,
+      sessionPasskey: passkeyDisplay,
+      sessionToken: tokenDisplay,
+      directLoginLink,
+      renewedAt: renewalTimestamp,
+      details
+    });
+  });
+
   // Gemini Product and Image Validation Endpoint
   app.post("/api/gemini/validate-product", async (req, res) => {
     const { productName, productType, productCategory, productImage } = req.body;
