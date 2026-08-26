@@ -324,3 +324,69 @@ export function filterContent(text: string): string {
   }
   return text;
 }
+
+/**
+ * Scans multiple public fields for contact information, emails, phone numbers, or social media handles.
+ */
+export function scanPublicFieldsForContactInfo(fields: Record<string, string | null | undefined>): DetectionResult {
+  const detectedTypes: string[] = [];
+  const reasons: string[] = [];
+
+  for (const [fieldName, value] of Object.entries(fields)) {
+    if (!value || typeof value !== "string" || !value.trim()) continue;
+    const result = detectContactSharing(value);
+    if (result.isBlocked) {
+      detectedTypes.push(...result.detectedTypes);
+      reasons.push(`In ${fieldName}: ${result.reason}`);
+    }
+  }
+
+  const isBlocked = detectedTypes.length > 0;
+  return {
+    isBlocked,
+    reason: isBlocked ? reasons.join(" ") : undefined,
+    detectedTypes: Array.from(new Set(detectedTypes))
+  };
+}
+
+/**
+ * Calculates remaining lockout time in hours and minutes.
+ */
+export function getRemainingSuspensionTime(suspendedUntilISO?: string | null): string {
+  if (!suspendedUntilISO) return "";
+  const diff = new Date(suspendedUntilISO).getTime() - Date.now();
+  if (diff <= 0) return "";
+  const hours = Math.floor(diff / (1000 * 60 * 60));
+  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  return `${Math.max(1, minutes)}m`;
+}
+
+/**
+ * Checks if a user is currently locked out from chat.
+ */
+export function isUserChatSuspended(userData: any): { isSuspended: boolean; remainingText: string } {
+  if (!userData?.chatSuspendedUntil) return { isSuspended: false, remainingText: "" };
+  const diff = new Date(userData.chatSuspendedUntil).getTime() - Date.now();
+  if (diff <= 0) return { isSuspended: false, remainingText: "" };
+  return {
+    isSuspended: true,
+    remainingText: getRemainingSuspensionTime(userData.chatSuspendedUntil)
+  };
+}
+
+/**
+ * Checks if a user is currently locked out from creating/editing products and public listings.
+ */
+export function isUserProductSuspended(userData: any): { isSuspended: boolean; remainingText: string } {
+  if (!userData?.productSuspendedUntil) return { isSuspended: false, remainingText: "" };
+  const diff = new Date(userData.productSuspendedUntil).getTime() - Date.now();
+  if (diff <= 0) return { isSuspended: false, remainingText: "" };
+  return {
+    isSuspended: true,
+    remainingText: getRemainingSuspensionTime(userData.productSuspendedUntil)
+  };
+}
+

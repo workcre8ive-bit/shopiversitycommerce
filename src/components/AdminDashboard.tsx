@@ -279,8 +279,74 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
         dismissedAt: new Date().toISOString(),
         dismissedBy: currentUser?.email || "Admin"
       });
+      setActionSuccessMessage("Report dismissed.");
+      setTimeout(() => setActionSuccessMessage(null), 3000);
     } catch (err: any) {
       handleFirestoreError(err, OperationType.UPDATE, `reports/${reportId}`);
+    }
+  };
+
+  // Reset user moderation strikes and lockouts
+  const handleResetUserStrikes = async (targetUser: UserProfile) => {
+    const targetId = targetUser.uid || targetUser.id;
+    try {
+      await updateDoc(doc(db, "users", targetId), {
+        chatViolationCount: 0,
+        chatSuspendedUntil: null,
+        productViolationCount: 0,
+        productSuspendedUntil: null,
+        strikeCount: 0,
+        isSuspended: false,
+        suspendedUntil: null
+      });
+
+      await addDoc(collection(db, "notifications"), {
+        userId: targetId,
+        title: "✅ Moderation Penalties Cleared",
+        message: "Your chat, listing, and account restrictions have been reset by an administrator. All platform features are unlocked.",
+        type: "system",
+        read: false,
+        createdAt: new Date().toISOString()
+      }).catch(() => {});
+
+      setActionSuccessMessage(`Cleared all strikes & restrictions for ${targetUser.displayName || targetUser.email}!`);
+      setTimeout(() => setActionSuccessMessage(null), 3000);
+    } catch (err: any) {
+      handleFirestoreError(err, OperationType.UPDATE, `users/${targetId}`);
+    }
+  };
+
+  // Update user role from admin panel
+  const handleUpdateUserRole = async (targetUser: UserProfile, newRole: string) => {
+    const targetId = targetUser.uid || targetUser.id;
+    try {
+      const updatePayload: any = {
+        role: newRole,
+        activeRole: newRole === "seller" ? "seller" : "buyer",
+        updatedAt: new Date().toISOString()
+      };
+      if (newRole === "logistics") {
+        updatePayload.state = "Logistics Partner";
+        updatePayload.role = "buyer";
+      } else if (targetUser.state === "Logistics Partner" && newRole !== "logistics") {
+        updatePayload.state = targetUser.state === "Logistics Partner" ? "Active" : targetUser.state;
+      }
+
+      await updateDoc(doc(db, "users", targetId), updatePayload);
+
+      await addDoc(collection(db, "notifications"), {
+        userId: targetId,
+        title: "🔄 Account Role Updated",
+        message: `Your account role was updated to ${newRole.toUpperCase()} by the platform administrator.`,
+        type: "system",
+        read: false,
+        createdAt: new Date().toISOString()
+      }).catch(() => {});
+
+      setActionSuccessMessage(`Updated ${targetUser.displayName || "User"}'s role to ${newRole.toUpperCase()}`);
+      setTimeout(() => setActionSuccessMessage(null), 3000);
+    } catch (err: any) {
+      handleFirestoreError(err, OperationType.UPDATE, `users/${targetId}`);
     }
   };
 
@@ -654,25 +720,39 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
 
                         {/* Role & Category */}
                         <td className="px-6 py-5">
-                          <div className="flex flex-col gap-1">
-                            <span className={cn(
-                              "inline-flex items-center self-start px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider",
-                              u.role === "seller" ? "bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300" :
-                              u.role === "admin" ? "bg-purple-100 text-purple-800 dark:bg-purple-950/50 dark:text-purple-300" :
-                              u.state === "Logistics Partner" ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300" :
-                              "bg-blue-100 text-blue-800 dark:bg-blue-950/50 dark:text-blue-300"
-                            )}>
-                              {u.state === "Logistics Partner" ? "Logistics Rider" : u.role || "Buyer"}
-                            </span>
-                            <span className="text-[10px] text-slate-400 font-bold">
-                              {u.reportCount || 0} Reports • {u.strikeCount || 0} Strikes
-                            </span>
+                          <div className="flex flex-col gap-1.5">
+                            <div className="flex items-center gap-1.5">
+                              <select
+                                value={u.state === "Logistics Partner" ? "logistics" : u.role || "buyer"}
+                                onChange={(e) => handleUpdateUserRole(u, e.target.value)}
+                                className={cn(
+                                  "px-2.5 py-1 rounded-xl text-[10px] font-black uppercase tracking-wider border outline-none cursor-pointer",
+                                  u.role === "seller" ? "bg-amber-50 border-amber-300 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300" :
+                                  u.role === "admin" ? "bg-purple-50 border-purple-300 text-purple-800 dark:bg-purple-950/50 dark:text-purple-300" :
+                                  u.state === "Logistics Partner" ? "bg-emerald-50 border-emerald-300 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300" :
+                                  "bg-blue-50 border-blue-300 text-blue-800 dark:bg-blue-950/50 dark:text-blue-300"
+                                )}
+                              >
+                                <option value="buyer">Buyer</option>
+                                <option value="seller">Seller</option>
+                                <option value="logistics">Logistics Rider</option>
+                                <option value="admin">Administrator</option>
+                              </select>
+                            </div>
+                            <div className="text-[10px] text-slate-400 font-bold space-y-0.5">
+                              <div>{u.reportCount || 0} Reports • {u.strikeCount || 0} Strikes</div>
+                              {(u.chatViolationCount > 0 || u.productViolationCount > 0) && (
+                                <div className="text-red-500 text-[9px] font-mono">
+                                  Violations: Chat({u.chatViolationCount || 0}/3) Prod({u.productViolationCount || 0}/3)
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </td>
 
                         {/* Status & Suspension */}
                         <td className="px-6 py-5">
-                          <div className="space-y-1">
+                          <div className="space-y-1.5">
                             {isSuspended && !isExpired ? (
                               <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-red-100 dark:bg-red-950/50 text-red-700 dark:text-red-300 rounded-full text-[10px] font-black uppercase tracking-wider">
                                 <ShieldAlert className="w-3 h-3" />
@@ -682,6 +762,18 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
                               <div className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 rounded-full text-[10px] font-black uppercase tracking-wider">
                                 <CheckCircle className="w-3 h-3" />
                                 <span>Active</span>
+                              </div>
+                            )}
+
+                            {/* Chat / Product 24h Lockout Badges */}
+                            {u.chatSuspendedUntil && new Date(u.chatSuspendedUntil).getTime() > Date.now() && (
+                              <div className="inline-flex items-center gap-1 px-2 py-0.5 bg-orange-100 dark:bg-orange-950/50 text-orange-700 dark:text-orange-300 rounded-lg text-[9px] font-black uppercase tracking-wider">
+                                <span>🚫 Chat Locked (24h)</span>
+                              </div>
+                            )}
+                            {u.productSuspendedUntil && new Date(u.productSuspendedUntil).getTime() > Date.now() && (
+                              <div className="inline-flex items-center gap-1 px-2 py-0.5 bg-orange-100 dark:bg-orange-950/50 text-orange-700 dark:text-orange-300 rounded-lg text-[9px] font-black uppercase tracking-wider">
+                                <span>🚫 Listing Locked (24h)</span>
                               </div>
                             )}
 
@@ -698,6 +790,17 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
                         {/* Actions */}
                         <td className="px-6 py-5 text-right">
                           <div className="flex items-center justify-end gap-2">
+                            {/* Reset Strikes button if user has strikes or suspensions */}
+                            {(u.isSuspended || u.chatViolationCount > 0 || u.productViolationCount > 0 || (u.chatSuspendedUntil && new Date(u.chatSuspendedUntil).getTime() > Date.now()) || (u.productSuspendedUntil && new Date(u.productSuspendedUntil).getTime() > Date.now())) && (
+                              <button
+                                onClick={() => handleResetUserStrikes(u)}
+                                className="px-2.5 py-2 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 border border-emerald-200 dark:border-emerald-800 rounded-xl text-[10px] font-bold transition-all cursor-pointer"
+                                title="Reset all moderation strikes and unlock account"
+                              >
+                                Reset Strikes
+                              </button>
+                            )}
+
                             {/* View Dossier Button */}
                             <button
                               onClick={() => {
@@ -887,38 +990,162 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
       {/* TAB 5: REPORTS QUEUE */}
       {activeTab === "reports" && (
         <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 overflow-hidden shadow-sm">
+          <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-black text-slate-900 dark:text-white flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-red-500" />
+                Community Reports & Flagged Interactions
+              </h3>
+              <p className="text-xs text-slate-500 font-medium mt-0.5">
+                Displays the identity of the person who reported and the person that was reported.
+              </p>
+            </div>
+            <span className="px-3 py-1 bg-red-100 dark:bg-red-950/50 text-red-700 dark:text-red-300 rounded-full text-xs font-black">
+              {reports.filter(r => r.status !== "dismissed").length} Pending
+            </span>
+          </div>
+
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="border-b border-slate-100 dark:border-slate-800 text-[10px] font-black text-slate-400 uppercase tracking-widest bg-slate-50/50 dark:bg-slate-850/50">
-                  <th className="px-6 py-5">Reason</th>
+                  <th className="px-6 py-5">Reason & Issue</th>
+                  <th className="px-6 py-5">Person Reported (Subject)</th>
+                  <th className="px-6 py-5">Person Who Reported (Reporter)</th>
                   <th className="px-6 py-5">Reported Item</th>
-                  <th className="px-6 py-5">Reporter</th>
                   <th className="px-6 py-5">Date</th>
-                  <th className="px-6 py-5 text-right">Actions</th>
+                  <th className="px-6 py-5 text-right">Moderation Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-sm">
-                {reports.map((r, rIdx) => (
-                  <tr key={`adm-report-${r.id}-${rIdx}`} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
-                    <td className="px-6 py-5 font-bold text-red-600">{r.reason}</td>
-                    <td className="px-6 py-5 text-xs text-slate-500 font-medium">{r.productName || r.productId}</td>
-                    <td className="px-6 py-5 text-xs text-slate-500 font-medium">{r.reporterName || r.reporterId}</td>
-                    <td className="px-6 py-5 text-[10px] font-bold text-slate-400">{new Date(r.createdAt).toLocaleDateString()}</td>
-                    <td className="px-6 py-5 text-right">
-                      {r.status !== "dismissed" ? (
-                        <button 
-                          onClick={() => handleDismissReport(r.id)}
-                          className="px-3.5 py-1.5 bg-slate-900 text-white rounded-xl text-xs font-bold uppercase tracking-wider cursor-pointer"
-                        >
-                          Dismiss
-                        </button>
-                      ) : (
-                        <span className="text-[10px] font-bold text-slate-400 uppercase">Dismissed</span>
-                      )}
+                {reports.map((r, rIdx) => {
+                  const reportedTargetId = r.reportedUserId || r.vendorId;
+                  const reportedUser = users.find(u => (u.uid || u.id) === reportedTargetId);
+                  const reporterUser = users.find(u => (u.uid || u.id) === r.reporterId);
+                  const reportedName = r.reportedUserName || r.vendorName || reportedUser?.displayName || "Unknown User";
+                  const reporterName = r.reporterName || reporterUser?.displayName || "Marketplace User";
+                  const isDismissed = r.status === "dismissed";
+
+                  return (
+                    <tr key={`adm-report-${r.id}-${rIdx}`} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
+                      {/* Reason */}
+                      <td className="px-6 py-5">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 rounded-lg text-xs font-black">
+                          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                          {r.reason}
+                        </span>
+                      </td>
+
+                      {/* Person that was reported */}
+                      <td className="px-6 py-5">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-900 dark:text-white">
+                              {reportedName}
+                            </span>
+                            {reportedUser?.isSuspended && (
+                              <span className="px-1.5 py-0.5 bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300 text-[9px] font-black uppercase rounded">
+                                Suspended
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-400 font-mono">
+                            {reportedUser?.email || reportedTargetId || "No ID"}
+                          </p>
+                          <div className="flex items-center gap-2 pt-1">
+                            {reportedUser && (
+                              <button
+                                onClick={() => {
+                                  setSelectedUserForDetail(reportedUser);
+                                  setIsDetailModalOpen(true);
+                                }}
+                                className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+                              >
+                                View Reported Dossier →
+                              </button>
+                            )}
+                            {reportedUser && (
+                              <button
+                                onClick={() => {
+                                  setSelectedUserForSuspend(reportedUser);
+                                  setIsSuspendModalOpen(true);
+                                }}
+                                className="text-[10px] font-bold text-red-600 dark:text-red-400 hover:underline cursor-pointer"
+                              >
+                                Suspend User
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* Person who reported */}
+                      <td className="px-6 py-5">
+                        <div className="space-y-1">
+                          <span className="font-bold text-slate-900 dark:text-white">
+                            {reporterName}
+                          </span>
+                          <p className="text-xs text-slate-400 font-mono">
+                            {r.reporterEmail || reporterUser?.email || r.reporterId}
+                          </p>
+                          {reporterUser && (
+                            <button
+                              onClick={() => {
+                                setSelectedUserForDetail(reporterUser);
+                                setIsDetailModalOpen(true);
+                              }}
+                              className="text-[10px] font-bold text-slate-500 hover:text-slate-900 dark:hover:text-white hover:underline block pt-1 cursor-pointer"
+                            >
+                              View Reporter Dossier →
+                            </button>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Reported Item / Product */}
+                      <td className="px-6 py-5">
+                        {r.productName || r.productId ? (
+                          <div className="space-y-0.5">
+                            <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                              {r.productName || "Product Listing"}
+                            </span>
+                            <p className="text-[10px] text-slate-400 font-mono">{r.productId}</p>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-slate-400 italic">User / Storefront Behavior</span>
+                        )}
+                      </td>
+
+                      {/* Date */}
+                      <td className="px-6 py-5 text-[10px] font-bold text-slate-400 whitespace-nowrap">
+                        {new Date(r.createdAt).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })}
+                      </td>
+
+                      {/* Actions */}
+                      <td className="px-6 py-5 text-right">
+                        {!isDismissed ? (
+                          <button 
+                            onClick={() => handleDismissReport(r.id)}
+                            className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold uppercase tracking-wider cursor-pointer transition-all shadow-sm"
+                          >
+                            Dismiss
+                          </button>
+                        ) : (
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">Dismissed</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                {reports.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="py-16 text-center text-slate-400">
+                      <CheckCircle className="w-10 h-10 mx-auto text-emerald-500/40 mb-2" />
+                      <p className="font-bold text-sm">No unresolved reports in the queue.</p>
                     </td>
                   </tr>
-                ))}
+                )}
               </tbody>
             </table>
           </div>

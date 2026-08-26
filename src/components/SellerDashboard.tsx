@@ -109,6 +109,7 @@ import { NIGERIAN_STATES, STATE_CITIES, NIGERIAN_LGAS, CITY_STREETS } from "../c
 import ProfileSettings from "./ProfileSettings";
 import StorefrontSettingsTab from "./StorefrontSettingsTab";
 import ReceiptModal from "./ReceiptModal";
+import { scanPublicFieldsForContactInfo, isUserProductSuspended, getRemainingSuspensionTime } from "../lib/contentFilter";
 
 
 interface SellerDashboardProps {
@@ -4122,9 +4123,91 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
     e.preventDefault();
     if (!auth.currentUser) return;
 
+    // Check if seller is currently suspended from product listings (24h lockout)
+    const productLockStatus = isUserProductSuspended(currentUser);
+    if (productLockStatus.isSuspended) {
+      setError(`🚫 Product Listing Suspended: Your account is temporarily locked out from listing or editing products for ${productLockStatus.remainingText} due to 3 contact policy violations (sharing phone numbers, emails, or social media handles).`);
+      setLoading(false);
+      return;
+    }
+
     if (auth.currentUser && !auth.currentUser.emailVerified) {
       setError("Email Verification Required: Please verify your email address before listing products or services. Check your inbox for the verification link or resend it from the banner at the top.");
       setLoading(false);
+      return;
+    }
+
+    // Moderation check: Scan all public fields, inquiries, descriptions, notes, and dynamic inputs for phone numbers, emails, or social media handles
+    const targetName = (isFoodAndDrinks || name === "Other") ? (customServiceName || name) : name;
+    const fieldsToScan: Record<string, string | null | undefined> = {
+      "Product Name": targetName,
+      "Description": description,
+      "Custom Service Name": customServiceName,
+      "Business Name": businessName,
+      "Subject / Course": subjectTaught,
+      "Tech Stack / Skills": techStack,
+      "Preferred Venue": preferredVenue,
+      "Preferred Time": preferredTime,
+      "Coverage Area": coverageArea,
+      "Rental Terms": rentalTerms,
+      "Portfolio URL": portfolioUrl,
+      "Collection Type": collectionType,
+      "Promo Code": promoCode,
+      "Menu Items": Array.isArray(menuItems) ? menuItems.map(m => `${m.name} ${m.description || ""}`).join(" ") : ""
+    };
+
+    const contactScan = scanPublicFieldsForContactInfo(fieldsToScan);
+    if (contactScan.isBlocked) {
+      setLoading(true);
+      setLoadingMessage("Checking compliance & contact safety guidelines...");
+      try {
+        const userDocRef = doc(db, "users", auth.currentUser.uid);
+        const userSnap = await getDoc(userDocRef);
+        const currentViolationCount = (userSnap.data()?.productViolationCount || 0) + 1;
+
+        // Log violation attempt for security and moderation
+        await addDoc(collection(db, "contact_moderation_logs"), {
+          userId: auth.currentUser.uid,
+          userName: currentUser?.displayName || auth.currentUser.displayName || "Seller",
+          userEmail: currentUser?.email || auth.currentUser.email || "",
+          context: "product_listing_creation",
+          reasons: contactScan.reason,
+          detectedTypes: contactScan.detectedTypes,
+          createdAt: new Date().toISOString()
+        }).catch(() => {});
+
+        if (currentViolationCount >= 3) {
+          const lockoutUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+          await updateDoc(userDocRef, {
+            productViolationCount: 0,
+            productSuspendedUntil: lockoutUntil,
+            strikeCount: increment(1)
+          });
+
+          await addDoc(collection(db, "notifications"), {
+            userId: auth.currentUser.uid,
+            title: "🚫 Product Listing Suspended for 24 Hours",
+            message: "You reached 3 strikes for attempting to include phone numbers, emails, or social media handles in product details. Your listing ability is suspended for 24 hours.",
+            type: "security",
+            read: false,
+            createdAt: new Date().toISOString()
+          }).catch(() => {});
+
+          setError(`🚫 Product Listing Access Blocked for 24 Hours: You reached 3 strikes for attempting to include phone numbers, emails, or social media handles in product details/inquiries. Your listing privileges are suspended for 24 hours.`);
+        } else {
+          await updateDoc(userDocRef, {
+            productViolationCount: currentViolationCount
+          });
+
+          setError(`⚠️ Strike ${currentViolationCount} of 3: Sharing phone numbers, emails, or social media handles in product details or inquiries is strictly prohibited. After 3 attempts, you will be locked out from listing products for 24 hours. (${contactScan.reason})`);
+        }
+      } catch (strikeErr) {
+        console.error("Strike tracking error:", strikeErr);
+        setError(`⚠️ Moderation Policy Violation: Contact info (phone numbers, emails, social handles) is prohibited in product details and inquiries.`);
+      } finally {
+        setLoading(false);
+        setLoadingMessage(null);
+      }
       return;
     }
 
@@ -4138,7 +4221,6 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
     const isProfileComplete = !!currentUser?.schoolName && !!currentUser?.state && !!currentUser?.city && (currentUser?.role === "seller" || !!currentUser?.deliveryAddress);
     if (!isProfileComplete) {
       setError("Please complete your profile in Settings (School Name, State, City, and Delivery Address) before listing products.");
-      // Auto-scroll to error if needed can be handled by UI, but we'll set the error state
       return;
     }
 
@@ -4459,6 +4541,28 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-8 relative z-10">
+        {(() => {
+          const productLock = isUserProductSuspended(currentUser);
+          if (productLock.isSuspended) {
+            return (
+              <div className="p-5 bg-gradient-to-r from-red-50 to-orange-50 dark:from-red-950/40 dark:to-orange-950/30 border-2 border-red-300 dark:border-red-800 rounded-3xl text-red-700 dark:text-red-300 space-y-2">
+                <div className="flex items-center gap-2.5">
+                  <ShieldAlert className="w-5 h-5 text-red-600 shrink-0" />
+                  <h4 className="text-sm font-black uppercase tracking-wider">Product Listing Suspended (24-Hour Moderation Lockout)</h4>
+                </div>
+                <p className="text-xs font-semibold text-red-600 dark:text-red-300">
+                  Your account received 3 strikes for attempting to share off-platform contact information (phone numbers, emails, or social media handles) in product details or inquiries.
+                </p>
+                <div className="flex items-center gap-2 pt-1 font-mono text-xs font-bold text-red-800 dark:text-red-200">
+                  <Clock className="w-4 h-4" />
+                  <span>Time remaining until unlock: {productLock.remainingText}</span>
+                </div>
+              </div>
+            );
+          }
+          return null;
+        })()}
+
         {error && (
           <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/30 rounded-2xl text-red-600 dark:text-red-400 text-xs font-bold">
             {error}
@@ -6162,11 +6266,11 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
             </button>
           ) : (
             <motion.button 
-              whileHover={{ scale: 1.02, boxShadow: "0px 10px 30px rgba(249, 115, 22, 0.35)" }}
-              whileTap={{ scale: 0.98 }}
+              whileHover={{ scale: isUserProductSuspended(currentUser).isSuspended ? 1 : 1.02, boxShadow: "0px 10px 30px rgba(249, 115, 22, 0.35)" }}
+              whileTap={{ scale: isUserProductSuspended(currentUser).isSuspended ? 1 : 0.98 }}
               type="submit"
-              disabled={loading}
-              className="flex-1 h-14 bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 text-white rounded-2xl font-black text-xs sm:text-sm uppercase tracking-widest transition-all flex items-center justify-center gap-2.5 disabled:opacity-50 cursor-pointer border-none outline-none"
+              disabled={loading || isUserProductSuspended(currentUser).isSuspended}
+              className="flex-1 h-14 bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 text-white rounded-2xl font-black text-xs sm:text-sm uppercase tracking-widest transition-all flex items-center justify-center gap-2.5 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer border-none outline-none"
             >
               {loading ? (
                 <div className="flex items-center gap-2 text-white">
@@ -6175,6 +6279,8 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                     {loadingMessage || "Publishing..."}
                   </span>
                 </div>
+              ) : isUserProductSuspended(currentUser).isSuspended ? (
+                `Locked for ${isUserProductSuspended(currentUser).remainingText}`
               ) : (
                 editingProduct ? "Update Listing" : "Publish Product"
               )}

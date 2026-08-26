@@ -11,9 +11,10 @@ interface ReportModalProps {
   vendorId: string;
   vendorName: string;
   productId?: string;
+  productName?: string;
 }
 
-export default function ReportModal({ isOpen, onClose, vendorId, vendorName, productId }: ReportModalProps) {
+export default function ReportModal({ isOpen, onClose, vendorId, vendorName, productId, productName }: ReportModalProps) {
   const [reason, setReason] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [success, setSuccess] = React.useState(false);
@@ -24,11 +25,25 @@ export default function ReportModal({ isOpen, onClose, vendorId, vendorName, pro
 
     setLoading(true);
     try {
+      const reporterUser = auth.currentUser;
       await addDoc(collection(db, "reports"), {
-        reporterId: auth.currentUser.uid,
+        // Reporter information (Person who submitted the report)
+        reporterId: reporterUser.uid,
+        reporterName: reporterUser.displayName || "Marketplace User",
+        reporterEmail: reporterUser.email || "No email",
+        
+        // Reported party information (Person / Store that was reported)
         vendorId,
+        vendorName: vendorName || "Unknown Vendor",
+        reportedUserId: vendorId,
+        reportedUserName: vendorName || "Unknown Vendor",
+
+        // Product information (if reported from a product listing)
         productId: productId || null,
+        productName: productName || (productId ? "Product Listing" : null),
+
         reason: reason.trim(),
+        status: "pending",
         createdAt: new Date().toISOString(),
       });
       setSuccess(true);
