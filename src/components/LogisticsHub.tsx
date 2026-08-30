@@ -56,7 +56,14 @@ import {
   Eye,
   EyeOff,
   Tag,
-  CheckCircle2
+  CheckCircle2,
+  Edit3,
+  Save,
+  CheckCircle,
+  RefreshCw,
+  Smartphone,
+  CreditCard,
+  Plus
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { NIGERIAN_CAMPUSES } from "../constants/campuses";
@@ -68,13 +75,21 @@ interface LogisticsCompany {
   rcNumber: string;
   email: string;
   phoneNumber: string;
+  whatsappNumber?: string;
   officeAddress: string;
   vehicleTypes: string[];
   coveredCampuses: string[];
   baseDeliveryPrice: number;
+  estimatedTurnaround?: string;
+  description?: string;
+  operatingHours?: string;
+  bankName?: string;
+  accountNumber?: string;
+  accountName?: string;
   isVerified: boolean;
   isActive: boolean;
   createdAt: string;
+  updatedAt?: string;
 }
 
 interface DeliveryJob {
@@ -192,8 +207,69 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
   // Dashboard Tab state
   const [activeTab, setActiveTab] = React.useState<"available-jobs" | "active-deliveries" | "history" | "profile">("available-jobs");
 
+  // Profile editing states
+  const [isEditingProfile, setIsEditingProfile] = React.useState(false);
+  const [editCompanyName, setEditCompanyName] = React.useState("");
+  const [editRcNumber, setEditRcNumber] = React.useState("");
+  const [editPhoneNumber, setEditPhoneNumber] = React.useState("");
+  const [editWhatsappNumber, setEditWhatsappNumber] = React.useState("");
+  const [editOfficeAddress, setEditOfficeAddress] = React.useState("");
+  const [editBaseDeliveryPrice, setEditBaseDeliveryPrice] = React.useState(500);
+  const [editEstimatedTurnaround, setEditEstimatedTurnaround] = React.useState("1-3 Hours on Campus");
+  const [editOperatingHours, setEditOperatingHours] = React.useState("8:00 AM - 8:00 PM");
+  const [editDescription, setEditDescription] = React.useState("");
+  const [editSelectedVehicles, setEditSelectedVehicles] = React.useState<string[]>([]);
+  const [editSelectedCampuses, setEditSelectedCampuses] = React.useState<string[]>([]);
+  const [editBankName, setEditBankName] = React.useState("");
+  const [editAccountNumber, setEditAccountNumber] = React.useState("");
+  const [editAccountName, setEditAccountName] = React.useState("");
+  const [editIsActive, setEditIsActive] = React.useState(true);
+  const [profileCampusSearch, setProfileCampusSearch] = React.useState("");
+  const [customVehicleInput, setCustomVehicleInput] = React.useState("");
+  const [savingProfile, setSavingProfile] = React.useState(false);
+  const [profileSuccessMsg, setProfileSuccessMsg] = React.useState("");
+
+  // Quick accept & filter states
+  const [jobAcceptingId, setJobAcceptingId] = React.useState<string | null>(null);
+  const [jobEtaInput, setJobEtaInput] = React.useState<string>("");
+  const [scopeCampusFilter, setScopeCampusFilter] = React.useState<"all" | "covered">("all");
+
+  // Courier Delivery OTP verification states
+  const [otpModalJob, setOtpModalJob] = React.useState<DeliveryJob | null>(null);
+  const [otpInput, setOtpInput] = React.useState("");
+  const [otpError, setOtpError] = React.useState<string | null>(null);
+  const [verifyingOtp, setVerifyingOtp] = React.useState(false);
+
+  // Delivery Attempt / Failure Reporting states
+  const [failureModalJob, setFailureModalJob] = React.useState<DeliveryJob | null>(null);
+  const [failureReason, setFailureReason] = React.useState<string>("buyer_unavailable");
+  const [failureResolution, setFailureResolution] = React.useState<string>("reschedule");
+  const [failureNotes, setFailureNotes] = React.useState<string>("");
+  const [submittingFailure, setSubmittingFailure] = React.useState(false);
+
   // Database jobs lists
   const [allDeliveries, setAllDeliveries] = React.useState<DeliveryJob[]>([]);
+
+  // Synchronize edit fields when company profile loads
+  React.useEffect(() => {
+    if (companyProfile) {
+      setEditCompanyName(companyProfile.companyName || "");
+      setEditRcNumber(companyProfile.rcNumber || "");
+      setEditPhoneNumber(companyProfile.phoneNumber || "");
+      setEditWhatsappNumber(companyProfile.whatsappNumber || "");
+      setEditOfficeAddress(companyProfile.officeAddress || "");
+      setEditBaseDeliveryPrice(companyProfile.baseDeliveryPrice || 500);
+      setEditEstimatedTurnaround(companyProfile.estimatedTurnaround || "1-3 Hours on Campus");
+      setEditOperatingHours(companyProfile.operatingHours || "8:00 AM - 8:00 PM");
+      setEditDescription(companyProfile.description || "");
+      setEditSelectedVehicles(companyProfile.vehicleTypes && companyProfile.vehicleTypes.length > 0 ? companyProfile.vehicleTypes : ["Bike / Motorcycle"]);
+      setEditSelectedCampuses(companyProfile.coveredCampuses || []);
+      setEditBankName(companyProfile.bankName || "");
+      setEditAccountNumber(companyProfile.accountNumber || "");
+      setEditAccountName(companyProfile.accountName || "");
+      setEditIsActive(companyProfile.isActive !== false);
+    }
+  }, [companyProfile]);
 
   // Check auth on load
   React.useEffect(() => {
@@ -252,53 +328,143 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
     checkRedirectResult();
   }, [companyProfile, view]);
 
-  // Listen to logistics deliveries
+  // Listen to both logistics deliveries and delivery orders in real-time
   React.useEffect(() => {
     if (view !== "dashboard" || !companyProfile) return;
 
-    const unsubscribe = onSnapshot(collection(db, "logistics_deliveries"), (snapshot) => {
-      const list: DeliveryJob[] = [];
+    let deliveriesMap = new Map<string, DeliveryJob>();
+
+    // 1. Subscribe to logistics_deliveries collection
+    const unsubscribeDeliveries = onSnapshot(collection(db, "logistics_deliveries"), (snapshot) => {
       snapshot.forEach((d) => {
-        list.push({ id: d.id, ...d.data() } as DeliveryJob);
+        const data = d.data();
+        deliveriesMap.set(d.id, { id: d.id, ...data } as DeliveryJob);
       });
-      setAllDeliveries(list);
+      setAllDeliveries(Array.from(deliveriesMap.values()));
     }, (error) => {
       console.error("Logistics deliveries subscription failed:", error);
     });
 
-    return unsubscribe;
+    // 2. Also subscribe to orders where deliveryType == 'delivery' to catch all dispatches
+    const qOrders = query(
+      collection(db, "orders"),
+      where("deliveryType", "==", "delivery")
+    );
+
+    const unsubscribeOrders = onSnapshot(qOrders, (snapshot) => {
+      snapshot.forEach((docSnap) => {
+        const ord = docSnap.data();
+        const orderId = docSnap.id;
+        const jobId = `DLV_${orderId}`;
+
+        if (!deliveriesMap.has(jobId)) {
+          let mappedStatus: DeliveryJob["status"] = "pending";
+          if (ord.status === "completed" || ord.status === "Order Delivered" || ord.status === "delivered") {
+            mappedStatus = "delivered";
+          } else if (ord.status === "cancelled") {
+            mappedStatus = "cancelled";
+          } else if (ord.status === "out_for_delivery" || ord.status === "Out For Delivery" || ord.status === "transit") {
+            mappedStatus = "in_transit";
+          } else if (ord.status === "picked_up" || ord.status === "Order Picked Up") {
+            mappedStatus = "picked_up";
+          } else if (ord.logisticsOfferStatus === "accepted" || (ord.logisticsId === companyProfile.id && ord.status === "accepted")) {
+            mappedStatus = "accepted";
+          }
+
+          const synthesizedJob: DeliveryJob = {
+            id: jobId,
+            orderId: orderId,
+            productName: ord.productName || "Campus Product",
+            productImageUrl: ord.productImageUrl || ord.productImage,
+            quantity: ord.quantity || 1,
+            buyerId: ord.buyerId || "",
+            buyerName: ord.buyerName || "Campus Buyer",
+            buyerPhone: ord.buyerPhone || ord.phoneNumber || "",
+            buyerAddress: ord.deliveryAddress || ord.address || "Campus Hostel/Department",
+            sellerId: ord.sellerId || "",
+            sellerName: ord.sellerName || "Campus Merchant",
+            sellerAddress: ord.sellerAddress || "Campus Merchant Store",
+            campus: ord.pickupSchool || ord.campus || "General Campus",
+            status: mappedStatus,
+            logisticsId: ord.logisticsId,
+            logisticsName: ord.logisticsName,
+            deliveryPrice: ord.deliveryFee || ord.logisticsDeliveryPrice || ord.deliveryPrice || companyProfile.baseDeliveryPrice || 500,
+            createdAt: ord.createdAt || new Date().toISOString(),
+            updatedAt: ord.updatedAt || new Date().toISOString()
+          };
+
+          deliveriesMap.set(jobId, synthesizedJob);
+        } else {
+          // If already in map, update status if changed in orders
+          const existing = deliveriesMap.get(jobId)!;
+          if (ord.logisticsOfferStatus === "accepted" && existing.status === "pending") {
+            existing.status = "accepted";
+            deliveriesMap.set(jobId, existing);
+          }
+        }
+      });
+      setAllDeliveries(Array.from(deliveriesMap.values()));
+    }, (error) => {
+      console.warn("Orders subscription for logistics:", error);
+    });
+
+    return () => {
+      unsubscribeDeliveries();
+      unsubscribeOrders();
+    };
   }, [view, companyProfile]);
 
   // Filter lists based on company profile
   const availableJobs = React.useMemo(() => {
     if (!companyProfile) return [];
-    return allDeliveries.filter(
-      (job) => 
-        job.status === "pending" && 
-        (job.logisticsId === companyProfile.id || 
-         (!job.logisticsId && companyProfile.coveredCampuses.includes(job.campus)))
+    return allDeliveries.filter((job) => {
+      if (job.status !== "pending") return false;
+
+      // 1. Direct offer to this company
+      const isDirectOffer = 
+        job.logisticsId === companyProfile.id || 
+        (!!job.logisticsName && !!companyProfile.companyName && job.logisticsName.toLowerCase().trim() === companyProfile.companyName.toLowerCase().trim());
+      
+      if (isDirectOffer) return true;
+
+      // 2. If filtering by covered campuses
+      if (scopeCampusFilter === "covered" && companyProfile.coveredCampuses && companyProfile.coveredCampuses.length > 0) {
+        const matchesCampus = companyProfile.coveredCampuses.some(
+          c => c.toLowerCase().includes(job.campus?.toLowerCase() || "") || 
+               (job.campus && job.campus.toLowerCase().includes(c.toLowerCase())) ||
+               job.campus === "General" ||
+               job.campus === "All Campuses"
+        );
+        return matchesCampus;
+      }
+
+      // Default: show all available campus jobs
+      return true;
+    });
+  }, [allDeliveries, companyProfile, scopeCampusFilter]);
+
+  const directOffers = React.useMemo(() => {
+    if (!companyProfile) return [];
+    return allDeliveries.filter((job) => 
+      job.status === "pending" && 
+      (job.logisticsId === companyProfile.id || 
+       (!!job.logisticsName && !!companyProfile.companyName && job.logisticsName.toLowerCase().trim() === companyProfile.companyName.toLowerCase().trim()))
     );
   }, [allDeliveries, companyProfile]);
 
-  const directOffers = React.useMemo(() => {
-    return availableJobs.filter((job) => job.logisticsId === companyProfile?.id);
-  }, [availableJobs, companyProfile]);
-
   const activeDeliveries = React.useMemo(() => {
     if (!companyProfile) return [];
-    return allDeliveries.filter(
-      (job) => 
-        job.logisticsId === companyProfile.id && 
-        ["accepted", "picked_up", "in_transit"].includes(job.status)
+    return allDeliveries.filter((job) => 
+      (job.logisticsId === companyProfile.id || (!!job.logisticsName && !!companyProfile.companyName && job.logisticsName.toLowerCase().trim() === companyProfile.companyName.toLowerCase().trim())) && 
+      ["accepted", "picked_up", "in_transit"].includes(job.status)
     );
   }, [allDeliveries, companyProfile]);
 
   const deliveryHistory = React.useMemo(() => {
     if (!companyProfile) return [];
-    return allDeliveries.filter(
-      (job) => 
-        job.logisticsId === companyProfile.id && 
-        ["delivered", "cancelled"].includes(job.status)
+    return allDeliveries.filter((job) => 
+      (job.logisticsId === companyProfile.id || (!!job.logisticsName && !!companyProfile.companyName && job.logisticsName.toLowerCase().trim() === companyProfile.companyName.toLowerCase().trim())) && 
+      ["delivered", "cancelled"].includes(job.status)
     );
   }, [allDeliveries, companyProfile]);
 
@@ -617,49 +783,98 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
   };
 
   // Handle Accept Job
-  const handleAcceptJob = async (jobId: string) => {
+  const handleAcceptJob = async (jobId: string, customEta?: string) => {
     if (!companyProfile) return;
     setLoading(true);
+    setError("");
     try {
-      const jobRef = doc(db, "logistics_deliveries", jobId);
-      await updateDoc(jobRef, {
+      const timeline = customEta?.trim() || companyProfile.estimatedTurnaround || "1-3 Hours on Campus";
+      const courierPrice = companyProfile.baseDeliveryPrice || 500;
+
+      // Find job from list
+      const jobItem = allDeliveries.find(j => j.id === jobId || j.orderId === jobId);
+      const actualOrderId = jobItem?.orderId || jobId.replace("DLV_", "");
+
+      // 1. Update / create logistics_deliveries doc with setDoc merge
+      const deliveryDocId = jobId.startsWith("DLV_") ? jobId : `DLV_${actualOrderId}`;
+      const jobDocRef = doc(db, "logistics_deliveries", deliveryDocId);
+      await setDoc(jobDocRef, {
+        orderId: actualOrderId,
         status: "accepted",
         logisticsId: companyProfile.id,
         logisticsName: companyProfile.companyName,
+        logisticsPhone: companyProfile.phoneNumber,
+        deliveryPrice: jobItem?.deliveryPrice || courierPrice,
+        estimatedDeliveryTimeline: timeline,
+        productName: jobItem?.productName || "Campus Order",
+        buyerName: jobItem?.buyerName || "Buyer",
+        buyerPhone: jobItem?.buyerPhone || "",
+        buyerAddress: jobItem?.buyerAddress || "",
+        sellerName: jobItem?.sellerName || "Merchant",
+        sellerAddress: jobItem?.sellerAddress || "",
+        campus: jobItem?.campus || "Campus",
         updatedAt: new Date().toISOString()
-      });
+      }, { merge: true });
 
-      // Also find the related order in standard orders and update its status
-      const jobSnap = await getDoc(jobRef);
-      if (jobSnap.exists()) {
-        const jobData = jobSnap.data();
-        const orderId = jobData.orderId;
-        const orderRef = doc(db, "orders", orderId);
-        const orderSnap = await getDoc(orderRef);
-        if (orderSnap.exists()) {
-          await updateDoc(orderRef, {
-            status: "accepted",
-            logisticsOfferStatus: "accepted",
-            deliveredWorkNotes: `Accepted by dispatch: ${companyProfile.companyName} (${companyProfile.phoneNumber})`,
-            updatedAt: new Date().toISOString()
+      // 2. Update standard orders doc
+      const orderRef = doc(db, "orders", actualOrderId);
+      const orderSnap = await getDoc(orderRef);
+      if (orderSnap.exists()) {
+        const orderData = orderSnap.data();
+        const itemSubtotal = orderData.itemSubtotal || (orderData.totalPrice - (orderData.deliveryFee || 0));
+        const finalDeliveryPrice = jobItem?.deliveryPrice || orderData.deliveryFee || courierPrice;
+        const newTotalPrice = itemSubtotal + finalDeliveryPrice;
+
+        await updateDoc(orderRef, {
+          status: "accepted",
+          logisticsOfferStatus: "accepted",
+          logisticsId: companyProfile.id,
+          logisticsName: companyProfile.companyName,
+          logisticsPhone: companyProfile.phoneNumber,
+          logisticsDeliveryPrice: finalDeliveryPrice,
+          deliveryFee: finalDeliveryPrice,
+          deliveryPrice: finalDeliveryPrice,
+          itemSubtotal: itemSubtotal,
+          totalPrice: newTotalPrice,
+          logisticsEstimatedDeliveryTimeline: timeline,
+          kwikRiderId: `CAMPUS-${companyProfile.companyName.toUpperCase().replace(/\s+/g, "-")}`,
+          kwikTrackingUrl: "local_logistics",
+          deliveredWorkNotes: `Accepted by dispatch: ${companyProfile.companyName} (${companyProfile.phoneNumber}) - Timeline: ${timeline} (Delivery Fee: ₦${finalDeliveryPrice.toLocaleString()})`,
+          updatedAt: new Date().toISOString()
+        });
+
+        // 3. Notify the seller
+        if (orderData.sellerId) {
+          await addDoc(collection(db, "notifications"), {
+            userId: orderData.sellerId,
+            title: "Logistics Partner Confirmed 🚚",
+            message: `Logistics company ${companyProfile.companyName} accepted your dispatch for order ${orderData.productName || "product"}. Estimated timeline: ${timeline}.`,
+            type: "order",
+            isRead: false,
+            createdAt: new Date().toISOString()
           });
         }
 
-        // Notify the seller
-        await addDoc(collection(db, "notifications"), {
-          userId: jobData.sellerId,
-          title: "Logistics Offer Accepted",
-          message: `Logistics company ${companyProfile.companyName} has accepted your delivery offer for order of ${jobData.productName || "your product"}! They are preparing for pickup.`,
-          type: "order",
-          isRead: false,
-          createdAt: new Date().toISOString()
-        });
+        // 4. Notify the buyer
+        if (orderData.buyerId) {
+          await addDoc(collection(db, "notifications"), {
+            userId: orderData.buyerId,
+            title: "Courier Assigned to Your Order 🚚",
+            message: `Campus Courier ${companyProfile.companyName} (${companyProfile.phoneNumber}) is handling delivery of ${orderData.productName || "your order"}. Estimated timeline: ${timeline}.`,
+            type: "order",
+            isRead: false,
+            createdAt: new Date().toISOString()
+          });
+        }
       }
-      setSuccessMsg("Job accepted successfully! Move to 'Active Deliveries' to handle progress.");
-      setTimeout(() => setSuccessMsg(""), 4000);
+
+      setJobAcceptingId(null);
+      setSuccessMsg(`Order accepted! Move to "Active Shipments" to update pickup and delivery progress.`);
+      setTimeout(() => setSuccessMsg(""), 5000);
+      setActiveTab("active-deliveries");
     } catch (err: any) {
-      console.error(err);
-      setError("Failed to accept job.");
+      console.error("Failed to accept job:", err);
+      setError(err.message || "Failed to accept job.");
     } finally {
       setLoading(false);
     }
@@ -670,41 +885,43 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
     if (!companyProfile) return;
     setLoading(true);
     try {
-      const jobRef = doc(db, "logistics_deliveries", jobId);
-      await updateDoc(jobRef, {
+      const jobItem = allDeliveries.find(j => j.id === jobId || j.orderId === jobId);
+      const actualOrderId = jobItem?.orderId || jobId.replace("DLV_", "");
+      const deliveryDocId = jobId.startsWith("DLV_") ? jobId : `DLV_${actualOrderId}`;
+
+      const jobRef = doc(db, "logistics_deliveries", deliveryDocId);
+      await setDoc(jobRef, {
         status: "declined",
         updatedAt: new Date().toISOString()
-      });
+      }, { merge: true });
 
       // Also find the related order in standard orders and update its status
-      const jobSnap = await getDoc(jobRef);
-      if (jobSnap.exists()) {
-        const jobData = jobSnap.data();
-        const orderId = jobData.orderId;
-        const orderRef = doc(db, "orders", orderId);
-        const orderSnap = await getDoc(orderRef);
-        if (orderSnap.exists()) {
-          await updateDoc(orderRef, {
-            status: "declined_by_logistics",
-            logisticsOfferStatus: "declined",
-            deliveredWorkNotes: `Offer declined by logistics company: ${companyProfile.companyName} (${companyProfile.phoneNumber}). Please assign another courier.`,
-            kwikRiderId: null, // Clear rider id so seller knows they can assign again
-            kwikTrackingUrl: null,
-            updatedAt: new Date().toISOString()
-          });
-        }
+      const orderRef = doc(db, "orders", actualOrderId);
+      const orderSnap = await getDoc(orderRef);
+      if (orderSnap.exists()) {
+        const orderData = orderSnap.data();
+        await updateDoc(orderRef, {
+          status: "declined_by_logistics",
+          logisticsOfferStatus: "declined",
+          deliveredWorkNotes: `Offer declined by logistics company: ${companyProfile.companyName} (${companyProfile.phoneNumber}). Please assign another courier.`,
+          kwikRiderId: null,
+          kwikTrackingUrl: null,
+          updatedAt: new Date().toISOString()
+        });
 
         // Notify the seller
-        await addDoc(collection(db, "notifications"), {
-          userId: jobData.sellerId,
-          title: "Logistics Offer Declined",
-          message: `Logistics company ${companyProfile.companyName} has declined your delivery offer for order of ${jobData.productName || "your product"}. Please assign another courier.`,
-          type: "order",
-          isRead: false,
-          createdAt: new Date().toISOString()
-        });
+        if (orderData.sellerId) {
+          await addDoc(collection(db, "notifications"), {
+            userId: orderData.sellerId,
+            title: "Logistics Offer Declined",
+            message: `Logistics company ${companyProfile.companyName} has declined your delivery offer for order of ${orderData.productName || "your product"}. Please assign another courier.`,
+            type: "order",
+            isRead: false,
+            createdAt: new Date().toISOString()
+          });
+        }
       }
-      setSuccessMsg("Delivery offer declined successfully.");
+      setSuccessMsg("Delivery offer declined.");
       setTimeout(() => setSuccessMsg(""), 4000);
     } catch (err: any) {
       console.error(err);
@@ -719,50 +936,139 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
     if (!companyProfile) return;
     let nextStatus: "picked_up" | "in_transit" | "delivered" = "picked_up";
     let orderStatusLabel = "Order Picked Up";
+    let notifTitle = "Package Picked Up from Merchant 📦";
+    let notifMsg = `${companyProfile.companyName} has picked up your package from the merchant.`;
 
     if (currentStatus === "accepted") {
       nextStatus = "picked_up";
       orderStatusLabel = "Order Picked Up";
+      notifTitle = "Package Picked Up from Merchant 📦";
+      notifMsg = `${companyProfile.companyName} has picked up your package from the merchant.`;
     } else if (currentStatus === "picked_up") {
       nextStatus = "in_transit";
       orderStatusLabel = "Out For Delivery";
+      notifTitle = "Rider Out For Delivery 🚀";
+      notifMsg = `${companyProfile.companyName} is heading to your delivery location. Please have your delivery PIN ready!`;
     } else if (currentStatus === "in_transit") {
       nextStatus = "delivered";
       orderStatusLabel = "Order Delivered";
+      notifTitle = "Package Delivered 🎉";
+      notifMsg = `${companyProfile.companyName} has marked your package as delivered. Please confirm receipt and enter your OTP PIN.`;
     }
 
     setLoading(true);
     try {
-      const jobRef = doc(db, "logistics_deliveries", jobId);
-      await updateDoc(jobRef, {
+      const jobItem = allDeliveries.find(j => j.id === jobId || j.orderId === jobId);
+      const actualOrderId = jobItem?.orderId || jobId.replace("DLV_", "");
+      const deliveryDocId = jobId.startsWith("DLV_") ? jobId : `DLV_${actualOrderId}`;
+
+      const jobRef = doc(db, "logistics_deliveries", deliveryDocId);
+      await setDoc(jobRef, {
         status: nextStatus,
         updatedAt: new Date().toISOString()
-      });
+      }, { merge: true });
 
       // Also update standard order
-      const jobSnap = await getDoc(jobRef);
-      if (jobSnap.exists()) {
-        const orderId = jobSnap.data().orderId;
-        const orderRef = doc(db, "orders", orderId);
-        const orderSnap = await getDoc(orderRef);
-        if (orderSnap.exists()) {
-          const updateData: any = {
-            status: orderStatusLabel as any,
-            updatedAt: new Date().toISOString()
-          };
-          if (nextStatus === "delivered") {
-            updateData.deliveredAt = new Date().toISOString();
-          }
-          await updateDoc(orderRef, updateData);
+      const orderRef = doc(db, "orders", actualOrderId);
+      const orderSnap = await getDoc(orderRef);
+      if (orderSnap.exists()) {
+        const orderData = orderSnap.data();
+        const updateData: any = {
+          status: orderStatusLabel as any,
+          updatedAt: new Date().toISOString()
+        };
+        if (nextStatus === "delivered") {
+          updateData.deliveredAt = new Date().toISOString();
+        }
+        await updateDoc(orderRef, updateData);
+
+        if (orderData.buyerId) {
+          await addDoc(collection(db, "notifications"), {
+            userId: orderData.buyerId,
+            title: notifTitle,
+            message: notifMsg,
+            type: "order",
+            isRead: false,
+            createdAt: new Date().toISOString()
+          });
         }
       }
-      setSuccessMsg(`Status updated to ${nextStatus.replace("_", " ")}!`);
+      setSuccessMsg(`Status updated to: ${nextStatus.replace("_", " ").toUpperCase()}`);
       setTimeout(() => setSuccessMsg(""), 4000);
     } catch (err: any) {
-      console.error(err);
+      console.error("Failed to update status:", err);
       setError("Failed to update delivery status.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Save Company Profile Changes
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!companyProfile || !auth.currentUser) return;
+
+    if (!editCompanyName.trim()) {
+      setError("Company name cannot be empty.");
+      return;
+    }
+
+    if (editSelectedCampuses.length === 0) {
+      setError("Please select at least one covered campus.");
+      return;
+    }
+
+    if (editSelectedVehicles.length === 0) {
+      setError("Please select at least one vehicle type.");
+      return;
+    }
+
+    setSavingProfile(true);
+    setError("");
+    setProfileSuccessMsg("");
+
+    try {
+      const updatedProfile: LogisticsCompany = {
+        ...companyProfile,
+        companyName: editCompanyName.trim(),
+        rcNumber: editRcNumber.trim(),
+        phoneNumber: editPhoneNumber.trim(),
+        whatsappNumber: editWhatsappNumber.trim(),
+        officeAddress: editOfficeAddress.trim(),
+        baseDeliveryPrice: Number(editBaseDeliveryPrice) || 500,
+        estimatedTurnaround: editEstimatedTurnaround.trim() || "1-3 Hours on Campus",
+        operatingHours: editOperatingHours.trim() || "8:00 AM - 8:00 PM",
+        description: editDescription.trim(),
+        vehicleTypes: editSelectedVehicles,
+        coveredCampuses: editSelectedCampuses,
+        bankName: editBankName.trim(),
+        accountNumber: editAccountNumber.trim(),
+        accountName: editAccountName.trim(),
+        isActive: editIsActive,
+        updatedAt: new Date().toISOString()
+      };
+
+      // 1. Update in logistics_companies
+      await setDoc(doc(db, "logistics_companies", auth.currentUser.uid), updatedProfile, { merge: true });
+
+      // 2. Update in users collection
+      await updateDoc(doc(db, "users", auth.currentUser.uid), {
+        displayName: editCompanyName.trim(),
+        phoneNumber: editPhoneNumber.trim(),
+        businessName: editCompanyName.trim(),
+        location: editOfficeAddress.trim(),
+        updatedAt: new Date().toISOString()
+      });
+
+      setCompanyProfile(updatedProfile);
+      setIsEditingProfile(false);
+      setProfileSuccessMsg("Company profile updated successfully!");
+      setTimeout(() => setProfileSuccessMsg(""), 5000);
+    } catch (err: any) {
+      console.error("Failed to save profile:", err);
+      setError(err.message || "Failed to save profile updates.");
+    } finally {
+      setSavingProfile(false);
     }
   };
 
@@ -1459,78 +1765,171 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
 
               {/* SUBVIEW 1: AVAILABLE DELIVERY JOBS */}
               {activeTab === "available-jobs" && (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
+                <div className="space-y-5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div>
-                      <h3 className="text-xl font-black text-slate-800 dark:text-zinc-100">Pending Campus Deliveries</h3>
-                      <p className="text-xs text-slate-500">Unassigned shipments needing immediate dispatch on your registered campuses</p>
+                      <h3 className="text-xl font-black text-slate-800 dark:text-zinc-100 flex items-center gap-2">
+                        <span>Pending Campus Deliveries</span>
+                        <span className="text-xs font-bold text-orange-600 bg-orange-50 dark:bg-orange-950/30 px-2.5 py-0.5 rounded-full border border-orange-200 dark:border-orange-900/50">
+                          {availableJobs.length} Available
+                        </span>
+                      </h3>
+                      <p className="text-xs text-slate-500">Unassigned shipments needing dispatch on your campus network</p>
                     </div>
-                    <span className="text-xs font-bold text-orange-600 bg-orange-50 dark:bg-orange-950/20 px-3 py-1 rounded-full">{availableJobs.length} Available</span>
+
+                    {/* Scope toggle filter */}
+                    <div className="flex items-center gap-1.5 p-1 bg-slate-100 dark:bg-zinc-800/80 rounded-2xl">
+                      <button
+                        type="button"
+                        onClick={() => setScopeCampusFilter("all")}
+                        className={cn(
+                          "px-3 py-1.5 rounded-xl text-[11px] font-black transition-all cursor-pointer border-none",
+                          scopeCampusFilter === "all"
+                            ? "bg-white dark:bg-zinc-900 text-orange-600 shadow-xs"
+                            : "text-slate-500 hover:text-slate-700 dark:text-zinc-400"
+                        )}
+                      >
+                        All Campus Orders
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setScopeCampusFilter("covered")}
+                        className={cn(
+                          "px-3 py-1.5 rounded-xl text-[11px] font-black transition-all cursor-pointer border-none",
+                          scopeCampusFilter === "covered"
+                            ? "bg-white dark:bg-zinc-900 text-orange-600 shadow-xs"
+                            : "text-slate-500 hover:text-slate-700 dark:text-zinc-400"
+                        )}
+                      >
+                        My Covered Campuses
+                      </button>
+                    </div>
                   </div>
 
                   {availableJobs.length === 0 ? (
-                    <div className="bg-white dark:bg-zinc-900 border border-dashed border-slate-200 dark:border-zinc-800 rounded-[2.5rem] p-12 text-center">
-                      <Package className="w-16 h-16 text-slate-300 mx-auto mb-4" />
-                      <h4 className="font-bold text-slate-700 dark:text-zinc-300">No unassigned orders found</h4>
-                      <p className="text-xs text-slate-400 mt-2 max-w-sm mx-auto">Incoming delivery requests covering your campuses will display here for your riders to accept.</p>
+                    <div className="bg-white dark:bg-zinc-900 border border-dashed border-slate-200 dark:border-zinc-800 rounded-[2.5rem] p-12 text-center space-y-3">
+                      <div className="w-16 h-16 rounded-3xl bg-orange-50 dark:bg-orange-950/20 text-orange-600 flex items-center justify-center mx-auto">
+                        <Package className="w-8 h-8" />
+                      </div>
+                      <h4 className="font-bold text-slate-700 dark:text-zinc-300">No unassigned orders right now</h4>
+                      <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                        {scopeCampusFilter === "covered"
+                          ? "No pending orders found on your selected covered campuses. Try switching to 'All Campus Orders' or updating your covered campuses in your profile."
+                          : "New orders will appear here automatically when sellers request campus delivery."}
+                      </p>
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {availableJobs.map((job, jIdx) => (
-                        <div key={`avail-job-${job.id || jIdx}-${jIdx}`} className="bg-white dark:bg-zinc-900 border border-slate-200/60 dark:border-zinc-800/60 p-6 rounded-[2rem] shadow-sm hover:shadow-md transition-all flex flex-col justify-between">
-                          <div className="space-y-4">
-                            <div className="flex items-start justify-between gap-4 border-b border-slate-50 dark:border-zinc-850 pb-3">
-                              <div className="space-y-0.5">
+                        <div key={`avail-job-${job.id || jIdx}-${jIdx}`} className="bg-white dark:bg-zinc-900 border border-slate-200/70 dark:border-zinc-800/70 p-5 sm:p-6 rounded-[2rem] shadow-xs hover:shadow-md transition-all flex flex-col justify-between space-y-4">
+                          <div className="space-y-3">
+                            <div className="flex items-start justify-between gap-3 border-b border-slate-100 dark:border-zinc-850 pb-3">
+                              <div className="space-y-1">
                                 {job.logisticsId === companyProfile.id ? (
-                                  <span className="inline-flex items-center gap-1 text-[9px] font-black text-emerald-600 dark:text-emerald-400 uppercase tracking-wider bg-emerald-50 dark:bg-emerald-950/20 px-2 py-0.5 rounded-full mb-1">
-                                    ⭐ Direct Offer to You
+                                  <span className="inline-flex items-center gap-1 text-[9px] font-black text-emerald-600 dark:text-emerald-400 uppercase tracking-wider bg-emerald-50 dark:bg-emerald-950/30 px-2.5 py-0.5 rounded-full">
+                                    ⭐ Direct Offer to Your Company
                                   </span>
                                 ) : (
-                                  <span className="inline-flex items-center gap-1 text-[9px] font-black text-orange-500 uppercase tracking-wider bg-orange-50 dark:bg-orange-950/20 px-2 py-0.5 rounded-full mb-1">
-                                    🌐 General Campus Job
+                                  <span className="inline-flex items-center gap-1 text-[9px] font-black text-orange-600 uppercase tracking-wider bg-orange-50 dark:bg-orange-950/30 px-2.5 py-0.5 rounded-full">
+                                    🌐 Campus Order
                                   </span>
                                 )}
-                                <h4 className="font-black text-slate-800 dark:text-zinc-100 text-sm line-clamp-1">{job.productName}</h4>
-                                <p className="text-[10px] font-bold text-slate-400">Order ID: #{job.orderId.slice(-6).toUpperCase()}</p>
+                                <h4 className="font-black text-slate-800 dark:text-zinc-100 text-sm sm:text-base line-clamp-1">{job.productName} (x{job.quantity || 1})</h4>
+                                <p className="text-[10px] font-bold text-slate-400">Order Ref: #{job.orderId.slice(-6).toUpperCase()} • Campus: {job.campus}</p>
                               </div>
-                              <span className="font-black text-orange-600 text-base shrink-0">₦{job.deliveryPrice.toLocaleString()}</span>
+                              <div className="text-right shrink-0">
+                                <span className="text-[10px] font-bold text-slate-400 block uppercase">Fare Paid</span>
+                                <span className="font-black text-orange-600 text-base">₦{job.deliveryPrice.toLocaleString()}</span>
+                              </div>
                             </div>
 
-                            {/* Journey Steps */}
-                            <div className="space-y-3 pt-1">
-                              <div className="flex gap-2.5 items-start">
-                                <div className="w-5 h-5 rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-600 flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">A</div>
-                                <div className="space-y-0.5 text-xs">
-                                  <p className="font-bold text-slate-500 uppercase tracking-wide text-[10px]">Pickup Location</p>
-                                  <p className="font-black text-slate-700 dark:text-zinc-300">{job.sellerName}</p>
+                            {/* Journey details */}
+                            <div className="space-y-2.5 text-xs">
+                              <div className="flex gap-2.5 items-start p-2.5 rounded-xl bg-slate-50 dark:bg-zinc-850/50">
+                                <div className="w-5 h-5 rounded-full bg-slate-200 dark:bg-zinc-700 text-slate-700 dark:text-zinc-200 flex items-center justify-center text-[10px] font-black shrink-0 mt-0.5">A</div>
+                                <div className="space-y-0.5 min-w-0 flex-1">
+                                  <p className="font-bold text-slate-500 uppercase tracking-wider text-[9px]">Pickup Location (Merchant)</p>
+                                  <p className="font-bold text-slate-800 dark:text-zinc-200 truncate">{job.sellerName}</p>
                                   <p className="text-slate-400 text-[11px] truncate">{job.sellerAddress}</p>
                                 </div>
                               </div>
 
-                              <div className="flex gap-2.5 items-start">
-                                <div className="w-5 h-5 rounded-full bg-orange-100 dark:bg-orange-950/20 text-orange-600 flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">B</div>
-                                <div className="space-y-0.5 text-xs">
-                                  <p className="font-bold text-orange-500 uppercase tracking-wide text-[10px]">Destination (Buyer)</p>
-                                  <p className="font-black text-slate-700 dark:text-zinc-300">{job.buyerName}</p>
+                              <div className="flex gap-2.5 items-start p-2.5 rounded-xl bg-orange-50/50 dark:bg-orange-950/10 border border-orange-100/50 dark:border-orange-900/20">
+                                <div className="w-5 h-5 rounded-full bg-orange-600 text-white flex items-center justify-center text-[10px] font-black shrink-0 mt-0.5">B</div>
+                                <div className="space-y-0.5 min-w-0 flex-1">
+                                  <p className="font-bold text-orange-600 uppercase tracking-wider text-[9px]">Dropoff Destination (Buyer)</p>
+                                  <p className="font-bold text-slate-800 dark:text-zinc-200 truncate">{job.buyerName}</p>
                                   <p className="text-slate-400 text-[11px] truncate">{job.buyerAddress}</p>
                                 </div>
                               </div>
                             </div>
                           </div>
 
-                          <div className="mt-6 pt-4 border-t border-slate-50 dark:border-zinc-850">
-                            {job.logisticsId === companyProfile.id ? (
+                          {/* Quick ETA & Acceptance Section */}
+                          <div className="pt-3 border-t border-slate-100 dark:border-zinc-850 space-y-2">
+                            {jobAcceptingId === job.id ? (
+                              <div className="space-y-2 bg-orange-50/80 dark:bg-orange-950/20 p-3 rounded-xl border border-orange-200 dark:border-orange-900">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px] font-bold text-orange-600 uppercase tracking-wider">Estimated Delivery Turnaround:</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setJobAcceptingId(null)}
+                                    className="text-[10px] font-bold text-slate-400 hover:text-slate-600 cursor-pointer bg-transparent border-none"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                                <div className="grid grid-cols-3 gap-1.5">
+                                  {["30-45 Mins", "1-2 Hours", "Today by 5pm"].map((preset) => (
+                                    <button
+                                      key={preset}
+                                      type="button"
+                                      onClick={() => setJobEtaInput(preset)}
+                                      className={cn(
+                                        "py-1 px-1.5 rounded-lg text-[10px] font-bold transition-all border cursor-pointer",
+                                        jobEtaInput === preset
+                                          ? "bg-orange-600 text-white border-orange-600"
+                                          : "bg-white dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 border-slate-200 dark:border-zinc-700"
+                                      )}
+                                    >
+                                      {preset}
+                                    </button>
+                                  ))}
+                                </div>
+                                <input
+                                  type="text"
+                                  placeholder="Or enter custom ETA (e.g. 1 hour)"
+                                  value={jobEtaInput}
+                                  onChange={(e) => setJobEtaInput(e.target.value)}
+                                  className="w-full h-8 px-2.5 text-xs bg-white dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded-lg outline-none focus:border-orange-500"
+                                />
+                                <button
+                                  type="button"
+                                  disabled={loading}
+                                  onClick={() => handleAcceptJob(job.id, jobEtaInput || companyProfile.estimatedTurnaround)}
+                                  className="w-full h-10 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                                >
+                                  {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Check className="w-4 h-4" /> Confirm & Accept Delivery</>}
+                                </button>
+                              </div>
+                            ) : job.logisticsId === companyProfile.id ? (
                               <div className="flex gap-2">
                                 <button
-                                  onClick={() => handleAcceptJob(job.id)}
-                                  className="flex-1 h-11 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                                  type="button"
+                                  onClick={() => {
+                                    setJobAcceptingId(job.id);
+                                    setJobEtaInput(companyProfile.estimatedTurnaround || "1-3 Hours on Campus");
+                                  }}
+                                  className="flex-1 h-11 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
                                 >
                                   <Check className="w-4 h-4" />
                                   Accept Offer
                                 </button>
                                 <button
+                                  type="button"
+                                  disabled={loading}
                                   onClick={() => handleDeclineJob(job.id)}
-                                  className="flex-1 h-11 bg-red-100 dark:bg-red-950/30 hover:bg-red-200 text-red-700 dark:text-red-400 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                                  className="flex-1 h-11 bg-red-100 dark:bg-red-950/30 hover:bg-red-200 text-red-700 dark:text-red-400 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer border-none"
                                 >
                                   <X className="w-4 h-4" />
                                   Decline Offer
@@ -1538,8 +1937,12 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                               </div>
                             ) : (
                               <button
-                                onClick={() => handleAcceptJob(job.id)}
-                                className="w-full h-11 bg-slate-900 dark:bg-zinc-850 hover:bg-orange-600 hover:dark:bg-orange-600 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                                type="button"
+                                onClick={() => {
+                                  setJobAcceptingId(job.id);
+                                  setJobEtaInput(companyProfile.estimatedTurnaround || "1-3 Hours on Campus");
+                                }}
+                                className="w-full h-11 bg-slate-900 dark:bg-zinc-800 hover:bg-orange-600 hover:dark:bg-orange-600 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs border-none"
                               >
                                 <Truck className="w-4 h-4" />
                                 Accept Delivery Contract
@@ -1558,29 +1961,33 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="text-xl font-black text-slate-800 dark:text-zinc-100">Live Delivery Shipments</h3>
+                      <h3 className="text-xl font-black text-slate-800 dark:text-zinc-100 flex items-center gap-2">
+                        <span>Live Delivery Shipments</span>
+                        <span className="text-xs font-bold text-orange-600 bg-orange-50 dark:bg-orange-950/30 px-2.5 py-0.5 rounded-full border border-orange-200 dark:border-orange-900/50">
+                          {activeDeliveries.length} In Progress
+                        </span>
+                      </h3>
                       <p className="text-xs text-slate-500">Track accepted orders and update current delivery status</p>
                     </div>
-                    <span className="text-xs font-bold text-orange-600 bg-orange-50 dark:bg-orange-950/20 px-3 py-1 rounded-full">{activeDeliveries.length} In Progress</span>
                   </div>
 
                   {activeDeliveries.length === 0 ? (
-                    <div className="bg-white dark:bg-zinc-900 border border-dashed border-slate-200 dark:border-zinc-800 rounded-[2.5rem] p-12 text-center">
-                      <Truck className="w-16 h-16 text-slate-300 mx-auto mb-4 animate-pulse" />
+                    <div className="bg-white dark:bg-zinc-900 border border-dashed border-slate-200 dark:border-zinc-800 rounded-[2.5rem] p-12 text-center space-y-3">
+                      <Truck className="w-16 h-16 text-slate-300 mx-auto animate-pulse" />
                       <h4 className="font-bold text-slate-700 dark:text-zinc-300">No active deliveries</h4>
-                      <p className="text-xs text-slate-400 mt-2 max-w-sm mx-auto">Accept unassigned contracts from the 'Available Jobs' tab to manage live deliveries.</p>
+                      <p className="text-xs text-slate-400 max-w-sm mx-auto">Accept unassigned contracts from the 'Available Jobs' tab to manage live deliveries.</p>
                     </div>
                   ) : (
                     <div className="space-y-4">
                       {activeDeliveries.map((job, aIdx) => (
-                        <div key={`active-job-${job.id || aIdx}-${aIdx}`} className="bg-white dark:bg-zinc-900 border border-slate-200/60 dark:border-zinc-800/60 p-6 rounded-[2.5rem] shadow-sm space-y-6">
+                        <div key={`active-job-${job.id || aIdx}-${aIdx}`} className="bg-white dark:bg-zinc-900 border border-slate-200/60 dark:border-zinc-800/60 p-6 rounded-[2.5rem] shadow-xs space-y-5">
                           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-zinc-850 pb-4">
                             <div>
                               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-500/10 text-amber-500 rounded-full text-[10px] font-black uppercase tracking-wider mb-2">
                                 <Clock className="w-3.5 h-3.5" />
                                 {job.status.toUpperCase().replace("_", " ")}
                               </span>
-                              <h4 className="text-base font-black text-slate-800 dark:text-zinc-100">{job.productName} (x{job.quantity})</h4>
+                              <h4 className="text-base font-black text-slate-800 dark:text-zinc-100">{job.productName} (x{job.quantity || 1})</h4>
                               <p className="text-xs font-medium text-slate-400">Order Ref: #{job.orderId.slice(-6).toUpperCase()}</p>
                             </div>
                             <div className="text-right">
@@ -1590,40 +1997,54 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                           </div>
 
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <div className="space-y-3">
-                              <div className="space-y-1">
-                                <span className="text-[10px] font-bold text-slate-400 uppercase">Pickup Location</span>
-                                <p className="text-xs font-bold text-slate-700 dark:text-zinc-300">{job.sellerName} ({job.campus})</p>
-                                <p className="text-xs text-slate-500 leading-relaxed">{job.sellerAddress}</p>
-                              </div>
+                            <div className="space-y-2 p-3.5 rounded-2xl bg-slate-50 dark:bg-zinc-850/50">
+                              <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Pickup Location (Seller)</span>
+                              <p className="text-xs font-bold text-slate-800 dark:text-zinc-200">{job.sellerName} ({job.campus})</p>
+                              <p className="text-xs text-slate-500 leading-relaxed">{job.sellerAddress}</p>
                             </div>
 
-                            <div className="space-y-3">
-                              <div className="space-y-1">
-                                <span className="text-[10px] font-bold text-slate-400 uppercase">Destination Location (Buyer)</span>
-                                <p className="text-xs font-bold text-slate-700 dark:text-zinc-300">{job.buyerName} ({job.buyerPhone})</p>
-                                <p className="text-xs text-slate-500 leading-relaxed">{job.buyerAddress}</p>
+                            <div className="space-y-2 p-3.5 rounded-2xl bg-orange-50/50 dark:bg-orange-950/10 border border-orange-100/50 dark:border-orange-900/20">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-black text-orange-600 uppercase tracking-wider">Destination (Buyer)</span>
+                                {job.buyerPhone && (
+                                  <a
+                                    href={`tel:${job.buyerPhone}`}
+                                    className="inline-flex items-center gap-1 text-[10px] font-bold text-orange-600 hover:underline"
+                                  >
+                                    <Phone className="w-3 h-3" /> Call Buyer
+                                  </a>
+                                )}
                               </div>
+                              <p className="text-xs font-bold text-slate-800 dark:text-zinc-200">{job.buyerName} ({job.buyerPhone})</p>
+                              <p className="text-xs text-slate-500 leading-relaxed">{job.buyerAddress}</p>
                             </div>
                           </div>
 
                           {/* Status Stepper Progression Button */}
-                          <div className="pt-4 border-t border-slate-100 dark:border-zinc-850 flex items-center justify-between flex-wrap gap-4">
-                            <div className="flex gap-1.5 items-center">
-                              <div className={cn("w-2.5 h-2.5 rounded-full", job.status === "accepted" ? "bg-amber-400" : "bg-slate-300")} />
-                              <ArrowRight className="w-3.5 h-3.5 text-slate-300" />
-                              <div className={cn("w-2.5 h-2.5 rounded-full", job.status === "picked_up" ? "bg-orange-500" : "bg-slate-300")} />
-                              <ArrowRight className="w-3.5 h-3.5 text-slate-300" />
-                              <div className={cn("w-2.5 h-2.5 rounded-full", job.status === "in_transit" ? "bg-blue-500" : "bg-slate-300")} />
+                          <div className="pt-3 border-t border-slate-100 dark:border-zinc-850 flex items-center justify-between flex-wrap gap-4">
+                            <div className="flex gap-2 items-center">
+                              <div className={cn("w-3 h-3 rounded-full transition-all", job.status === "accepted" ? "bg-amber-400 ring-4 ring-amber-400/20" : "bg-emerald-500")} />
+                              <ArrowRight className="w-3 h-3 text-slate-300" />
+                              <div className={cn("w-3 h-3 rounded-full transition-all", job.status === "picked_up" ? "bg-orange-500 ring-4 ring-orange-500/20" : job.status === "in_transit" || job.status === "delivered" ? "bg-emerald-500" : "bg-slate-300")} />
+                              <ArrowRight className="w-3 h-3 text-slate-300" />
+                              <div className={cn("w-3 h-3 rounded-full transition-all", job.status === "in_transit" ? "bg-blue-500 ring-4 ring-blue-500/20" : job.status === "delivered" ? "bg-emerald-500" : "bg-slate-300")} />
                             </div>
 
                             <button
+                              type="button"
+                              disabled={loading}
                               onClick={() => handleUpdateStatus(job.id, job.status)}
-                              className="h-11 px-6 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-1.5 shadow-md shadow-orange-500/10 cursor-pointer"
+                              className="h-11 px-6 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-1.5 shadow-md shadow-orange-500/10 cursor-pointer border-none"
                             >
-                              {job.status === "accepted" && "Confirm Package Picked Up"}
-                              {job.status === "picked_up" && "Mark Out for Delivery"}
-                              {job.status === "in_transit" && "Confirm Successful Delivery"}
+                              {loading ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <>
+                                  {job.status === "accepted" && "Confirm Package Picked Up"}
+                                  {job.status === "picked_up" && "Mark Out for Delivery"}
+                                  {job.status === "in_transit" && "Confirm Successful Delivery"}
+                                </>
+                              )}
                             </button>
                           </div>
                         </div>
@@ -1637,7 +2058,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
               {activeTab === "history" && (
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="bg-white dark:bg-zinc-900 p-6 rounded-[2rem] border border-slate-200/60 dark:border-zinc-800/60 shadow-sm">
+                    <div className="bg-white dark:bg-zinc-900 p-6 rounded-[2rem] border border-slate-200/60 dark:border-zinc-800/60 shadow-xs">
                       <p className="text-xs text-slate-400 font-bold uppercase">Total Settled Earnings</p>
                       <strong className="text-2xl font-black text-slate-800 dark:text-zinc-100 mt-1 block">
                         ₦{deliveryHistory
@@ -1648,14 +2069,14 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                       </strong>
                     </div>
 
-                    <div className="bg-white dark:bg-zinc-900 p-6 rounded-[2rem] border border-slate-200/60 dark:border-zinc-800/60 shadow-sm">
+                    <div className="bg-white dark:bg-zinc-900 p-6 rounded-[2rem] border border-slate-200/60 dark:border-zinc-800/60 shadow-xs">
                       <p className="text-xs text-slate-400 font-bold uppercase">Completed Shipments</p>
                       <strong className="text-2xl font-black text-slate-800 dark:text-zinc-100 mt-1 block">
                         {deliveryHistory.filter(j => j.status === "delivered").length} deliveries
                       </strong>
                     </div>
 
-                    <div className="bg-white dark:bg-zinc-900 p-6 rounded-[2rem] border border-slate-200/60 dark:border-zinc-800/60 shadow-sm">
+                    <div className="bg-white dark:bg-zinc-900 p-6 rounded-[2rem] border border-slate-200/60 dark:border-zinc-800/60 shadow-xs">
                       <p className="text-xs text-slate-400 font-bold uppercase">Cancelled Shipments</p>
                       <strong className="text-2xl font-black text-slate-800 dark:text-zinc-100 mt-1 block">
                         {deliveryHistory.filter(j => j.status === "cancelled").length} jobs
@@ -1717,68 +2138,408 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                 </div>
               )}
 
-              {/* SUBVIEW 4: COMPANY PROFILE */}
+              {/* SUBVIEW 4: COMPANY PROFILE & PROFILE EDITOR */}
               {activeTab === "profile" && (
-                <div className="bg-white dark:bg-zinc-900 border border-slate-200/60 dark:border-zinc-800/60 p-8 rounded-[2.5rem] shadow-sm space-y-6">
-                  <div>
-                    <h3 className="text-xl font-black text-slate-800 dark:text-zinc-100">Logistics Company Profile</h3>
-                    <p className="text-xs text-slate-500">Fleet operational configurations and cover areas</p>
+                <div className="bg-white dark:bg-zinc-900 border border-slate-200/60 dark:border-zinc-800/60 p-6 sm:p-8 rounded-[2.5rem] shadow-xs space-y-6">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-zinc-850 pb-6">
+                    <div>
+                      <h3 className="text-xl font-black text-slate-800 dark:text-zinc-100 flex items-center gap-2">
+                        <Building className="w-5 h-5 text-orange-600" />
+                        <span>Logistics Company Fleet Profile</span>
+                      </h3>
+                      <p className="text-xs text-slate-500">Manage dispatch pricing, fleet vehicles, campuses, and operating hours</p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsEditingProfile(!isEditingProfile);
+                        setError("");
+                        setProfileSuccessMsg("");
+                      }}
+                      className={cn(
+                        "px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer border-none",
+                        isEditingProfile
+                          ? "bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300"
+                          : "bg-orange-600 hover:bg-orange-700 text-white shadow-md shadow-orange-500/15"
+                      )}
+                    >
+                      {isEditingProfile ? (
+                        <>
+                          <X className="w-4 h-4" /> Cancel Editing
+                        </>
+                      ) : (
+                        <>
+                          <Edit3 className="w-4 h-4" /> Edit Company Profile
+                        </>
+                      )}
+                    </button>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-slate-100 dark:border-zinc-850">
-                    <div className="space-y-1">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase">Registered Company Name</span>
-                      <p className="text-sm font-bold text-slate-700 dark:text-zinc-300">{companyProfile.companyName}</p>
+                  {profileSuccessMsg && (
+                    <div className="p-4 bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900 text-emerald-700 dark:text-emerald-400 rounded-2xl flex items-center gap-2 text-xs font-bold">
+                      <CheckCircle className="w-4 h-4 shrink-0" />
+                      <span>{profileSuccessMsg}</span>
                     </div>
+                  )}
 
-                    <div className="space-y-1">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase">Business CAC / RC number</span>
-                      <p className="text-sm font-bold text-slate-700 dark:text-zinc-300">{companyProfile.rcNumber}</p>
-                    </div>
-
-                    <div className="space-y-1">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase">Operational Email Address</span>
-                      <p className="text-sm font-bold text-slate-700 dark:text-zinc-300">{companyProfile.email}</p>
-                    </div>
-
-                    <div className="space-y-1">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase">Operational Phone number</span>
-                      <p className="text-sm font-bold text-slate-700 dark:text-zinc-300">{companyProfile.phoneNumber}</p>
-                    </div>
-
-                    <div className="space-y-1">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase">Office Address</span>
-                      <p className="text-sm font-bold text-slate-700 dark:text-zinc-300">{companyProfile.officeAddress}</p>
-                    </div>
-
-                    <div className="space-y-1">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase">Default Base Delivery price</span>
-                      <p className="text-sm font-bold text-orange-600">₦{companyProfile.baseDeliveryPrice.toLocaleString()}</p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2 pt-4">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase">Active Fleet Vehicle coverage</span>
-                    <div className="flex flex-wrap gap-2">
-                      {companyProfile.vehicleTypes.map((vehicle, idx) => (
-                        <span key={`${vehicle}-${idx}`} className="px-3 py-1 bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 rounded-lg text-xs font-bold">
-                          {vehicle}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="space-y-2 pt-4">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase">Covered Campus Locations</span>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-40 overflow-y-auto border border-slate-50 dark:border-zinc-850 p-4 rounded-2xl bg-slate-50/50 dark:bg-zinc-900/50">
-                      {companyProfile.coveredCampuses.map((campus, idx) => (
-                        <div key={`${campus}-${idx}`} className="flex items-center gap-2 text-xs font-bold text-slate-600 dark:text-zinc-300">
-                          <Check className="w-3.5 h-3.5 text-emerald-500" />
-                          <span>{campus}</span>
+                  {!isEditingProfile ? (
+                    /* Read-Only Profile View */
+                    <div className="space-y-6">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">Registered Company Name</span>
+                          <p className="text-sm font-black text-slate-800 dark:text-zinc-200">{companyProfile.companyName}</p>
                         </div>
-                      ))}
+
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">Business CAC / RC number</span>
+                          <p className="text-sm font-bold text-slate-700 dark:text-zinc-300">{companyProfile.rcNumber || "Not specified"}</p>
+                        </div>
+
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">Operational Email Address</span>
+                          <p className="text-sm font-bold text-slate-700 dark:text-zinc-300">{companyProfile.email}</p>
+                        </div>
+
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">Operational Phone Number</span>
+                          <p className="text-sm font-bold text-slate-700 dark:text-zinc-300">{companyProfile.phoneNumber}</p>
+                        </div>
+
+                        {companyProfile.whatsappNumber && (
+                          <div className="space-y-1">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase">WhatsApp Dispatch Line</span>
+                            <p className="text-sm font-bold text-slate-700 dark:text-zinc-300">{companyProfile.whatsappNumber}</p>
+                          </div>
+                        )}
+
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">Office Hub Address</span>
+                          <p className="text-sm font-bold text-slate-700 dark:text-zinc-300">{companyProfile.officeAddress}</p>
+                        </div>
+
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">Default Base Delivery Price</span>
+                          <p className="text-base font-black text-orange-600">₦{companyProfile.baseDeliveryPrice.toLocaleString()}</p>
+                        </div>
+
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">Estimated Turnaround Timeline</span>
+                          <p className="text-sm font-bold text-slate-700 dark:text-zinc-300">{companyProfile.estimatedTurnaround || "1-3 Hours on Campus"}</p>
+                        </div>
+
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">Operating Hours</span>
+                          <p className="text-sm font-bold text-slate-700 dark:text-zinc-300">{companyProfile.operatingHours || "8:00 AM - 8:00 PM"}</p>
+                        </div>
+
+                        {companyProfile.bankName && (
+                          <div className="space-y-1">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase">Settlement Bank Account</span>
+                            <p className="text-xs font-bold text-slate-700 dark:text-zinc-300">{companyProfile.bankName} - {companyProfile.accountNumber} ({companyProfile.accountName})</p>
+                          </div>
+                        )}
+                      </div>
+
+                      {companyProfile.description && (
+                        <div className="space-y-1 pt-2">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">About Our Dispatch Service</span>
+                          <p className="text-xs text-slate-600 dark:text-zinc-400 leading-relaxed bg-slate-50 dark:bg-zinc-850/50 p-4 rounded-2xl">{companyProfile.description}</p>
+                        </div>
+                      )}
+
+                      <div className="space-y-2 pt-2">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase">Active Fleet Vehicle Coverage</span>
+                        <div className="flex flex-wrap gap-2">
+                          {companyProfile.vehicleTypes.map((vehicle, idx) => (
+                            <span key={`${vehicle}-${idx}`} className="px-3 py-1.5 bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 rounded-xl text-xs font-bold flex items-center gap-1.5">
+                              <Truck className="w-3 h-3 text-orange-600" />
+                              {vehicle}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="space-y-2 pt-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">Covered Campus Locations ({companyProfile.coveredCampuses.length})</span>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-48 overflow-y-auto border border-slate-100 dark:border-zinc-800 p-4 rounded-2xl bg-slate-50/50 dark:bg-zinc-900/50">
+                          {companyProfile.coveredCampuses.map((campus, idx) => (
+                            <div key={`${campus}-${idx}`} className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-zinc-300">
+                              <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                              <span className="truncate">{campus}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    /* Interactive Profile Edit Form */
+                    <form onSubmit={handleSaveProfile} className="space-y-6">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div className="space-y-1">
+                          <label className="text-xs font-bold text-slate-700 dark:text-zinc-300">Company Name *</label>
+                          <input
+                            type="text"
+                            required
+                            value={editCompanyName}
+                            onChange={(e) => setEditCompanyName(e.target.value)}
+                            placeholder="e.g. UNILAG Speed Dispatch"
+                            className="w-full h-11 px-3.5 bg-slate-50 dark:bg-zinc-800/80 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs outline-none focus:border-orange-500"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-xs font-bold text-slate-700 dark:text-zinc-300">Business CAC / RC Number</label>
+                          <input
+                            type="text"
+                            value={editRcNumber}
+                            onChange={(e) => setEditRcNumber(e.target.value)}
+                            placeholder="RC-12345678"
+                            className="w-full h-11 px-3.5 bg-slate-50 dark:bg-zinc-800/80 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs outline-none focus:border-orange-500"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-xs font-bold text-slate-700 dark:text-zinc-300">Dispatch Phone Number *</label>
+                          <input
+                            type="tel"
+                            required
+                            value={editPhoneNumber}
+                            onChange={(e) => setEditPhoneNumber(e.target.value)}
+                            placeholder="08012345678"
+                            className="w-full h-11 px-3.5 bg-slate-50 dark:bg-zinc-800/80 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs outline-none focus:border-orange-500"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-xs font-bold text-slate-700 dark:text-zinc-300">WhatsApp Line for Buyers/Sellers</label>
+                          <input
+                            type="tel"
+                            value={editWhatsappNumber}
+                            onChange={(e) => setEditWhatsappNumber(e.target.value)}
+                            placeholder="08012345678"
+                            className="w-full h-11 px-3.5 bg-slate-50 dark:bg-zinc-800/80 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs outline-none focus:border-orange-500"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-xs font-bold text-slate-700 dark:text-zinc-300">Office Hub / Base Address *</label>
+                          <input
+                            type="text"
+                            required
+                            value={editOfficeAddress}
+                            onChange={(e) => setEditOfficeAddress(e.target.value)}
+                            placeholder="e.g. Shop 4, New Hall Shopping Complex, UNILAG"
+                            className="w-full h-11 px-3.5 bg-slate-50 dark:bg-zinc-800/80 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs outline-none focus:border-orange-500"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-xs font-bold text-slate-700 dark:text-zinc-300">Base Delivery Fare (₦) *</label>
+                          <input
+                            type="number"
+                            required
+                            min={100}
+                            step={50}
+                            value={editBaseDeliveryPrice}
+                            onChange={(e) => setEditBaseDeliveryPrice(Number(e.target.value))}
+                            className="w-full h-11 px-3.5 bg-slate-50 dark:bg-zinc-800/80 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs outline-none focus:border-orange-500"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-xs font-bold text-slate-700 dark:text-zinc-300">Estimated Turnaround Timeline</label>
+                          <input
+                            type="text"
+                            value={editEstimatedTurnaround}
+                            onChange={(e) => setEditEstimatedTurnaround(e.target.value)}
+                            placeholder="e.g. 1-2 Hours on Campus"
+                            className="w-full h-11 px-3.5 bg-slate-50 dark:bg-zinc-800/80 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs outline-none focus:border-orange-500"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-xs font-bold text-slate-700 dark:text-zinc-300">Operating Hours</label>
+                          <input
+                            type="text"
+                            value={editOperatingHours}
+                            onChange={(e) => setEditOperatingHours(e.target.value)}
+                            placeholder="e.g. 8:00 AM - 8:00 PM (Mon-Sat)"
+                            className="w-full h-11 px-3.5 bg-slate-50 dark:bg-zinc-800/80 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs outline-none focus:border-orange-500"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Fleet Vehicles Multi-Select */}
+                      <div className="space-y-2 pt-2">
+                        <label className="text-xs font-bold text-slate-700 dark:text-zinc-300 block">Fleet Vehicles Available *</label>
+                        <div className="flex flex-wrap gap-2">
+                          {["Bike / Motorcycle", "Bicycle", "Tricycle / Keke", "Car / Sedan", "Van / Bus", "Walking Courier"].map((v) => {
+                            const isSelected = editSelectedVehicles.includes(v);
+                            return (
+                              <button
+                                key={v}
+                                type="button"
+                                onClick={() => {
+                                  if (isSelected) {
+                                    setEditSelectedVehicles(editSelectedVehicles.filter(item => item !== v));
+                                  } else {
+                                    setEditSelectedVehicles([...editSelectedVehicles, v]);
+                                  }
+                                }}
+                                className={cn(
+                                  "px-3 py-1.5 rounded-xl text-xs font-bold transition-all border cursor-pointer flex items-center gap-1.5",
+                                  isSelected
+                                    ? "bg-orange-600 text-white border-orange-600 shadow-xs"
+                                    : "bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 border-slate-200 dark:border-zinc-700"
+                                )}
+                              >
+                                {isSelected ? <Check className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+                                {v}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Covered Campuses Selector */}
+                      <div className="space-y-3 pt-2">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-bold text-slate-700 dark:text-zinc-300">Covered University Campuses ({editSelectedCampuses.length} Selected) *</label>
+                          {editSelectedCampuses.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setEditSelectedCampuses([])}
+                              className="text-[10px] text-red-500 hover:underline cursor-pointer bg-transparent border-none"
+                            >
+                              Clear All
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Selected Campus Tags */}
+                        {editSelectedCampuses.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5 p-3 rounded-2xl bg-orange-50/50 dark:bg-orange-950/10 border border-orange-200/60 dark:border-orange-900/30 max-h-32 overflow-y-auto">
+                            {editSelectedCampuses.map((c) => (
+                              <span
+                                key={c}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 bg-white dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 rounded-lg text-[11px] font-bold shadow-2xs border border-orange-200/50 dark:border-zinc-700"
+                              >
+                                <span>{c}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditSelectedCampuses(editSelectedCampuses.filter(item => item !== c))}
+                                  className="text-slate-400 hover:text-red-500 cursor-pointer bg-transparent border-none p-0 ml-0.5"
+                                >
+                                  ✕
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Search & Add Campus */}
+                        <div className="space-y-2">
+                          <div className="relative">
+                            <Search className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                            <input
+                              type="text"
+                              value={profileCampusSearch}
+                              onChange={(e) => setProfileCampusSearch(e.target.value)}
+                              placeholder="Search campuses to add (e.g. UNILAG, UNIBEN, OAU)..."
+                              className="w-full h-10 pl-9 pr-3.5 bg-slate-50 dark:bg-zinc-800/80 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs outline-none focus:border-orange-500"
+                            />
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-40 overflow-y-auto p-2 border border-slate-200 dark:border-zinc-800 rounded-xl bg-slate-50/50 dark:bg-zinc-900/50">
+                            {NIGERIAN_CAMPUSES.filter(c => c.toLowerCase().includes(profileCampusSearch.toLowerCase())).slice(0, 15).map((campus) => {
+                              const isSelected = editSelectedCampuses.includes(campus);
+                              return (
+                                <button
+                                  key={campus}
+                                  type="button"
+                                  onClick={() => {
+                                    if (isSelected) {
+                                      setEditSelectedCampuses(editSelectedCampuses.filter(c => c !== campus));
+                                    } else {
+                                      setEditSelectedCampuses([...editSelectedCampuses, campus]);
+                                    }
+                                  }}
+                                  className={cn(
+                                    "flex items-center justify-between p-2 rounded-lg text-left text-xs font-semibold transition-colors cursor-pointer border-none",
+                                    isSelected
+                                      ? "bg-orange-600 text-white font-bold"
+                                      : "hover:bg-slate-200 dark:hover:bg-zinc-800 text-slate-700 dark:text-zinc-300"
+                                  )}
+                                >
+                                  <span className="truncate">{campus}</span>
+                                  {isSelected ? <Check className="w-3.5 h-3.5 shrink-0" /> : <Plus className="w-3.5 h-3.5 shrink-0 text-slate-400" />}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Bank Settlement Details */}
+                      <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-zinc-850">
+                        <span className="text-xs font-bold text-slate-700 dark:text-zinc-300 block">Bank Settlement Account (For Daily Fare Payouts)</span>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                          <input
+                            type="text"
+                            value={editBankName}
+                            onChange={(e) => setEditBankName(e.target.value)}
+                            placeholder="Bank Name (e.g. GTBank)"
+                            className="h-10 px-3 bg-slate-50 dark:bg-zinc-800/80 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs outline-none focus:border-orange-500"
+                          />
+                          <input
+                            type="text"
+                            maxLength={10}
+                            value={editAccountNumber}
+                            onChange={(e) => setEditAccountNumber(e.target.value.replace(/\D/g, ""))}
+                            placeholder="10-Digit NUBAN Account Number"
+                            className="h-10 px-3 bg-slate-50 dark:bg-zinc-800/80 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs outline-none focus:border-orange-500"
+                          />
+                          <input
+                            type="text"
+                            value={editAccountName}
+                            onChange={(e) => setEditAccountName(e.target.value)}
+                            placeholder="Account Holder Full Name"
+                            className="h-10 px-3 bg-slate-50 dark:bg-zinc-800/80 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs outline-none focus:border-orange-500"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Action buttons */}
+                      <div className="pt-4 flex items-center justify-end gap-3 border-t border-slate-100 dark:border-zinc-850">
+                        <button
+                          type="button"
+                          onClick={() => setIsEditingProfile(false)}
+                          className="px-5 h-11 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer border-none"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={savingProfile}
+                          className="px-6 h-11 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-md shadow-orange-500/15 disabled:opacity-50 border-none"
+                        >
+                          {savingProfile ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin" /> Saving Changes...
+                            </>
+                          ) : (
+                            <>
+                              <Save className="w-4 h-4" /> Save Company Profile
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </form>
+                  )}
                 </div>
               )}
             </div>

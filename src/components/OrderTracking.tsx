@@ -21,7 +21,8 @@ import {
   ArrowLeft, 
   ExternalLink,
   Info,
-  Building 
+  Building,
+  ShieldAlert
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/utils";
@@ -30,7 +31,10 @@ import { usePaystackPayment } from "../hooks/usePaystackPayment";
 import ReceiptModal from "./ReceiptModal";
 import LiveRiderTrackingModal from "./LiveRiderTrackingModal";
 import ReviewSuccessModal from "./ReviewSuccessModal";
-import { Star, MessageSquare, AlertTriangle, ExternalLink as ExternalLinkIcon } from "lucide-react";
+import RefundRequestModal from "./RefundRequestModal";
+import OrderAuditTrailModal from "./OrderAuditTrailModal";
+import OrderDisputeModal from "./OrderDisputeModal";
+import { Star, MessageSquare, AlertTriangle, ExternalLink as ExternalLinkIcon, Shield, History, Undo2, KeyRound, Lock } from "lucide-react";
 
 interface OrderTrackingProps {
   setActiveTab: (tab: string) => void;
@@ -68,6 +72,11 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
   const [trackingRiderOrder, setTrackingRiderOrder] = React.useState<Order | null>(null);
   const [trackingProgress, setTrackingProgress] = React.useState(20);
 
+  // New states for Refund, Dispute, and Audit Trail
+  const [refundModalOrder, setRefundModalOrder] = React.useState<Order | null>(null);
+  const [disputeModalOrder, setDisputeModalOrder] = React.useState<Order | null>(null);
+  const [auditModalOrder, setAuditModalOrder] = React.useState<Order | null>(null);
+
   const basePaystackConfig = {
     reference: `ORD_${Date.now()}`,
     email: auth.currentUser?.email || "",
@@ -95,7 +104,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
         buyerId: auth.currentUser?.uid,
         sellerId: order.sellerId,
         deliveryType: order.deliveryType || "pickup",
-        fulfillmentStatus: "Order Picked Up"
+        fulfillmentStatus: order.paymentMethod === "pod" ? "Delivery Received - Payment Required" : "Order Picked Up"
       },
       onSuccess: async (response: any) => {
         setIsVerifyingPayment(true);
@@ -113,9 +122,28 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
             }
           }
 
+          // If it's a Pay on Delivery order, trigger server-side POD verification
+          if (order.paymentMethod === "pod") {
+            try {
+              await fetch("/api/orders/verify-pod-payment", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  orderId: order.id,
+                  paymentReference: response.reference,
+                  buyerId: auth.currentUser?.uid,
+                  amountExpected: order.totalPrice,
+                  buyerDeliveryConfirmed: true,
+                }),
+              });
+            } catch (podErr) {
+              console.warn("POD server verification fallback:", podErr);
+            }
+          }
+
           await processDeliveryConfirmation(order, response.reference);
           setOrderToPay(null);
-          alert(`Real Paystack payment of ₦${order.totalPrice.toLocaleString()} confirmed! Funds are securely locked in escrow.`);
+          alert(`Payment of ₦${order.totalPrice.toLocaleString()} confirmed! Funds are securely locked in SHOPIVERSITY Escrow.`);
         } catch (err: any) {
           console.error("Payment confirmation error:", err);
           alert(`Payment Verification Issue: ${err.message || "Failed to confirm payment on Paystack."}`);
@@ -126,7 +154,10 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
       },
       onClose: () => {
         setMarkingId(null);
-        alert("Paystack payment cancelled or closed. Your order remains marked as 'Order Picked Up' and requires payment to complete escrow release.");
+        alert(order.paymentMethod === "pod" 
+          ? "Payment pending. Your order is delivered, but requires payment settlement to complete transaction."
+          : "Payment window closed. Order remains awaiting payment confirmation."
+        );
       }
     });
   };
@@ -239,20 +270,49 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
     if (!auth.currentUser) return;
     setMarkingId(order.id);
     try {
-      // 1. Move the order status to "Order Picked Up"
+      // 1. If Pay on Delivery and not paid yet, mark delivery confirmed and set status to payment_required
+      if (order.paymentMethod === "pod" && order.paymentStatus !== "paid") {
+        await updateDoc(doc(db, "orders", order.id), {
+          status: "payment_required",
+          buyerDeliveryConfirmed: true,
+          buyerDeliveryConfirmedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        });
+
+        try {
+          await fetch(`/api/orders/${order.id}/audit-event`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              orderId: order.id,
+              eventType: "BUYER_DELIVERY_CONFIRMED",
+              performedBy: auth.currentUser.uid,
+              role: "buyer",
+              actorName: order.buyerName || "Buyer",
+              notes: "Buyer confirmed order pickup. Pay on Delivery requires immediate payment verification.",
+            }),
+          });
+        } catch (e) {}
+
+        triggerPaystackPayment(order);
+        setMarkingId(null);
+        return;
+      }
+
+      // 2. Move the order status to "Order Picked Up"
       await updateDoc(doc(db, "orders", order.id), {
         status: "Order Picked Up",
         updatedAt: new Date().toISOString()
       });
 
-      // 2. If already paid, auto-complete
+      // 3. If already paid, auto-complete
       if (order.paymentStatus === "paid" || order.paymentMethod === "online") {
         await processDeliveryConfirmation(order);
         setMarkingId(null);
         return;
       }
 
-      // 3. Otherwise (e.g. POD, or unpaid), launch real Paystack checkout immediately after pickup
+      // 4. Otherwise (unpaid online/fallback), launch real Paystack checkout immediately after pickup
       triggerPaystackPayment(order);
     } catch (err) {
       console.error("Pickup confirmation failed:", err);
@@ -277,20 +337,50 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
 
     setMarkingId(order.id);
     try {
-      // Proceed directly to status update: 'Order Picked Up' or 'Order Delivered'
+      // 1. If Pay on Delivery and not paid yet, enforce strict sequence:
+      // Delivery Confirmed -> Payment Required -> Payment Verified -> Completed
+      if (order.paymentMethod === "pod" && order.paymentStatus !== "paid") {
+        await updateDoc(doc(db, "orders", order.id), {
+          status: "payment_required",
+          buyerDeliveryConfirmed: true,
+          buyerDeliveryConfirmedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        });
+
+        try {
+          await fetch(`/api/orders/${order.id}/audit-event`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              orderId: order.id,
+              eventType: "BUYER_DELIVERY_CONFIRMED",
+              performedBy: auth.currentUser.uid,
+              role: "buyer",
+              actorName: order.buyerName || "Buyer",
+              notes: "Buyer confirmed delivery receipt. Final payment settlement required to complete order.",
+            }),
+          });
+        } catch (e) {}
+
+        triggerPaystackPayment(order);
+        setMarkingId(null);
+        return;
+      }
+
+      // 2. Proceed directly to status update: 'Order Picked Up' or 'Order Delivered'
       const nextStatus = order.deliveryType === "pickup" ? "Order Picked Up" : "Order Delivered";
       await updateDoc(doc(db, "orders", order.id), {
         status: nextStatus,
         updatedAt: new Date().toISOString()
       });
 
-      // If it's Pay on Delivery or unpaid, launch real Paystack checkout
+      // 3. If it's unpaid, launch real Paystack checkout
       if (order.paymentStatus !== "paid") {
         triggerPaystackPayment(order);
         return;
       }
 
-      // If online paid, auto transition to Completed
+      // 4. If online paid, transition to Completed
       await processDeliveryConfirmation(order);
       setMarkingId(null);
     } catch (err) {
@@ -300,25 +390,87 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
     }
   };
 
+  const getPODCountdown = (order: Order) => {
+    if (order.status !== "payment_required" && !(order.paymentMethod === "pod" && order.buyerDeliveryConfirmed && order.paymentStatus !== "paid")) return null;
+    const baseTime = order.buyerDeliveryConfirmedAt || order.updatedAt || order.deliveredAt;
+    if (!baseTime) return "30m 00s";
+    const start = new Date(baseTime).getTime();
+    const thirtyMins = 30 * 60 * 1000;
+    const remaining = (start + thirtyMins) - currentTime;
+    if (remaining <= 0) return "Settlement Window Overdue";
+    const mins = Math.floor(remaining / (1000 * 60));
+    const secs = Math.floor((remaining % (1000 * 60)) / 1000);
+    return `${mins}m ${secs < 10 ? '0' : ''}${secs}s`;
+  };
+
   const handleVerifyProductIdAndConfirm = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!verifyingOrder) return;
-
-    if (productIdInput.trim() !== verifyingOrder.productId) {
-      setVerificationError("Incorrect Product ID. Please verify the code and try again.");
+    if (!productIdInput.trim()) {
+      setVerificationError("Please enter the 6-digit Verification OTP / PIN.");
       return;
     }
 
     setVerificationError(null);
     setConfirmingDelivery(true);
     try {
-      await handleMarkAsDelivered(verifyingOrder, true);
-      setShowIdVerification(false);
-      setVerifyingOrder(null);
-      setProductIdInput("");
-    } catch (err) {
+      const isPickup = verifyingOrder.deliveryType === "pickup";
+      const isPod = verifyingOrder.paymentMethod === "pod" && verifyingOrder.paymentStatus !== "paid";
+      const expectedCode = verifyingOrder.deliveryOtp || verifyingOrder.pickupOtp || verifyingOrder.handoverCode;
+
+      // 1. Strict Server-Side Verification against order document
+      const res = await fetch("/api/orders/verify-delivery-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderId: verifyingOrder.id,
+          expectedOtp: expectedCode,
+          providedOtp: productIdInput.trim(),
+          role: "buyer",
+          actorId: auth.currentUser?.uid,
+          isPickup,
+          isPod
+        })
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || data.success === false) {
+        setVerificationError(data.error || "Invalid 6-digit Verification OTP / PIN. Please check the recipient's tracking screen and try again.");
+        setConfirmingDelivery(false);
+        return;
+      }
+
+      // 2. Sync to client state & Firestore
+      const now = new Date().toISOString();
+      if (isPod) {
+        await updateDoc(doc(db, "orders", verifyingOrder.id), {
+          status: "payment_required",
+          buyerDeliveryConfirmed: true,
+          buyerDeliveryConfirmedAt: now,
+          deliveryAttemptStatus: "success",
+          updatedAt: now
+        });
+        setShowIdVerification(false);
+        setVerifyingOrder(null);
+        setProductIdInput("");
+        triggerPaystackPayment(verifyingOrder);
+      } else {
+        await updateDoc(doc(db, "orders", verifyingOrder.id), {
+          status: isPickup ? "Order Picked Up" : "Order Delivered",
+          buyerDeliveryConfirmed: true,
+          buyerDeliveryConfirmedAt: now,
+          deliveryAttemptStatus: "success",
+          updatedAt: now
+        });
+        await processDeliveryConfirmation(verifyingOrder);
+        setShowIdVerification(false);
+        setVerifyingOrder(null);
+        setProductIdInput("");
+      }
+    } catch (err: any) {
       console.error("Verification confirmation error:", err);
-      setVerificationError("An error occurred during verification.");
+      setVerificationError(err.message || "An error occurred during verification.");
     } finally {
       setConfirmingDelivery(false);
     }
@@ -715,11 +867,12 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
 
   const getEffectiveStatus = (order: Order) => {
     const s = order.status;
+    if (s === "payment_required" || s === "Payment Required") return "payment_required";
     if (s === "awaiting_payment") return "awaiting_payment";
     if (s === "pending" || s === "Pending Seller Acceptance") return "pending";
     if (s === "out_for_delivery" || s === "accepted") return "out_for_delivery";
-    if (s === "Out To Pickup Station" || s === "Out For Delivery") return "transit";
-    if (s === "Ready For Pickup" || s === "Ready For Delivery") return "ready_for_pickup";
+    if (s === "Out To Pickup Station" || s === "Out For Delivery" || s === "transit") return "transit";
+    if (s === "Ready For Pickup" || s === "Ready For Delivery" || s === "ready_for_pickup") return "ready_for_pickup";
     if (s === "delivered" || s === "acquired" || s === "Order Picked Up" || s === "Order Delivered") return "delivered";
     if (s === "completed") return "completed";
     return s;
@@ -829,7 +982,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                           : effectiveStatus === "out_for_delivery" 
                           ? "Accepted & Preparing" 
                           : effectiveStatus.replace(/_/g, ' ')}
-                        {effectiveStatus === "out_for_delivery" && order.deliveryTime && (
+                        {effectiveStatus === "out_for_delivery" && (order.deliveryType === "pickup" || order.logisticsOfferStatus === "accepted") && order.deliveryTime && (
                           <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 lowercase">
                             (Estimated {order.deliveryTime} {Number(order.deliveryTime) === 1 ? (order.deliveryTimeUnit?.toLowerCase().startsWith('hour') ? 'hour' : order.deliveryTimeUnit?.toLowerCase().startsWith('week') ? 'week' : 'day') : (order.deliveryTimeUnit || 'days')} {order.deliveryType === "pickup" ? "pickup" : "delivery"})
                           </span>
@@ -929,7 +1082,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
 
                         {getComplaintCountdown(order) !== "expired" && (
                           <button
-                            onClick={() => setActiveTab("support")}
+                            onClick={() => setDisputeModalOrder(order)}
                             className="w-full h-12 bg-slate-900 dark:bg-amber-500 text-white dark:text-slate-950 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2 shadow-xl shadow-amber-500/10"
                           >
                             <MessageSquare className="w-4 h-4" />
@@ -1029,7 +1182,20 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                         <p className="text-sm text-slate-500 dark:text-slate-400">
                           Quantity: <span className="font-bold text-slate-900 dark:text-white">{order.quantity}</span>
                         </p>
-                        <p className="text-lg font-black text-indigo-600">₦{order.totalPrice.toLocaleString()}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-lg font-black text-indigo-600">₦{order.totalPrice.toLocaleString()}</p>
+                          {order.deliveryType === "delivery" && (
+                            order.deliveryFee && order.deliveryFee > 0 ? (
+                              <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full">
+                                Includes ₦{order.deliveryFee.toLocaleString()} Delivery
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-bold text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-950/40 px-2 py-0.5 rounded-full">
+                                Delivery Fee Pending Booking
+                              </span>
+                            )
+                          )}
+                        </div>
                       </div>
                       {order.menuItemName && (
                         <p className="text-xs font-bold text-slate-400 mb-2">
@@ -1150,13 +1316,168 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                     </div>
                     <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl">
                       <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-1 text-center sm:text-left">
-                        {order.deliveryType === "pickup" ? "Expected Pickup" : "Est. Delivery"}
+                        {order.deliveryType === "pickup" ? "Expected Pickup" : "Courier Delivery Timeline"}
                       </p>
-                      <p className="text-sm font-bold text-slate-700 dark:text-slate-300 text-center sm:text-left">
-                        {order.deliveryTime ? `${order.deliveryTime} ${Number(order.deliveryTime) === 1 ? (order.deliveryTimeUnit?.toLowerCase().startsWith('hour') ? 'hour' : order.deliveryTimeUnit?.toLowerCase().startsWith('week') ? 'week' : 'day') : (order.deliveryTimeUnit || 'days')}` : "2-3 Business Days"}
-                      </p>
+                      <div className="text-sm font-bold text-slate-700 dark:text-slate-300 text-center sm:text-left">
+                        {order.deliveryType === "pickup" ? (
+                          order.deliveryTime ? `${order.deliveryTime} ${Number(order.deliveryTime) === 1 ? (order.deliveryTimeUnit?.toLowerCase().startsWith('hour') ? 'hour' : order.deliveryTimeUnit?.toLowerCase().startsWith('week') ? 'week' : 'day') : (order.deliveryTimeUnit || 'days')}` : "Ready after merchant confirmation"
+                        ) : (
+                          // Delivery Order: Hide timeline until logistics service accepts
+                          (order.logisticsOfferStatus === "accepted" || order.status === "out_for_delivery" || order.status === "Out For Delivery" || order.status === "transit" || order.status === "delivered" || order.status === "completed") ? (
+                            <span className="text-emerald-600 dark:text-emerald-400 font-bold">
+                              {order.logisticsEstimatedDeliveryTimeline || (order.deliveryTime ? `${order.deliveryTime} ${Number(order.deliveryTime) === 1 ? (order.deliveryTimeUnit?.toLowerCase().startsWith('hour') ? 'hour' : order.deliveryTimeUnit?.toLowerCase().startsWith('week') ? 'week' : 'day') : (order.deliveryTimeUnit || 'days')}` : "Campus Courier (1-3 Hours)")}
+                            </span>
+                          ) : (
+                            <span className="text-amber-600 dark:text-amber-400 font-semibold text-xs inline-flex items-center gap-1.5">
+                              <Clock className="w-3.5 h-3.5 animate-pulse" />
+                              Awaiting Logistics Acceptance
+                            </span>
+                          )
+                        )}
+                      </div>
+                      {order.logisticsName && order.logisticsOfferStatus === "accepted" && (
+                        <p className="text-[10px] text-purple-600 dark:text-purple-400 font-bold mt-1 text-center sm:text-left">
+                          🚚 {order.logisticsName} {order.logisticsPhone ? `(${order.logisticsPhone})` : ""}
+                        </p>
+                      )}
                     </div>
                   </div>
+
+                  {/* Verification Codes & OTP Display */}
+                  {(order.deliveryOtp || order.pickupOtp || order.handoverCode) && (
+                    <div className="p-4 bg-emerald-50/70 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-900/40 rounded-2xl flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-2.5">
+                        <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                        <div>
+                          <p className="text-[10px] font-bold text-emerald-800 dark:text-emerald-300 uppercase tracking-wider">
+                            Secure Handover Verification Code
+                          </p>
+                          <p className="text-xs text-emerald-600 dark:text-emerald-400">
+                            Present this to dispatch rider or station agent upon delivery
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="px-3.5 py-1.5 bg-white dark:bg-slate-900 border border-emerald-300 dark:border-emerald-700 rounded-xl font-mono text-sm font-black text-emerald-700 dark:text-emerald-300 tracking-widest shadow-sm">
+                          {order.deliveryOtp || order.pickupOtp || order.handoverCode}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Refund Status Card */}
+                  {order.refundStatus && order.refundStatus !== "none" && (
+                    <div className="p-4 bg-amber-50/80 dark:bg-amber-950/25 border border-amber-200 dark:border-amber-900/40 rounded-2xl space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                          <span className="text-xs font-bold text-amber-900 dark:text-amber-200">
+                            Refund Status: <span className="capitalize">{order.refundStatus.replace(/_/g, " ")}</span>
+                          </span>
+                        </div>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-300 uppercase tracking-wide">
+                          1.5% Fee Deducted
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 text-xs pt-1">
+                        <div>
+                          <p className="text-[9px] text-slate-500 font-bold uppercase">Requested</p>
+                          <p className="font-semibold text-slate-900 dark:text-white">₦{(order.refundAmount || order.totalPrice).toLocaleString()}</p>
+                        </div>
+                        <div>
+                          <p className="text-[9px] text-slate-500 font-bold uppercase">Fee (1.5%)</p>
+                          <p className="font-semibold text-red-600">-₦{(order.refundFee || Math.round((order.refundAmount || order.totalPrice) * 0.015)).toLocaleString()}</p>
+                        </div>
+                        <div>
+                          <p className="text-[9px] text-slate-500 font-bold uppercase">Net Refund</p>
+                          <p className="font-bold text-emerald-600 dark:text-emerald-400">
+                            ₦{(order.netRefundAmount || (order.refundAmount || order.totalPrice) - Math.round((order.refundAmount || order.totalPrice) * 0.015)).toLocaleString()}
+                          </p>
+                        </div>
+                      </div>
+                      {order.refundReason && (
+                        <p className="text-[11px] text-slate-600 dark:text-slate-400 italic bg-white/60 dark:bg-slate-900/60 p-2 rounded-lg border border-amber-100 dark:border-amber-900/30">
+                          Reason: {order.refundReason}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Delivery Attempt & Failure Notice UI */}
+                  {order.deliveryAttemptStatus === "failed" && (
+                    <div className="p-4 bg-red-50/90 dark:bg-red-950/30 border-2 border-red-300 dark:border-red-800/60 rounded-2xl space-y-2.5 animate-in fade-in slide-in-from-top-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />
+                          <span className="text-xs font-black text-red-900 dark:text-red-200 uppercase tracking-wide">
+                            Delivery Attempt Unsuccessful
+                          </span>
+                        </div>
+                        <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-red-100 dark:bg-red-900/60 text-red-700 dark:text-red-300 uppercase tracking-wider">
+                          Courier Log
+                        </span>
+                      </div>
+                      <div className="p-3 bg-white/70 dark:bg-slate-900/70 rounded-xl border border-red-200 dark:border-red-900/40 text-xs space-y-1.5">
+                        <div className="flex justify-between text-slate-700 dark:text-slate-300">
+                          <span className="font-semibold text-slate-500">Reported Reason:</span>
+                          <span className="font-bold text-red-700 dark:text-red-400">
+                            {order.deliveryAttemptReason === "buyer_unavailable" ? "Recipient Unavailable at Hostel / Address" :
+                             order.deliveryAttemptReason === "incorrect_address" ? "Incorrect / Incomplete Campus Address" :
+                             order.deliveryAttemptReason === "buyer_refused" ? "Recipient Refused Package" :
+                             order.deliveryAttemptReason === "logistics_issue" ? "Courier In-Transit Delay / Vehicle Issue" :
+                             (order.deliveryAttemptReason || "Delivery Attempt Delayed")}
+                          </span>
+                        </div>
+                        {order.lastDeliveryAttemptAt && (
+                          <div className="flex justify-between text-slate-500 text-[11px]">
+                            <span>Attempt Time:</span>
+                            <span className="font-mono">{new Date(order.lastDeliveryAttemptAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {new Date(order.lastDeliveryAttemptAt).toLocaleDateString()}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between text-slate-700 dark:text-slate-300 pt-1 border-t border-slate-100 dark:border-slate-800">
+                          <span className="font-semibold text-slate-500">Resolution:</span>
+                          <span className="font-bold text-indigo-600 dark:text-indigo-400">
+                            {order.deliveryAttemptResolution === "return_to_seller" ? "Returning Package to Merchant" :
+                             order.deliveryAttemptResolution === "dispute_required" ? "Escalated to SHOPIVERSITY Support" :
+                             "Rescheduled for Next Campus Delivery Run"}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* POD Active Payment Window Banner */}
+                  {(order.status === "payment_required" || (order.paymentMethod === "pod" && order.buyerDeliveryConfirmed && order.paymentStatus !== "paid")) && (
+                    <div className="p-4 bg-gradient-to-r from-amber-50 to-amber-100/70 dark:from-amber-950/40 dark:to-amber-900/30 border-2 border-amber-300 dark:border-amber-700/60 rounded-2xl space-y-3 animate-in fade-in slide-in-from-top-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Zap className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 animate-bounce" />
+                          <span className="text-xs font-black text-amber-900 dark:text-amber-200 uppercase tracking-wide">
+                            Active Pay on Delivery Window
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-200 dark:bg-amber-800/70 text-amber-900 dark:text-amber-100 font-mono text-[11px] font-black">
+                          <Clock className="w-3 h-3 text-amber-700 dark:text-amber-300 animate-spin" />
+                          <span>{getPODCountdown(order)}</span>
+                        </div>
+                      </div>
+                      <p className="text-xs text-amber-800 dark:text-amber-300 leading-relaxed font-medium">
+                        📦 Handover confirmed! Pay on Delivery escrow policy requires electronic settlement via Paystack to release final verified receipts and credit vendor balance.
+                      </p>
+                      <button
+                        onClick={() => triggerPaystackPayment(order)}
+                        disabled={isVerifyingPayment}
+                        className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-xs tracking-wider transition-all duration-200 flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 active:scale-[0.98]"
+                      >
+                        {isVerifyingPayment ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <CreditCard className="w-4 h-4" />
+                        )}
+                        PAY VIA PAYSTACK (₦{order.totalPrice.toLocaleString()})
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 <div className="w-full lg:w-72 space-y-6">
@@ -1177,65 +1498,76 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                   <div className="relative">
                     <div className="absolute left-4 top-0 bottom-0 w-0.5 bg-slate-100 dark:bg-slate-800" />
                     <div className="space-y-6 relative">
-                      {[
-                        { key: "pending", label: "Order Placed", icon: Clock },
-                        { key: "out_for_delivery", label: "Accepted & Preparing", icon: CheckCircle },
-                        { 
-                          key: "transit", 
-                          label: order.deliveryType === "pickup" ? "En Route to Station" : "Out for Delivery", 
-                          icon: Truck 
-                        },
-                        { 
-                          key: "ready_for_pickup", 
-                          label: order.deliveryType === "pickup" ? "Ready for Pickup" : "Arrived at Destination", 
-                          icon: Package 
-                        },
-                        { 
-                          key: "delivered", 
-                          label: order.deliveryType === "pickup" ? "Order Picked Up" : "Order Delivered", 
-                          icon: Package 
-                        },
-                        { key: "completed", label: "Completed", icon: CheckCircle }
-                      ].map((step, index, array) => {
-                        const statuses = array.map(s => s.key);
-                        const currentIndex = statuses.indexOf(effectiveStatus);
-                        const isCompleted = index <= currentIndex && order.status !== "cancelled";
-                        const isCurrent = index === currentIndex;
-                        
-                        // Green for reached, indigo for pending, slate for future
-                        let stepColor = "bg-slate-100 dark:bg-slate-800";
-                        if (isCompleted) {
-                          if (step.key === "pending") stepColor = "bg-indigo-600";
-                          else stepColor = "bg-emerald-600";
+                      {(() => {
+                        // Dynamic 4-Permutation Step Flow Matrix
+                        const isPickup = order.deliveryType === "pickup";
+                        const isPod = order.paymentMethod === "pod";
+
+                        let stepList: { key: string; label: string; icon: any }[] = [];
+
+                        if (isPickup) {
+                          // Pickup Flow (No Logistics steps)
+                          stepList = [
+                            { key: "pending", label: "Order Placed", icon: Clock },
+                            { key: "out_for_delivery", label: "Seller Accepted & Packaging", icon: CheckCircle },
+                            { key: "ready_for_pickup", label: "Ready at Pickup Station/Store", icon: Package },
+                            { key: "delivered", label: "Package Handover Verified", icon: Package },
+                            ...(isPod ? [{ key: "payment_required", label: "Pay on Delivery Settlement", icon: CreditCard }] : []),
+                            { key: "completed", label: "Order Completed", icon: CheckCircle }
+                          ];
+                        } else {
+                          // Home Delivery Flow (Full Courier Logistics Handshake)
+                          stepList = [
+                            { key: "pending", label: "Order Placed", icon: Clock },
+                            { key: "out_for_delivery", label: "Seller Accepted & Packaging", icon: CheckCircle },
+                            { key: "transit", label: "Out for Delivery (Courier In Transit)", icon: Truck },
+                            { key: "delivered", label: "Delivery Verified & Handed Over", icon: Package },
+                            ...(isPod ? [{ key: "payment_required", label: "Pay on Delivery Settlement", icon: CreditCard }] : []),
+                            { key: "completed", label: "Order Completed", icon: CheckCircle }
+                          ];
                         }
-                        
-                        return (
-                          <div key={`order-step-${step.key}-${index}`} className="flex items-center gap-4">
-                            <div className={cn(
-                              "w-8 h-8 rounded-full flex items-center justify-center z-10 transition-all duration-500",
-                              stepColor,
-                              isCompleted ? "text-white shadow-lg" : "text-slate-400 dark:text-slate-500",
-                              isCurrent && "ring-4 ring-indigo-100 dark:ring-indigo-900/30"
-                            )}>
-                              <step.icon className={cn("w-4 h-4", isCurrent && step.key === "transit" && "animate-spin")} />
-                            </div>
-                            <div className="flex flex-col">
-                              <span className={cn(
-                                "text-xs font-bold transition-colors",
-                                isCompleted ? "text-slate-900 dark:text-white" : "text-slate-400 dark:text-slate-500"
+
+                        return stepList.map((step, index, array) => {
+                          const statuses = array.map(s => s.key);
+                          const currentIndex = statuses.indexOf(effectiveStatus);
+                          const isCompleted = index <= currentIndex && order.status !== "cancelled";
+                          const isCurrent = index === currentIndex;
+                          
+                          let stepColor = "bg-slate-100 dark:bg-slate-800";
+                          if (isCompleted) {
+                            if (step.key === "pending") stepColor = "bg-indigo-600";
+                            else if (step.key === "payment_required") stepColor = "bg-amber-600";
+                            else stepColor = "bg-emerald-600";
+                          }
+                          
+                          return (
+                            <div key={`order-step-${step.key}-${index}`} className="flex items-center gap-4">
+                              <div className={cn(
+                                "w-8 h-8 rounded-full flex items-center justify-center z-10 transition-all duration-500",
+                                stepColor,
+                                isCompleted ? "text-white shadow-lg" : "text-slate-400 dark:text-slate-500",
+                                isCurrent && "ring-4 ring-indigo-100 dark:ring-indigo-900/30"
                               )}>
-                                {step.label}
-                                {isCurrent && step.key === "transit" && remainingTime && (
-                                  <span className="ml-2 font-mono text-[10px] text-emerald-600">{remainingTime}</span>
+                                <step.icon className={cn("w-4 h-4", isCurrent && step.key === "transit" && "animate-spin")} />
+                              </div>
+                              <div className="flex flex-col">
+                                <span className={cn(
+                                  "text-xs font-bold transition-colors",
+                                  isCompleted ? "text-slate-900 dark:text-white" : "text-slate-400 dark:text-slate-500"
+                                )}>
+                                  {step.label}
+                                  {isCurrent && step.key === "transit" && remainingTime && (
+                                    <span className="ml-2 font-mono text-[10px] text-emerald-600">{remainingTime}</span>
+                                  )}
+                                </span>
+                                {isCurrent && (
+                                  <p className="text-[10px] font-medium text-indigo-600 animate-pulse">Current Status</p>
                                 )}
-                              </span>
-                              {isCurrent && (
-                                <p className="text-[10px] font-medium text-indigo-600 animate-pulse">Current Status</p>
-                              )}
+                              </div>
                             </div>
-                          </div>
-                        );
-                      })}
+                          );
+                        });
+                      })()}
                       
                       {order.status === "cancelled" && (
                         <div className="flex items-center gap-4">
@@ -1337,6 +1669,25 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                           <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
                           Awaiting Seller Acceptance...
                         </button>
+                      ) : order.status === "payment_required" ? (
+                        <div className="space-y-2 animate-in fade-in duration-300">
+                          <div className="p-3 bg-amber-50 dark:bg-amber-900/25 border border-amber-200 dark:border-amber-900/40 rounded-xl text-xs font-medium text-amber-900 dark:text-amber-300">
+                            <strong>📦 Package Handover Confirmed!</strong><br />
+                            Pay on Delivery security policy requires electronic payment verification to complete escrow settlement.
+                          </div>
+                          <button
+                            onClick={() => triggerPaystackPayment(order)}
+                            disabled={isVerifyingPayment}
+                            className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-bold text-sm tracking-wide transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer shadow-lg active:scale-95"
+                          >
+                            {isVerifyingPayment ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <CreditCard className="w-4 h-4" />
+                            )}
+                            Pay via Paystack (₦{order.totalPrice.toLocaleString()})
+                          </button>
+                        </div>
                       ) : (order.type === "service" && order.paymentMethod === "physical") ? (
                         <div className="space-y-2 animate-in fade-in duration-300">
                           {order.location && (
@@ -1440,41 +1791,75 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                         </button>
                       )}
 
-                      {(order.status === "Out To Pickup Station" || order.status === "Out For Delivery" || order.status === "Ready For Pickup" || order.status === "accepted") && (!order.disputeStatus || order.disputeStatus === "none") && (
+                      {/* Refund Action Button */}
+                      {(!order.refundStatus || order.refundStatus === "none" || order.refundStatus === "rejected") && order.status !== "cancelled" && (
                         <button
-                          onClick={async () => {
-                            if (!window.confirm("Raise a dispute? This will freeze funds in escrow while SHOPIVERSITY investigates. The seller has 24 hours to respond with proof of delivery.")) return;
-                            try {
-                              await updateDoc(doc(db, "orders", order.id), {
-                                disputeStatus: "active",
-                                disputedAt: new Date().toISOString(),
-                                escrowStatus: "held"
-                              });
-                              await addDoc(collection(db, "notifications"), {
-                                userId: order.sellerId,
-                                title: "Dispute Raised!",
-                                message: `A dispute has been raised for your order ${order.productName}. You have 24 hours to provide proof of delivery.`,
-                                type: "order",
-                                isRead: false,
-                                createdAt: new Date().toISOString()
-                              });
-                            } catch (err) {
-                              handleFirestoreError(err, OperationType.UPDATE, `orders/${order.id}`);
-                            }
-                          }}
-                          className="w-full py-3 bg-amber-50 dark:bg-amber-900/10 text-amber-600 dark:text-amber-400 rounded-2xl font-bold text-xs hover:bg-amber-100 dark:hover:bg-amber-900/20 transition-all flex items-center justify-center gap-2"
+                          onClick={() => setRefundModalOrder(order)}
+                          className="w-full py-3 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 rounded-2xl font-bold text-xs hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-all flex items-center justify-center gap-2 border border-indigo-100 dark:border-indigo-900/30 shadow-sm"
                         >
-                          <AlertCircle className="w-3 h-3" />
-                          Raise Dispute
+                          <ShieldAlert className="w-3.5 h-3.5" />
+                          Request Refund (1.5% Fee)
                         </button>
                       )}
 
+                      {/* Audit Trail Button */}
                       <button
-                        onClick={() => handleClearIndividual(order)}
-                        className="w-full py-3 bg-red-50 dark:bg-red-900/10 text-red-600 dark:text-red-400 rounded-2xl font-bold text-xs hover:bg-red-100 dark:hover:bg-red-900/20 transition-all flex items-center justify-center gap-2"
+                        onClick={() => setAuditModalOrder(order)}
+                        className="w-full py-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700/60 text-slate-700 dark:text-slate-300 rounded-2xl font-bold text-xs transition-all flex items-center justify-center gap-2"
                       >
-                        <Trash2 className="w-3 h-3" />
-                        Cancel Order
+                        <History className="w-3.5 h-3.5 text-slate-500" />
+                        View Security Audit Trail
+                      </button>
+
+                      {(order.status === "Out To Pickup Station" || order.status === "Out For Delivery" || order.status === "Ready For Pickup" || order.status === "accepted" || order.status === "out_for_delivery" || order.status === "transit") && (!order.disputeStatus || order.disputeStatus === "none") && (
+                        <button
+                          onClick={() => setDisputeModalOrder(order)}
+                          className="w-full py-3 bg-amber-50 dark:bg-amber-900/10 text-amber-600 dark:text-amber-400 rounded-2xl font-bold text-xs hover:bg-amber-100 dark:hover:bg-amber-900/20 transition-all flex items-center justify-center gap-2 border border-amber-200/50 dark:border-amber-900/30"
+                        >
+                          <AlertCircle className="w-3.5 h-3.5" />
+                          Raise Escrow Dispute
+                        </button>
+                      )}
+
+                      {/* Anti-Scam Cancellation Lock & Role Guards */}
+                      {((order.status === "pending" || order.status === "Pending Seller Acceptance") && order.status !== "cancelled" && order.status !== "completed") ? (
+                        <button
+                          onClick={() => handleClearIndividual(order)}
+                          className="w-full py-3 bg-red-50 dark:bg-red-900/10 text-red-600 dark:text-red-400 rounded-2xl font-bold text-xs hover:bg-red-100 dark:hover:bg-red-900/20 transition-all flex items-center justify-center gap-2"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          Cancel Order
+                        </button>
+                      ) : (order.status !== "cancelled" && order.status !== "completed" && order.status !== "acquired") ? (
+                        <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-700/50 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                          <div className="flex items-center gap-2">
+                            <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                            <span className="text-[11px] font-bold">Cancellation Locked (In Dispatch)</span>
+                          </div>
+                          <span className="text-[10px] text-slate-400 font-medium">Use Dispute for Issues</span>
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+
+                  {/* Completed order actions: Refund and Audit Trail buttons */}
+                  {order.status === "completed" && (
+                    <div className="flex flex-col gap-2 pt-2">
+                      {(!order.refundStatus || order.refundStatus === "none" || order.refundStatus === "rejected") && (
+                        <button
+                          onClick={() => setRefundModalOrder(order)}
+                          className="w-full py-3 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 rounded-2xl font-bold text-xs hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-all flex items-center justify-center gap-2 border border-indigo-100 dark:border-indigo-900/30 shadow-sm"
+                        >
+                          <ShieldAlert className="w-3.5 h-3.5" />
+                          Request Refund (1.5% Fee)
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setAuditModalOrder(order)}
+                        className="w-full py-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700/60 text-slate-700 dark:text-slate-300 rounded-2xl font-bold text-xs transition-all flex items-center justify-center gap-2"
+                      >
+                        <History className="w-3.5 h-3.5 text-slate-500" />
+                        View Security Audit Trail
                       </button>
                     </div>
                   )}
@@ -1700,48 +2085,57 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                 <X className="w-4 h-4" />
               </button>
 
-              <div className="w-16 h-16 bg-indigo-50 dark:bg-indigo-900/20 rounded-2xl flex items-center justify-center text-indigo-600 dark:text-indigo-400 mb-6">
+              <div className="w-16 h-16 bg-emerald-50 dark:bg-emerald-900/20 rounded-2xl flex items-center justify-center text-emerald-600 dark:text-emerald-400 mb-6">
                 <ShieldCheck className="w-8 h-8" />
               </div>
 
               <h3 className="text-xl font-black italic tracking-tight text-slate-900 dark:text-white mb-2">
-                Verify Delivery Securely
+                Verify Handover OTP / PIN
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 mb-4 font-medium leading-relaxed">
-                To confirm receiving this order securely, please enter the correct **Product ID** of the item you ordered. This completes the escrow protection check.
+                Enter the 6-digit delivery verification OTP or pickup PIN provided on this order to authenticate physical receipt before escrow funds are released.
               </p>
 
-              <div className="p-3 bg-indigo-50/50 dark:bg-indigo-950/20 rounded-xl border border-indigo-100/30 dark:border-indigo-900/40 mb-6 flex items-center justify-between">
-                <div>
-                  <p className="text-[9px] font-bold text-indigo-500 uppercase tracking-widest leading-none mb-1">Product ID Required</p>
-                  <p className="text-[11px] font-mono font-bold text-slate-700 dark:text-slate-300 select-all">{verifyingOrder.productId}</p>
+              {(verifyingOrder.deliveryOtp || verifyingOrder.pickupOtp || verifyingOrder.handoverCode) && (
+                <div className="p-3.5 bg-emerald-50/60 dark:bg-emerald-950/25 rounded-2xl border border-emerald-200/60 dark:border-emerald-900/40 mb-5 flex items-center justify-between">
+                  <div>
+                    <p className="text-[9px] font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-widest leading-none mb-1">
+                      {verifyingOrder.deliveryType === "pickup" ? "Pickup PIN" : "Delivery OTP"}
+                    </p>
+                    <p className="text-sm font-mono font-black text-emerald-800 dark:text-emerald-300 select-all tracking-wider">
+                      {verifyingOrder.deliveryOtp || verifyingOrder.pickupOtp || verifyingOrder.handoverCode}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const code = verifyingOrder.deliveryOtp || verifyingOrder.pickupOtp || verifyingOrder.handoverCode || "";
+                      setProductIdInput(code);
+                      navigator.clipboard.writeText(code);
+                    }}
+                    className="px-2.5 py-1.5 bg-white dark:bg-slate-800 hover:bg-slate-100 text-emerald-600 dark:text-emerald-400 rounded-xl text-[10px] font-bold transition-all flex items-center gap-1 shadow-sm active:scale-95 border border-emerald-100 dark:border-emerald-800/40"
+                  >
+                    <Copy className="w-3 h-3" /> Auto-Fill
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    navigator.clipboard.writeText(verifyingOrder.productId);
-                  }}
-                  className="p-1 px-2 bg-white dark:bg-slate-800 hover:bg-slate-100 text-indigo-600 dark:text-indigo-400 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 shadow-sm active:scale-95"
-                >
-                  <Copy className="w-3 h-3" /> Copy
-                </button>
-              </div>
+              )}
 
               <form onSubmit={handleVerifyProductIdAndConfirm} className="space-y-4">
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1">
-                    Enter Product ID
+                    Enter 6-Digit Code
                   </label>
                   <input
                     type="text"
                     required
+                    maxLength={10}
                     value={productIdInput}
                     onChange={(e) => {
                       setProductIdInput(e.target.value);
                       setVerificationError(null);
                     }}
-                    placeholder="e.g. prod_abc123"
-                    className="w-full h-12 px-4 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/70 outline-none focus:bg-white dark:focus:bg-slate-900 focus:ring-2 focus:ring-indigo-500 font-medium text-xs text-slate-900 dark:text-white font-mono"
+                    placeholder="e.g. 849201"
+                    className="w-full h-12 px-4 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/70 outline-none focus:bg-white dark:focus:bg-slate-900 focus:ring-2 focus:ring-emerald-500 font-bold text-base text-slate-900 dark:text-white font-mono tracking-widest text-center"
                   />
                   {verificationError && (
                     <motion.p 
@@ -1749,7 +2143,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                       animate={{ opacity: 1, y: 0 }}
                       className="text-[10px] font-bold text-red-600 dark:text-red-400 mt-1.5 pl-1 flex items-center gap-1"
                     >
-                      <AlertCircle className="w-3.5 h-3.5" />
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
                       {verificationError}
                     </motion.p>
                   )}
@@ -1800,6 +2194,32 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
         productName={submittedReviewInfo?.productName}
         comment={submittedReviewInfo?.comment || ""}
       />
+
+      {refundModalOrder && (
+        <RefundRequestModal
+          order={refundModalOrder}
+          isOpen={!!refundModalOrder}
+          onClose={() => setRefundModalOrder(null)}
+          onSuccess={() => setRefundModalOrder(null)}
+        />
+      )}
+
+      {disputeModalOrder && (
+        <OrderDisputeModal
+          order={disputeModalOrder}
+          isOpen={!!disputeModalOrder}
+          onClose={() => setDisputeModalOrder(null)}
+          onSuccess={() => setDisputeModalOrder(null)}
+        />
+      )}
+
+      {auditModalOrder && (
+        <OrderAuditTrailModal
+          order={auditModalOrder}
+          isOpen={!!auditModalOrder}
+          onClose={() => setAuditModalOrder(null)}
+        />
+      )}
     </div>
   );
 }

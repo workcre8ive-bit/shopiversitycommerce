@@ -93,13 +93,6 @@ import {
   Pie,
   Legend
 } from 'recharts';
-import { APIProvider, Map as GoogleMap, AdvancedMarker, Pin } from '@vis.gl/react-google-maps';
-
-const GOOGLE_MAPS_API_KEY =
-  process.env.GOOGLE_MAPS_PLATFORM_KEY ||
-  (import.meta as any).env?.VITE_GOOGLE_MAPS_PLATFORM_KEY ||
-  (globalThis as any).GOOGLE_MAPS_PLATFORM_KEY ||
-  "";
 
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/utils";
@@ -380,7 +373,7 @@ export default function SellerDashboard({
     const activeProds = products.filter(p => !p.isDeleted);
     // Include completed, acquired (tickets), and delivered in earnings
     const completed = orders.filter(o => o.status === "completed" || o.status === "acquired" || o.status === "delivered");
-    const pending = orders.filter(o => o.status === "pending" || o.status === "Pending Seller Acceptance" || o.status === "accepted" || o.status === "out_for_delivery");
+    const pending = orders.filter(o => o.status === "pending" || o.status === "Pending Seller Acceptance" || o.status === "accepted" || o.status === "out_for_delivery" || o.status === "declined_by_logistics");
     const totalSales = completed.reduce((acc, o) => acc + o.totalPrice, 0);
     const netEarnings = completed.reduce((acc, o) => acc + (o.sellerEarnings || (o.totalPrice * (o.type === "service" ? 0.94 : 0.95))), 0);
     
@@ -445,11 +438,11 @@ export default function SellerDashboard({
       }
       const updateData: any = { status: finalStatus };
       if (status === "accepted") {
-        updateData.status = "out_for_delivery";
-        updateData.acceptedAt = null;
-      } else if (status === "start_dispatch") {
-        updateData.status = order.deliveryType === "pickup" ? "Out To Pickup Station" : "Out For Delivery";
+        updateData.status = "accepted";
         updateData.acceptedAt = new Date().toISOString();
+      } else if (status === "start_dispatch" || status === "out_for_delivery") {
+        updateData.status = order.deliveryType === "pickup" ? "Out To Pickup Station" : "Out For Delivery";
+        updateData.acceptedAt = order.acceptedAt || new Date().toISOString();
         updateData.countdownDuration = 120; // 120 seconds countdown
       }
       
@@ -2059,6 +2052,9 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
     }
     setIsHiring(true);
     try {
+      const logisticsPrice = Number(partner.baseDeliveryPrice) || 500;
+      const logisticsTimeline = partner.estimatedTurnaround || "1-3 Hours on Campus";
+
       const deliveryPayload = {
         orderId: order.id,
         productName: order.productName,
@@ -2075,7 +2071,9 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
         status: "pending",
         logisticsId: partner.id,
         logisticsName: partner.companyName,
-        deliveryPrice: Number(partner.baseDeliveryPrice) || 500,
+        logisticsPhone: partner.phoneNumber || "",
+        deliveryPrice: logisticsPrice,
+        estimatedDeliveryTimeline: logisticsTimeline,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -2087,24 +2085,47 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
       await addDoc(collection(db, "notifications"), {
         userId: partner.id,
         title: "New Dispatch Booking request!",
-        message: `Seller ${currentUser?.displayName || "Shopiversity Merchant"} booked you to deliver ${order.productName} (x${order.quantity}) to ${order.buyerName} on ${order.pickupSchool || currentUser?.campus || "Campus"}.`,
+        message: `Seller ${currentUser?.displayName || "Shopiversity Merchant"} booked you to deliver ${order.productName} (x${order.quantity}) to ${order.buyerName} on ${order.pickupSchool || currentUser?.campus || "Campus"}. Estimated timeline: ${logisticsTimeline}.`,
         type: "logistics",
         isRead: false,
         createdAt: new Date().toISOString()
       });
 
-      // Update standard order record to note local dispatch request
+      // Calculate item subtotal and updated total with logistics delivery fee
+      const itemSubtotal = order.itemSubtotal || (order.totalPrice - (order.deliveryFee || 0));
+      const newTotalPrice = itemSubtotal + logisticsPrice;
+
+      // Update standard order record to note local dispatch request, delivery fee, and courier details
       await updateDoc(doc(db, "orders", order.id), {
         status: "accepted",
         logisticsOfferStatus: "pending",
+        logisticsId: partner.id,
+        logisticsName: partner.companyName,
+        logisticsPhone: partner.phoneNumber || "",
+        logisticsDeliveryPrice: logisticsPrice,
+        deliveryFee: logisticsPrice,
+        deliveryPrice: logisticsPrice,
+        itemSubtotal: itemSubtotal,
+        totalPrice: newTotalPrice,
+        logisticsEstimatedDeliveryTimeline: logisticsTimeline,
         kwikRiderId: `CAMPUS-${partner.companyName.toUpperCase().replace(/\s+/g, "-")}`,
         kwikTrackingUrl: "local_logistics",
-        deliveredWorkNotes: `Requested Campus Logistics: ${partner.companyName} (${partner.phoneNumber})`,
+        deliveredWorkNotes: `Requested Campus Logistics: ${partner.companyName} (${partner.phoneNumber || "No phone"}) - Timeline: ${logisticsTimeline} (Delivery Fee: ₦${logisticsPrice.toLocaleString()})`,
         updatedAt: new Date().toISOString()
       });
 
+      // Notify the buyer of courier assignment and delivery fee
+      await addDoc(collection(db, "notifications"), {
+        userId: order.buyerId,
+        title: "Campus Courier Booked 🚚",
+        message: `Seller accepted your order and booked ${partner.companyName} for delivery (Delivery Fee: ₦${logisticsPrice.toLocaleString()}).`,
+        type: "order",
+        isRead: false,
+        createdAt: new Date().toISOString()
+      });
+
       setShowCampusLogisticsModal(false);
-      alert(`Local Campus Dispatch successfully booked with ${partner.companyName}!\nThey have been notified to pickup and deliver this order.`);
+      alert(`Local Campus Dispatch successfully booked with ${partner.companyName}!\nDelivery Timeline: ${logisticsTimeline}\nThey have been notified to pickup and deliver this order.`);
     } catch (err: any) {
       console.error(err);
       alert("Failed to assign local logistics: " + err.message);
@@ -2147,10 +2168,19 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
       const trackingUrl = "outsourced";
       const notesString = `Outsourced to: ${outsourceCourierName.trim()}.${outsourceRiderName ? " Rider: " + outsourceRiderName.trim() : ""}${outsourceRiderPhone ? " (" + outsourceRiderPhone.trim() + ")" : ""}. Fee: ₦${outsourceDeliveryFee.toLocaleString()}.${outsourceNotes ? " Notes: " + outsourceNotes.trim() : ""}`;
 
+      const feeNum = Number(outsourceDeliveryFee) || 0;
+      const itemSubtotal = order.itemSubtotal || (order.totalPrice - (order.deliveryFee || 0));
+      const newTotalPrice = itemSubtotal + feeNum;
+
       await updateDoc(doc(db, "orders", order.id), {
         kwikRiderId: riderId,
         kwikTrackingUrl: trackingUrl,
         status: "out_for_delivery",
+        deliveryFee: feeNum,
+        deliveryPrice: feeNum,
+        logisticsDeliveryPrice: feeNum,
+        itemSubtotal: itemSubtotal,
+        totalPrice: newTotalPrice,
         deliveredWorkNotes: notesString,
         updatedAt: new Date().toISOString()
       });
@@ -2389,8 +2419,23 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
               </div>
             )}
 
-            {/* Consolidated Campus & Outsourced Logistics booking */}
-            {order.deliveryType === "delivery" && effectiveStatus !== "completed" && (
+            {/* Awaiting Seller Acceptance Banner for delivery orders */}
+            {order.deliveryType === "delivery" && (order.status === "pending" || order.status === "Pending Seller Acceptance") && (
+              <div className="mt-4 p-4 bg-amber-50/80 dark:bg-amber-950/30 rounded-2xl border border-amber-200/80 dark:border-amber-800/60 space-y-2">
+                <div className="flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                  <span className="text-xs font-black uppercase tracking-wider text-amber-900 dark:text-amber-200">
+                    Awaiting Order Acceptance
+                  </span>
+                </div>
+                <p className="text-[11px] text-amber-800/90 dark:text-amber-300/90 leading-relaxed font-medium">
+                  Please click <strong>Accept Order</strong> below to accept this buyer's order. Once accepted, the Campus Logistics Hub will unlock so you can book a registered partner courier and finalize the delivery price.
+                </p>
+              </div>
+            )}
+
+            {/* Consolidated Campus & Outsourced Logistics booking - Only accessible after order is accepted */}
+            {order.deliveryType === "delivery" && order.status !== "pending" && order.status !== "Pending Seller Acceptance" && effectiveStatus !== "completed" && (
               <div className="mt-4 p-4 bg-slate-50 dark:bg-slate-900/40 rounded-2xl border border-slate-100 dark:border-slate-800 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5">
@@ -2398,12 +2443,16 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                     <span className="text-[10px] font-black uppercase tracking-widest text-slate-800 dark:text-slate-200">Campus Logistics Hub</span>
                   </div>
                   {order.logisticsOfferStatus === "pending" ? (
-                    <span className="text-[9px] font-black uppercase tracking-wider bg-amber-100 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 px-2.5 py-1 rounded-full animate-pulse">
-                      ⏳ Offer Sent (Awaiting Acceptance)
+                    <span className="text-[9px] font-black uppercase tracking-wider bg-amber-100 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 px-2.5 py-1 rounded-full animate-pulse flex items-center gap-1">
+                      <Loader2 className="w-3 h-3 animate-spin" /> Offer Sent (Awaiting Acceptance)
                     </span>
-                  ) : order.logisticsOfferStatus === "declined" ? (
-                    <span className="text-[9px] font-black uppercase tracking-wider bg-red-100 dark:bg-red-950/40 text-red-600 dark:text-red-400 px-2.5 py-1 rounded-full">
-                      ❌ Offer Declined (Please Re-assign)
+                  ) : (order.logisticsOfferStatus === "declined" || order.status === "declined_by_logistics") ? (
+                    <span className="text-[9px] font-black uppercase tracking-wider bg-red-100 dark:bg-red-950/40 text-red-600 dark:text-red-400 px-2.5 py-1 rounded-full flex items-center gap-1">
+                      ❌ Offer Declined (Choose Another)
+                    </span>
+                  ) : order.logisticsOfferStatus === "accepted" ? (
+                    <span className="text-[9px] font-black uppercase tracking-wider bg-emerald-100 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 px-2.5 py-1 rounded-full flex items-center gap-1">
+                      <CheckCircle className="w-3 h-3" /> Logistics Confirmed
                     </span>
                   ) : order.kwikRiderId ? (
                     <span className="text-[9px] font-black uppercase tracking-wider bg-orange-100 dark:bg-orange-950/30 text-orange-600 dark:text-orange-400 px-2.5 py-1 rounded-full animate-pulse">
@@ -2411,24 +2460,85 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                     </span>
                   ) : (
                     <span className="text-[9px] font-black uppercase tracking-wider bg-slate-100 dark:bg-slate-800 text-slate-400 px-2.5 py-1 rounded-full">
-                      Ready to Dispatch
+                      Ready to Assign Courier
                     </span>
                   )}
                 </div>
 
                 {order.logisticsOfferStatus === "pending" ? (
                   <div className="space-y-2 text-[11px] text-slate-600 dark:text-slate-400">
-                    <div className="p-3 bg-amber-50/50 dark:bg-amber-950/10 border border-amber-100/30 rounded-xl text-amber-700 dark:text-amber-400 space-y-1">
-                      <p className="font-bold flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        Awaiting Logistics Partner Response
+                    <div className="p-3 bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200/70 dark:border-amber-800/60 rounded-xl text-amber-800 dark:text-amber-200 space-y-1.5">
+                      <p className="font-bold flex items-center gap-1.5 text-amber-700 dark:text-amber-300">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-600 shrink-0" />
+                        Awaiting Response from {order.logisticsName || order.kwikRiderId?.replace("CAMPUS-", "").replace(/-/g, " ") || "Courier"}
                       </p>
-                      <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-normal">
-                        You have offered this delivery job to {order.kwikRiderId.replace("CAMPUS-", "").replace(/-/g, " ")}. They will review and either accept or decline it on their dashboard.
+                      <p className="text-[10px] text-slate-600 dark:text-slate-400 leading-normal">
+                        The dispatch order button is locked until the logistics company reviews and accepts the job. If they are unresponsive or taking too long, you can choose another logistics partner right away.
                       </p>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setShowCampusLogisticsModal(true);
+                          setDeliveryTab("registered");
+                        }}
+                        className="mt-1.5 w-full py-2 px-3 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5 shadow-sm active:scale-95 cursor-pointer border-none"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        Choose Another Logistics Partner
+                      </button>
                     </div>
                     {order.deliveredWorkNotes && (
                       <div className="p-2.5 bg-white/50 dark:bg-slate-900/50 rounded-xl border border-slate-100 dark:border-slate-800 text-[10px] text-slate-500 italic">
+                        {order.deliveredWorkNotes}
+                      </div>
+                    )}
+                  </div>
+                ) : (order.logisticsOfferStatus === "declined" || order.status === "declined_by_logistics") ? (
+                  <div className="space-y-2 text-[11px]">
+                    <div className="p-3 bg-red-50 dark:bg-red-950/20 text-red-700 dark:text-red-300 rounded-xl border border-red-200 dark:border-red-900/40 space-y-2">
+                      <div className="flex items-center gap-1.5 font-bold text-red-600 dark:text-red-400">
+                        <AlertCircle className="w-4 h-4 shrink-0" />
+                        <span>Delivery Offer Declined by Courier</span>
+                      </div>
+                      <p className="text-[10px] text-slate-600 dark:text-slate-400 leading-relaxed">
+                        {order.deliveredWorkNotes || "The assigned logistics company was unable to accept this delivery. Please select another partner to dispatch this order."}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setShowCampusLogisticsModal(true);
+                          setDeliveryTab("registered");
+                        }}
+                        className="w-full py-2.5 px-3 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5 shadow-sm active:scale-95 cursor-pointer border-none"
+                      >
+                        <Navigation className="w-3.5 h-3.5" />
+                        Choose Another Logistics Partner
+                      </button>
+                    </div>
+                  </div>
+                ) : order.logisticsOfferStatus === "accepted" ? (
+                  <div className="space-y-2 text-[11px] text-slate-600 dark:text-slate-400">
+                    <div className="p-3 bg-emerald-50/70 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/60 rounded-xl text-emerald-900 dark:text-emerald-200 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold flex items-center gap-1.5 text-emerald-700 dark:text-emerald-300">
+                          <CheckCircle className="w-3.5 h-3.5 text-emerald-600" /> Courier Accepted & Confirmed
+                        </span>
+                        <span className="text-[10px] font-black text-emerald-800 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-900/40 px-2 py-0.5 rounded-full">
+                          Ready for Handover
+                        </span>
+                      </div>
+                      <p className="text-xs font-black text-slate-900 dark:text-white">
+                        🚚 {order.logisticsName || order.kwikRiderId?.replace("CAMPUS-", "").replace(/-/g, " ")}
+                      </p>
+                      <p className="text-[10px] text-slate-600 dark:text-slate-400">
+                        ⏱️ Est. Timeline: <span className="font-bold text-slate-900 dark:text-white">{order.logisticsEstimatedDeliveryTimeline || "1-3 Hours on Campus"}</span>
+                        {order.logisticsPhone ? ` • 📞 ${order.logisticsPhone}` : ""}
+                      </p>
+                    </div>
+                    {order.deliveredWorkNotes && (
+                      <div className="p-2 bg-white/50 dark:bg-slate-900/50 rounded-xl border border-slate-100 dark:border-slate-800 text-[10px] text-slate-500 italic">
                         {order.deliveredWorkNotes}
                       </div>
                     )}
@@ -2478,17 +2588,6 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                   </div>
                 ) : (
                   <div className="flex flex-col gap-3 w-full">
-                    {order.logisticsOfferStatus === "declined" && (
-                      <div className="p-3 bg-red-50 dark:bg-red-950/20 text-red-600 dark:text-red-400 rounded-xl border border-red-100 dark:border-red-900/30 text-[11px] font-medium space-y-1">
-                        <div className="flex items-center gap-1.5 font-bold">
-                          <AlertCircle className="w-3.5 h-3.5 text-red-500 shrink-0" />
-                          <span>Delivery Offer Declined</span>
-                        </div>
-                        <p className="leading-relaxed">
-                          The logistics company declined your request. Please hire another campus logistics company or outsource the delivery.
-                        </p>
-                      </div>
-                    )}
                     <button
                       type="button"
                       onClick={(e) => {
@@ -2496,10 +2595,10 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                         setShowCampusLogisticsModal(true);
                         setDeliveryTab("registered"); // start with registered tab
                       }}
-                      className="w-full py-2.5 px-4 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-sm"
+                      className="w-full py-2.5 px-4 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-sm cursor-pointer active:scale-95"
                     >
                       <Navigation className="w-4 h-4 animate-pulse" />
-                      Book Delivery & Dispatch
+                      Book Campus Logistics Partner
                     </button>
                   </div>
                 )}
@@ -2538,42 +2637,139 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
               <button 
                 type="button"
                 onClick={() => onUpdate(order.id, "accepted")}
-                className="px-4 py-2 bg-emerald-600 text-white rounded-xl font-bold text-xs hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 dark:shadow-none"
+                className="px-4 py-2 bg-emerald-600 text-white rounded-xl font-bold text-xs hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 dark:shadow-none cursor-pointer active:scale-95"
               >
                 Accept Order
               </button>
               <button 
                 type="button"
                 onClick={() => onUpdate(order.id, "cancelled")}
-                className="p-2 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30 transition-all"
+                className="p-2 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30 transition-all cursor-pointer"
                 title="Cancel Order"
               >
                 <XCircle className="w-4 h-4" />
               </button>
             </div>
-          ) : order.status === "accepted" ? (
+          ) : (order.status === "accepted" || order.status === "declined_by_logistics") ? (
             <div className="flex items-center gap-2">
-              <button 
-                type="button"
-                onClick={() => onUpdate(order.id, "out_for_delivery")}
-                className="px-4 py-2 bg-blue-600 text-white rounded-xl font-bold text-xs hover:bg-blue-700 transition-all shadow-lg shadow-blue-100 dark:shadow-none flex items-center gap-2"
-              >
-                {order.type === "service" ? <Zap className="w-3 h-3" /> : <Truck className="w-3 h-3" />}
-                {order.type === "service" ? "Start / Accept Service" : (order.deliveryType === "pickup" ? "Mark as Ready" : "Dispatch Order")}
-              </button>
-              {order.type === "service" && order.revisionFeedback && (
+              {order.type === "service" ? (
+                <>
+                  <button 
+                    type="button"
+                    onClick={() => onUpdate(order.id, "out_for_delivery")}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-xl font-bold text-xs hover:bg-blue-700 transition-all shadow-lg shadow-blue-100 dark:shadow-none flex items-center gap-2 cursor-pointer active:scale-95"
+                  >
+                    <Zap className="w-3 h-3" />
+                    Start / Accept Service
+                  </button>
+                  {order.revisionFeedback && (
+                    <button 
+                      type="button"
+                      onClick={() => {
+                        setWorkNotes("");
+                        setWorkFileUrl("");
+                        setShowServiceDeliveryModal(true);
+                      }}
+                      className="px-4 py-2 bg-gradient-to-r from-amber-500 to-amber-600 text-white rounded-xl font-bold text-xs hover:from-amber-600 hover:to-amber-700 transition-all shadow-lg flex items-center gap-2 cursor-pointer active:scale-95"
+                    >
+                      <RefreshCw className="w-3 h-3 animate-spin text-amber-200" />
+                      Redeliver Work
+                    </button>
+                  )}
+                </>
+              ) : order.deliveryType === "pickup" ? (
                 <button 
                   type="button"
-                  onClick={() => {
-                    setWorkNotes("");
-                    setWorkFileUrl("");
-                    setShowServiceDeliveryModal(true);
-                  }}
-                  className="px-4 py-2 bg-gradient-to-r from-amber-500 to-amber-600 text-white rounded-xl font-bold text-xs hover:from-amber-600 hover:to-amber-700 transition-all shadow-lg flex items-center gap-2 cursor-pointer"
+                  onClick={() => onUpdate(order.id, "Ready For Pickup")}
+                  className="px-4 py-2 bg-emerald-600 text-white rounded-xl font-bold text-xs hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 dark:shadow-none flex items-center gap-2 cursor-pointer active:scale-95"
                 >
-                  <RefreshCw className="w-3 h-3 animate-spin text-amber-200" />
-                  Redeliver Work
+                  <CheckCircle className="w-3.5 h-3.5" />
+                  Mark as Ready for Pickup
                 </button>
+              ) : (
+                /* Physical Delivery order */
+                (() => {
+                  const isAcceptedByLogistics = order.logisticsOfferStatus === "accepted" || order.kwikTrackingUrl === "outsourced";
+                  const isPendingLogistics = order.logisticsOfferStatus === "pending";
+                  const isDeclinedLogistics = order.logisticsOfferStatus === "declined" || order.status === "declined_by_logistics";
+
+                  if (isAcceptedByLogistics) {
+                    return (
+                      <button 
+                        type="button"
+                        onClick={() => onUpdate(order.id, "start_dispatch")}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs transition-all shadow-lg shadow-blue-100 dark:shadow-none flex items-center gap-2 cursor-pointer active:scale-95"
+                      >
+                        <Truck className="w-3.5 h-3.5" />
+                        Dispatch Order ({order.logisticsName || "Courier"})
+                      </button>
+                    );
+                  }
+
+                  if (isPendingLogistics) {
+                    return (
+                      <div className="flex items-center gap-2">
+                        <button 
+                          type="button"
+                          disabled
+                          className="px-3.5 py-2 bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 rounded-xl font-bold text-xs cursor-not-allowed flex items-center gap-1.5 border border-slate-200 dark:border-slate-700 select-none opacity-80"
+                          title="Dispatch is inactive until the requested logistics partner accepts your delivery booking"
+                        >
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-500" />
+                          Awaiting Courier Acceptance
+                        </button>
+                        <button 
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowCampusLogisticsModal(true);
+                            setDeliveryTab("registered");
+                          }}
+                          className="px-3 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold text-xs transition-all shadow-sm flex items-center gap-1.5 cursor-pointer active:scale-95"
+                          title="Choose another logistics partner"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          Change Courier
+                        </button>
+                      </div>
+                    );
+                  }
+
+                  if (isDeclinedLogistics) {
+                    return (
+                      <div className="flex items-center gap-2">
+                        <button 
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowCampusLogisticsModal(true);
+                            setDeliveryTab("registered");
+                          }}
+                          className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs transition-all shadow-lg flex items-center gap-2 cursor-pointer active:scale-95 animate-pulse"
+                        >
+                          <Navigation className="w-3.5 h-3.5" />
+                          Choose Another Logistics
+                        </button>
+                      </div>
+                    );
+                  }
+
+                  // No courier assigned yet
+                  return (
+                    <button 
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowCampusLogisticsModal(true);
+                        setDeliveryTab("registered");
+                      }}
+                      className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs transition-all shadow-lg flex items-center gap-2 cursor-pointer active:scale-95"
+                    >
+                      <Truck className="w-3.5 h-3.5 animate-pulse" />
+                      Assign Logistics / Courier
+                    </button>
+                  );
+                })()
               )}
             </div>
           ) : order.status === "out_for_delivery" ? (
@@ -2596,33 +2792,20 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                   <button 
                     type="button"
                     onClick={() => onUpdate(order.id, "Ready For Pickup")}
-                    className="px-4 py-2 bg-emerald-600 text-white rounded-xl font-bold text-xs hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 dark:shadow-none flex items-center gap-2"
+                    className="px-4 py-2 bg-emerald-600 text-white rounded-xl font-bold text-xs hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 dark:shadow-none flex items-center gap-2 cursor-pointer active:scale-95"
                   >
                     <CheckCircle className="w-3.5 h-3.5" />
                     Mark as Ready for Pickup
                   </button>
                 )
-              ) : order.kwikRiderId ? (
-                <button 
-                  type="button"
-                  onClick={() => onUpdate(order.id, "start_dispatch")}
-                  className="px-4 py-2 bg-[#ff5c00] hover:bg-[#e05200] text-white rounded-xl font-black text-xs transition-all shadow-lg shadow-purple-100 dark:shadow-none flex items-center gap-2 animate-bounce"
-                >
-                  <Truck className="w-3.5 h-3.5" />
-                  Out for Delivery
-                </button>
               ) : (
                 <button 
                   type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowCampusLogisticsModal(true);
-                    setDeliveryTab("registered");
-                  }}
-                  className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs transition-all flex items-center gap-2 shadow-lg hover:scale-[1.02] active:scale-[0.98]"
+                  onClick={() => onUpdate(order.id, "start_dispatch")}
+                  className="px-4 py-2 bg-[#ff5c00] hover:bg-[#e05200] text-white rounded-xl font-black text-xs transition-all shadow-lg shadow-purple-100 dark:shadow-none flex items-center gap-2 animate-bounce cursor-pointer active:scale-95"
                 >
-                  <Truck className="w-3.5 h-3.5 animate-pulse" />
-                  Book Delivery
+                  <Truck className="w-3.5 h-3.5" />
+                  Out for Delivery
                 </button>
               )}
             </div>
@@ -2783,10 +2966,20 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                         {logisticsPartners.map((partner, pIdx) => (
                           <div 
                             key={`partner-${partner.id || pIdx}-${pIdx}`}
-                            className="p-4 bg-slate-50 dark:bg-slate-800/90 rounded-2xl border border-slate-200 dark:border-slate-700 hover:border-orange-500/50 transition-all flex items-center justify-between gap-4"
+                            className="p-4 bg-slate-50 dark:bg-slate-800/90 rounded-2xl border border-slate-200 dark:border-slate-700 hover:border-orange-500/50 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4"
                           >
-                            <div className="space-y-1 text-left">
-                              <h4 className="font-black text-slate-900 dark:text-white text-sm">{partner.companyName}</h4>
+                            <div className="space-y-1.5 text-left">
+                              <div className="flex items-center gap-2">
+                                <h4 className="font-black text-slate-900 dark:text-white text-sm">{partner.companyName}</h4>
+                                <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-orange-100 dark:bg-orange-950/40 text-orange-600 dark:text-orange-400">
+                                  Verified Partner
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-[11px] font-bold text-slate-700 dark:text-zinc-300 flex items-center gap-1">
+                                  ⏱️ <span className="text-slate-500 font-medium">Timeline:</span> {partner.estimatedTurnaround || "1-3 Hours on Campus"}
+                                </span>
+                              </div>
                               <div className="flex flex-wrap gap-1">
                                 {partner.vehicleTypes?.slice(0, 3).map((v: string, idx: number) => (
                                   <span key={`${v}-${idx}`} className="px-1.5 py-0.5 bg-slate-200 dark:bg-slate-700 text-[10px] rounded text-slate-700 dark:text-slate-200 font-bold">
@@ -2794,24 +2987,27 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                                   </span>
                                 ))}
                               </div>
-                              <p className="text-[10px] text-slate-500 dark:text-slate-300 font-semibold mt-1">📞 {partner.phoneNumber}</p>
+                              <p className="text-[10px] text-slate-500 dark:text-slate-300 font-semibold">📞 {partner.phoneNumber || "Verified Courier"}</p>
                             </div>
 
-                            <div className="text-right shrink-0">
-                              <strong className="text-base font-black text-slate-900 dark:text-white block">₦{(partner.baseDeliveryPrice || 500).toLocaleString()}</strong>
+                            <div className="text-right shrink-0 flex sm:flex-col items-center sm:items-end justify-between sm:justify-center gap-2 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-200 dark:border-slate-700">
+                              <div>
+                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block">Courier Fee</span>
+                                <strong className="text-base font-black text-slate-900 dark:text-white block">₦{(partner.baseDeliveryPrice || 500).toLocaleString()}</strong>
+                              </div>
                               <button
                                 type="button"
                                 disabled={isHiring || order.status === "pending" || order.status === "Pending Seller Acceptance"}
                                 onClick={() => handleHireLocalLogistics(partner)}
                                 className={cn(
-                                  "mt-2 px-4 py-2 text-white text-xs font-bold rounded-xl transition-all cursor-pointer border-none shadow-sm",
+                                  "px-4 py-2 text-white text-xs font-bold rounded-xl transition-all cursor-pointer border-none shadow-sm",
                                   (order.status === "pending" || order.status === "Pending Seller Acceptance")
                                     ? "bg-slate-300 dark:bg-slate-700 text-slate-500 cursor-not-allowed"
-                                    : "bg-orange-600 hover:bg-orange-700 shadow-orange-500/10"
+                                    : "bg-orange-600 hover:bg-orange-700 shadow-orange-500/10 active:scale-95"
                                 )}
                                 title={(order.status === "pending" || order.status === "Pending Seller Acceptance") ? "Accept order first before dispatching" : "Assign rider"}
                               >
-                                {isHiring ? "Hiring..." : (order.status === "pending" || order.status === "Pending Seller Acceptance") ? "Accept Order First" : "Assign & Hire"}
+                                {isHiring ? "Hiring..." : (order.status === "pending" || order.status === "Pending Seller Acceptance") ? "Accept Order First" : "Assign & Dispatch"}
                               </button>
                             </div>
                           </div>
@@ -3675,32 +3871,6 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
     if (!addrState || !addrLga) return;
     setIsSearchingLgaPlaces(true);
     const queryStr = `${addrLga}, ${addrState}, Nigeria`;
-    
-    if (GOOGLE_MAPS_API_KEY && window.google?.maps?.places) {
-      try {
-        const service = new window.google.maps.places.AutocompleteService();
-        service.getPlacePredictions({
-          input: queryStr,
-          componentRestrictions: { country: "ng" },
-        }, (predictions, status) => {
-          if (status === window.google.maps.places.PlacesServiceStatus.OK && predictions) {
-            const mapped = predictions.map(p => ({
-              display_name: p.description,
-              main_text: p.structured_formatting?.main_text || p.description,
-              place_id: p.place_id,
-              source: "google"
-            }));
-            setLgaPlacesSuggestions(mapped);
-            setIsSearchingLgaPlaces(false);
-          } else {
-            triggerOsmLgaFallback(queryStr);
-          }
-        });
-        return;
-      } catch (err) {
-        console.error("Google default places query failed", err);
-      }
-    }
     await triggerOsmLgaFallback(queryStr);
   };
 
@@ -3708,17 +3878,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
     setAddrStreet(item.main_text || item.display_name);
     setLgaPlacesSearch(item.main_text || item.display_name);
     
-    if (item.source === "google" && window.google?.maps) {
-      const geocoder = new window.google.maps.Geocoder();
-      geocoder.geocode({ placeId: item.place_id }, (results, status) => {
-        if (status === "OK" && results && results[0]) {
-          const loc = results[0].geometry.location;
-          const coords = { lat: loc.lat(), lng: loc.lng() };
-          setPickupCoordinates(coords);
-          setMapCenter(coords);
-        }
-      });
-    } else if (item.lat && item.lon) {
+    if (item.lat && item.lon) {
       const coords = { lat: parseFloat(item.lat), lng: parseFloat(item.lon) };
       setPickupCoordinates(coords);
       setMapCenter(coords);
@@ -3738,35 +3898,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
 
     const delayQuery = setTimeout(async () => {
       setIsSearchingLgaPlaces(true);
-      
       const queryStr = `${lgaPlacesSearch}, ${addrLga}, ${addrState}, Nigeria`;
-
-      if (GOOGLE_MAPS_API_KEY && window.google?.maps?.places) {
-        try {
-          const service = new window.google.maps.places.AutocompleteService();
-          service.getPlacePredictions({
-            input: queryStr,
-            componentRestrictions: { country: "ng" },
-          }, (predictions, status) => {
-            if (status === window.google.maps.places.PlacesServiceStatus.OK && predictions) {
-              const mapped = predictions.map(p => ({
-                display_name: p.description,
-                main_text: p.structured_formatting?.main_text || p.description,
-                place_id: p.place_id,
-                source: "google"
-              }));
-              setLgaPlacesSuggestions(mapped);
-              setIsSearchingLgaPlaces(false);
-            } else {
-              triggerOsmLgaFallback(queryStr);
-            }
-          });
-          return;
-        } catch (err) {
-          console.error("Google AutocompleteService failed, trying OSM:", err);
-        }
-      }
-
       await triggerOsmLgaFallback(queryStr);
     }, 400);
 
@@ -3801,82 +3933,34 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
 
   const verifyLocationAddress = async (addressString: string) => {
     if (!addressString || !addressString.trim()) {
-      setGeocodingError("Please enter a valid address to pinpoint on the map.");
+      setGeocodingError("Please enter a valid address.");
       return;
     }
     
     setIsVerifyingAddress(true);
     setGeocodingError("");
     
-    // --- Fallback geocoding service: Nominatim OpenStreetMap ---
-    const tryNominatimFallback = async (): Promise<boolean> => {
-      try {
-        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressString)}&limit=1`;
-        const res = await fetch(url, {
-          headers: {
-            "Accept-Language": "en",
-            "User-Agent": "Shopiversity-Campus-App"
-          }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data && data.length > 0) {
-            const item = data[0];
-            const coords = { lat: parseFloat(item.lat), lng: parseFloat(item.lon) };
-            setPickupCoordinates(coords);
-            setMapCenter(coords);
-            setGeocodingError("");
-            setIsVerifyingAddress(false);
-            return true;
-          }
-        }
-      } catch (osmErr) {
-        // Quiet fallback when network or Nominatim is unreachable
-      }
-      return false;
-    };
-
-    // If Google Maps is still loading or API key is not yet set, use high-speed OSM Nominatim geocoding fallback immediately
-    if (!GOOGLE_MAPS_API_KEY || !window.google || !window.google.maps) {
-      console.log("Using OSM Nominatim fallback for geocoding...");
-      const success = await tryNominatimFallback();
-      if (success) {
-        setIsVerifyingAddress(false);
-        return;
-      }
-      // If Nominatim also fails, we won't print "Please try again in 1 second." since the SDK lacks credentials.
-      // We print a helpful, friendly message and let them continue since the embed map will automatically search.
-      setGeocodingError("");
-      setIsVerifyingAddress(false);
-      return;
-    }
-    
     try {
-      const geocoder = new window.google.maps.Geocoder();
-      geocoder.geocode({ address: addressString }, async (results, status) => {
-        if (status === "OK" && results && results[0]) {
-          const loc = results[0].geometry.location;
-          const coords = { lat: loc.lat(), lng: loc.lng() };
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressString)}&limit=1`;
+      const res = await fetch(url, {
+        headers: {
+          "Accept-Language": "en",
+          "User-Agent": "Shopiversity-Campus-App"
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.length > 0) {
+          const item = data[0];
+          const coords = { lat: parseFloat(item.lat), lng: parseFloat(item.lon) };
           setPickupCoordinates(coords);
           setMapCenter(coords);
           setGeocodingError("");
-          setIsVerifyingAddress(false);
-        } else {
-          console.warn(`Google Geocoding failed with status: ${status}. Retrying via OSM Nominatim...`);
-          const success = await tryNominatimFallback();
-          if (!success) {
-            setGeocodingError("");
-            setPickupCoordinates(null);
-          }
-          setIsVerifyingAddress(false);
         }
-      });
-    } catch (err: any) {
-      console.error("Google Geocoder runtime error. Retrying via OSM Nominatim...", err);
-      const success = await tryNominatimFallback();
-      if (!success) {
-        setGeocodingError("");
       }
+    } catch (osmErr) {
+      // Quiet fallback
+    } finally {
       setIsVerifyingAddress(false);
     }
   };
@@ -4244,77 +4328,26 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
     }
 
     if (deliveryOptions.pickup && addressToVerify) {
-      if (GOOGLE_MAPS_API_KEY && window.google?.maps) {
-        setLoading(true);
-        setError(null);
-        setGeocodingError("");
-        const geocoder = new window.google.maps.Geocoder();
+      if (!pickupCoordinates) {
         try {
-          const coords = await new Promise<{ lat: number; lng: number }>((resolve, reject) => {
-            geocoder.geocode({ address: addressToVerify }, (results, status) => {
-              if (status === "OK" && results && results[0]) {
-                const loc = results[0].geometry.location;
-                resolve({ lat: loc.lat(), lng: loc.lng() });
-              } else {
-                reject(new Error("Invalid address"));
-              }
-            });
+          const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressToVerify)}&limit=1`;
+          const res = await fetch(url, {
+            headers: {
+              "Accept-Language": "en",
+              "User-Agent": "Shopiversity-Campus-App"
+            }
           });
-          setPickupCoordinates(coords);
-          setMapCenter(coords);
-          setGeocodingError("");
-        } catch (err) {
-          // If Google fails, try the OSM Nominatim fallback as a rescue
-          try {
-            const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressToVerify)}&limit=1`;
-            const res = await fetch(url, {
-              headers: {
-                "Accept-Language": "en",
-                "User-Agent": "Shopiversity-Campus-App"
-              }
-            });
-            if (res.ok) {
-              const data = await res.json();
-              if (data && data.length > 0) {
-                const item = data[0];
-                const coords = { lat: parseFloat(item.lat), lng: parseFloat(item.lon) };
-                setPickupCoordinates(coords);
-                setMapCenter(coords);
-                setGeocodingError("");
-              } else {
-                throw new Error("Nominatim could not resolve address");
-              }
-            } else {
-              throw new Error("Nominatim service unavailable");
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.length > 0) {
+              const item = data[0];
+              const coords = { lat: parseFloat(item.lat), lng: parseFloat(item.lon) };
+              setPickupCoordinates(coords);
+              setMapCenter(coords);
             }
-          } catch (osmErr) {
-            console.log("Could not pinpoint exact map coordinates for:", addressToVerify);
-            // Don't fully block, let them save the product anyway!
           }
-        }
-      } else {
-        // Google Maps not available/configured - run high-speed OSM Nominatim geocoder background check
-        if (!pickupCoordinates) {
-          try {
-            const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressToVerify)}&limit=1`;
-            const res = await fetch(url, {
-              headers: {
-                "Accept-Language": "en",
-                "User-Agent": "Shopiversity-Campus-App"
-              }
-            });
-            if (res.ok) {
-              const data = await res.json();
-              if (data && data.length > 0) {
-                const item = data[0];
-                const coords = { lat: parseFloat(item.lat), lng: parseFloat(item.lon) };
-                setPickupCoordinates(coords);
-                setMapCenter(coords);
-              }
-            }
-          } catch (osmErr) {
-            // Quiet background fallback
-          }
+        } catch (osmErr) {
+          // Quiet background fallback
         }
       }
     }
@@ -5810,91 +5843,26 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                     </div>
                   )}
                   
-                  {GOOGLE_MAPS_API_KEY ? (
-                    <div className="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 h-64 relative mt-2">
-                       <APIProvider apiKey={GOOGLE_MAPS_API_KEY}>
-                        <GoogleMap
-                          zoom={15}
-                          center={mapCenter}
-                          onClick={(e) => {
-                            if (e.detail?.latLng) {
-                              const latLng = e.detail.latLng;
-                              const lat = typeof latLng.lat === 'function' ? latLng.lat() : (latLng as any).lat;
-                              const lng = typeof latLng.lng === 'function' ? latLng.lng() : (latLng as any).lng;
-                              const coords = { lat, lng };
-                              setPickupCoordinates(coords);
-                              setMapCenter(coords);
-                            }
-                          }}
-                          mapId="DEMO_MAP_ID"
-                          gestureHandling="cooperative"
-                          style={{ width: '100%', height: '100%' }}
-                          internalUsageAttributionIds={['gmp_mcp_codeassist_v1_aistudio']}
-                        >
-                          {pickupCoordinates && (
-                            <AdvancedMarker position={pickupCoordinates}>
-                              <Pin background={'#4f46e5'} borderColor={'#3730a3'} glyphColor={'#ffffff'} />
-                            </AdvancedMarker>
-                          )}
-                        </GoogleMap>
-                      </APIProvider>
-                      {pickupCoordinates ? (
-                        <div className="absolute bottom-3 left-3 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 text-[10px] font-bold text-emerald-600 flex items-center gap-1.5 shadow-sm">
-                          <Check className="w-3.5 h-3.5" />
-                          Pin set: {pickupCoordinates.lat.toFixed(4)}, {pickupCoordinates.lng.toFixed(4)}
-                          <button 
-                            type="button" 
-                            onClick={(ev) => { ev.stopPropagation(); setPickupCoordinates(null); }}
-                            className="ml-2 text-red-500 hover:text-red-600 font-bold"
-                          >
-                            Clear
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="absolute bottom-3 left-3 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 text-[10px] font-bold text-indigo-600 shadow-sm animate-pulse">
-                          💡 Click on map to place your business / pickup pin!
-                        </div>
-                      )}
-                    </div>
-                  ) : (pickupCoordinates || (location && location.trim() !== "")) ? (
-                    <div className="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 h-64 relative mt-2 bg-slate-100 dark:bg-slate-900 shadow-inner">
-                      <iframe
-                        width="100%"
-                        height="100%"
-                        style={{ border: 0 }}
-                        loading="lazy"
-                        allowFullScreen
-                        referrerPolicy="no-referrer-when-downgrade"
-                        src={
-                          pickupCoordinates 
-                            ? `https://maps.google.com/maps?q=${pickupCoordinates.lat},${pickupCoordinates.lng}&z=15&output=embed`
-                            : `https://maps.google.com/maps?q=${encodeURIComponent(location.trim())}&z=15&output=embed`
-                        }
-                      />
-                      {pickupCoordinates ? (
-                        <div className="absolute bottom-3 left-3 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 text-[10px] font-bold text-emerald-600 flex items-center gap-1.5 shadow-md">
-                          <Check className="w-3.5 h-3.5" />
-                          Live Pin: {pickupCoordinates.lat.toFixed(4)}, {pickupCoordinates.lng.toFixed(4)}
-                          <button 
-                            type="button" 
-                            onClick={(ev) => { ev.stopPropagation(); setPickupCoordinates(null); }}
-                            className="ml-2 text-red-500 hover:text-red-600 font-bold"
-                          >
-                            Reset
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="absolute bottom-3 left-3 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 text-[10px] font-bold text-indigo-600 shadow-md">
-                          📍 Showing Location Live on Map
-                        </div>
-                      )}
+                  {location && location.trim() !== "" ? (
+                    <div className="p-4 rounded-2xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-900/40 flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center shrink-0">
+                        <MapPin className="w-5 h-5" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[10px] font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+                          Pickup Location Confirmed
+                        </p>
+                        <p className="text-xs font-bold text-slate-800 dark:text-zinc-200 truncate">
+                          {location}
+                        </p>
+                      </div>
                     </div>
                   ) : (
-                    <div className="rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 h-44 relative mt-2 bg-slate-50/50 dark:bg-slate-900/50 flex flex-col items-center justify-center p-6 text-center">
-                      <MapPin className="w-8 h-8 text-slate-400 dark:text-slate-500 mb-2" />
-                      <p className="text-xs font-bold text-slate-700 dark:text-slate-200">No Pickup / Delivery Address Set</p>
-                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 max-w-xs">
-                        Enter a location address above or click "Pin Location on Map" to display a pin on Google Maps.
+                    <div className="rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 h-28 relative mt-2 bg-slate-50/50 dark:bg-slate-900/50 flex flex-col items-center justify-center p-4 text-center">
+                      <MapPin className="w-6 h-6 text-slate-400 dark:text-slate-500 mb-1" />
+                      <p className="text-xs font-bold text-slate-700 dark:text-slate-200">No Pickup Address Set Yet</p>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        Enter your hostel, room number, or campus landmark above.
                       </p>
                     </div>
                   )}

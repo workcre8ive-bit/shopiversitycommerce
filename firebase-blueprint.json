@@ -195,7 +195,14 @@
         "formResponses": { "type": "object" },
         "logisticsOfferStatus": { "type": "string" },
         "deliveredWorkNotes": { "type": "string" },
-        "confirmOrderPressed": { "type": "boolean" }
+        "confirmOrderPressed": { "type": "boolean" },
+        "deliveryFee": { "type": "number" },
+        "deliveryPrice": { "type": "number" },
+        "logisticsId": { "type": "string" },
+        "logisticsName": { "type": "string" },
+        "logisticsPhone": { "type": "string" },
+        "logisticsDeliveryPrice": { "type": "number" },
+        "logisticsEstimatedDeliveryTimeline": { "type": "string" }
       },
       "required": ["buyerId", "buyerName", "buyerPhone", "sellerId", "productId", "quantity", "totalPrice", "deliveryType", "paymentMethod", "status"]
     },

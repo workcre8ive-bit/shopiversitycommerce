@@ -167,7 +167,7 @@ export interface Order {
   paymentMethod: "online" | "pod";
   paymentStatus?: "pending" | "paid" | "failed";
   paymentReference?: string;
-  status: "pending" | "accepted" | "out_for_delivery" | "delivered" | "cancelled" | "acquired" | "completed" | "Pending Seller Acceptance" | "Out To Pickup Station" | "Ready For Pickup" | "Out For Delivery" | "Order Picked Up" | "Order Delivered" | "Ready For Delivery" | "awaiting_payment";
+  status: "pending" | "accepted" | "out_for_delivery" | "delivered" | "cancelled" | "acquired" | "completed" | "Pending Seller Acceptance" | "Out To Pickup Station" | "Ready For Pickup" | "Out For Delivery" | "Order Picked Up" | "Order Delivered" | "Ready For Delivery" | "awaiting_payment" | "payment_required" | "Payment Required" | "transit" | "ready_for_pickup";
   type?: "good" | "service";
   createdAt: string;
   acceptedAt?: string;
@@ -200,6 +200,175 @@ export interface Order {
   deliveredWorkFileUrl?: string;
   revisionFeedback?: string;
   revisionCount?: number;
+  deliveryFee?: number;
+  deliveryPrice?: number;
+  logisticsId?: string;
+  logisticsName?: string;
+  logisticsPhone?: string;
+  logisticsDeliveryPrice?: number;
+  logisticsEstimatedDeliveryTimeline?: string;
+  logisticsAssignedAt?: string;
+  logisticsAcceptedAt?: string;
+  logisticsTimeline?: string;
+  logisticsOfferStatus?: "pending" | "accepted" | "declined" | "completed";
+  kwikRiderId?: string | null;
+  kwikTrackingUrl?: string | null;
+  confirmOrderPressed?: boolean;
+  // Refund and dispute fields
+  refundStatus?: "none" | "requested" | "under_review" | "approved" | "rejected" | "processing" | "completed";
+  refundId?: string;
+  refundAmount?: number;
+  refundFee?: number;
+  buyerRefundAmount?: number;
+  refundReason?: string;
+  refundReasonCategory?: string;
+  refundEvidenceDetails?: string;
+  refundEvidenceUrl?: string;
+  refundCreatedAt?: string;
+  refundApprovedAt?: string;
+  refundCompletedAt?: string;
+  refundDecisionNotes?: string;
+  settlementOnHold?: boolean;
+  // Pay on Delivery & verification completion
+  buyerDeliveryConfirmed?: boolean;
+  buyerDeliveryConfirmedAt?: string;
+  paymentVerifiedAt?: string;
+  handoverCode?: string;
+  deliveryOtp?: string;
+  pickupOtp?: string;
+  handoverVerified?: boolean;
+  handoverVerifiedAt?: string;
+  paymentReceipt?: OrderPaymentReceipt;
+}
+
+export interface RefundRequest {
+  id: string;
+  orderId: string;
+  buyerId: string;
+  buyerName: string;
+  sellerId: string;
+  sellerName?: string;
+  logisticsId?: string;
+  logisticsName?: string;
+  originalOrderTotal: number;
+  requestedAmount: number;
+  approvedAmount?: number;
+  feeRate: number; // 0.015 (1.5%)
+  refundFee: number; // 1.5% of requested/approved amount
+  buyerRefundAmount: number; // amount to be received by buyer
+  reasonCategory: "item_not_received" | "wrong_item" | "damaged_item" | "significantly_different" | "tampered_package" | "quality_issue" | "seller_unresponsive" | "other";
+  reason: string;
+  evidenceDetails?: string;
+  evidenceFileUrl?: string;
+  status: "requested" | "under_review" | "approved" | "rejected" | "processing" | "completed";
+  decisionNotes?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  completedAt?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface OrderAuditEvent {
+  id: string;
+  orderId: string;
+  eventType: 
+    | "ORDER_CREATED" 
+    | "SELLER_ACCEPTED" 
+    | "LOGISTICS_ASSIGNED" 
+    | "LOGISTICS_ACCEPTED" 
+    | "LOGISTICS_DECLINED" 
+    | "HANDOVER_VERIFIED" 
+    | "OUT_FOR_DELIVERY" 
+    | "READY_FOR_PICKUP"
+    | "DELIVERY_ARRIVED" 
+    | "BUYER_DELIVERY_CONFIRMED" 
+    | "PAYMENT_REQUIRED" 
+    | "PAYMENT_VERIFIED" 
+    | "ORDER_COMPLETED" 
+    | "ORDER_CANCELLED" 
+    | "REFUND_REQUESTED" 
+    | "REFUND_UNDER_REVIEW" 
+    | "REFUND_APPROVED" 
+    | "REFUND_REJECTED" 
+    | "REFUND_COMPLETED"
+    | "ESCROW_FROZEN"
+    | "ESCROW_RELEASED";
+  previousStatus?: string;
+  newStatus?: string;
+  performedBy: string; // userId or system
+  role: "buyer" | "seller" | "logistics" | "admin" | "system";
+  actorName?: string;
+  notes?: string;
+  metadata?: Record<string, any>;
+  timestamp: string;
+}
+
+export interface OrderPaymentReceipt {
+  receiptNumber: string;
+  orderId: string;
+  transactionId: string;
+  paymentReference: string;
+  paymentMethod: "online" | "pod";
+  amountPaid: number;
+  platformFee: number;
+  buyerName: string;
+  buyerPhone?: string;
+  sellerName?: string;
+  productName: string;
+  quantity: number;
+  deliveryType: "delivery" | "pickup";
+  logisticsPartner?: string;
+  verificationTimestamp: string;
+  escrowStatus: "held" | "released" | "refunded";
+  status: "verified" | "cleared";
+}
+
+export interface LogisticsCompany {
+  id: string;
+  companyName: string;
+  rcNumber: string;
+  email: string;
+  phoneNumber: string;
+  officeAddress: string;
+  vehicleTypes: string[];
+  coveredCampuses: string[];
+  baseDeliveryPrice: number;
+  estimatedTurnaround?: string;
+  bankDetails?: {
+    bankName: string;
+    accountNumber: string;
+    accountName: string;
+  };
+  availableBalance?: number;
+  isVerified: boolean;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface DeliveryJob {
+  id: string;
+  orderId: string;
+  productName: string;
+  productImageUrl?: string;
+  quantity: number;
+  buyerId: string;
+  buyerName: string;
+  buyerPhone: string;
+  buyerAddress: string;
+  sellerId: string;
+  sellerName: string;
+  sellerAddress: string;
+  campus: string;
+  status: "pending" | "accepted" | "picked_up" | "in_transit" | "delivered" | "cancelled" | "declined";
+  logisticsId?: string;
+  logisticsName?: string;
+  logisticsPhone?: string;
+  deliveryPrice: number;
+  estimatedDeliveryTimeline?: string;
+  payoutStatus?: "pending" | "released" | "paid";
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ReferralTransaction {

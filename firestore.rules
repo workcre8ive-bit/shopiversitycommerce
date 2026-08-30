@@ -238,7 +238,30 @@ service cloud.firestore {
     }
 
     function isValidOrder(data) {
-      return hasOnlyAllowedFields(data, ['id', 'buyerId', 'buyerName', 'buyerEmail', 'buyerPhone', 'sellerId', 'sellerName', 'productId', 'productName', 'productImageUrl', 'quantity', 'totalPrice', 'commissionAmount', 'referrerId', 'referralCommissionAmount', 'referralCommissionAwarded', 'sellerEarnings', 'deliveryType', 'paymentMethod', 'paymentStatus', 'paymentReference', 'escrowStatus', 'disputeStatus', 'status', 'createdAt', 'acceptedAt', 'deliveredAt', 'cancelledAt', 'disputedAt', 'deliveryDeadline', 'sellerProofUrl', 'sellerProofAt', 'hiddenFromHistory', 'hiddenFromSeller', 'deliveryAddress', 'ticketTierId', 'ticketTierName', 'formResponses', 'menuItemId', 'menuItemName', 'measureType', 'measureAmount', 'deliveryTime', 'deliveryTimeUnit', 'serialNumber', 'uniqueOrderId', 'uniqueProductId', 'countdownDuration', 'updatedAt', 'processedAt', 'isOfflineGenerated', 'topUpStatus', 'topUpTransactionId', 'topUpError', 'hasReviewed', 'kwikRiderId', 'kwikTrackingUrl', 'type', 'location', 'cheapDataHubPlanId', 'cheapDataHubNetworkCode', 'logisticsOfferStatus', 'deliveredWorkNotes', 'confirmOrderPressed']) &&
+      return hasOnlyAllowedFields(data, [
+        'id', 'buyerId', 'buyerName', 'buyerEmail', 'buyerPhone', 'sellerId', 'sellerName', 
+        'productId', 'productName', 'productImageUrl', 'quantity', 'totalPrice', 'commissionAmount', 
+        'referrerId', 'referralCommissionAmount', 'referralCommissionAwarded', 'sellerEarnings', 
+        'deliveryType', 'paymentMethod', 'paymentStatus', 'paymentReference', 'escrowStatus', 
+        'disputeStatus', 'status', 'createdAt', 'acceptedAt', 'deliveredAt', 'cancelledAt', 
+        'disputedAt', 'deliveryDeadline', 'sellerProofUrl', 'sellerProofAt', 'hiddenFromHistory', 
+        'hiddenFromSeller', 'deliveryAddress', 'ticketTierId', 'ticketTierName', 'formResponses', 
+        'menuItemId', 'menuItemName', 'measureType', 'measureAmount', 'deliveryTime', 'deliveryTimeUnit', 
+        'serialNumber', 'uniqueOrderId', 'uniqueProductId', 'countdownDuration', 'updatedAt', 
+        'processedAt', 'isOfflineGenerated', 'topUpStatus', 'topUpTransactionId', 'topUpError', 
+        'hasReviewed', 'kwikRiderId', 'kwikTrackingUrl', 'type', 'location', 'cheapDataHubPlanId', 
+        'cheapDataHubNetworkCode', 'logisticsOfferStatus', 'deliveredWorkNotes', 'confirmOrderPressed', 
+        'deliveryFee', 'deliveryPrice', 'logisticsId', 'logisticsName', 'logisticsPhone', 
+        'logisticsDeliveryPrice', 'logisticsEstimatedDeliveryTimeline', 'logisticsAssignedAt', 
+        'logisticsAcceptedAt', 'logisticsTimeline',
+        // Refund and dispute fields
+        'refundStatus', 'refundId', 'refundAmount', 'refundFee', 'buyerRefundAmount', 'refundReason', 
+        'refundReasonCategory', 'refundEvidenceDetails', 'refundEvidenceUrl', 'refundCreatedAt', 
+        'refundApprovedAt', 'refundCompletedAt', 'refundDecisionNotes', 'settlementOnHold',
+        // Pay on Delivery & verification completion
+        'buyerDeliveryConfirmed', 'buyerDeliveryConfirmedAt', 'paymentVerifiedAt', 'handoverCode', 
+        'deliveryOtp', 'pickupOtp', 'handoverVerified', 'handoverVerifiedAt', 'paymentReceipt'
+      ]) &&
              data.buyerId is string &&
              (!('buyerName' in data) || data.buyerName is string) &&
              (!('buyerPhone' in data) || data.buyerPhone is string) &&
@@ -256,7 +279,7 @@ service cloud.firestore {
              (!('disputeStatus' in data) || data.disputeStatus in ['none', 'active', 'focused', 'resolved', 'rejected', 'seller_responded']) &&
              data.deliveryType in ['delivery', 'pickup'] &&
              data.paymentMethod in ['online', 'pod', 'physical'] &&
-             data.status in ['pending', 'accepted', 'out_for_delivery', 'delivered', 'cancelled', 'acquired', 'completed', 'Pending Seller Acceptance', 'Out To Pickup Station', 'Ready For Pickup', 'Out For Delivery', 'Order Picked Up', 'Order Delivered', 'Ready For Delivery', 'awaiting_payment', 'declined_by_logistics'] &&
+             data.status in ['pending', 'accepted', 'out_for_delivery', 'delivered', 'cancelled', 'acquired', 'completed', 'Pending Seller Acceptance', 'Out To Pickup Station', 'Ready For Pickup', 'Out For Delivery', 'Order Picked Up', 'Order Delivered', 'Ready For Delivery', 'awaiting_payment', 'declined_by_logistics', 'payment_required'] &&
              isValidDateString(data.createdAt) &&
              (!('acceptedAt' in data) || data.acceptedAt == null || isValidDateString(data.acceptedAt)) &&
              (!('deliveredAt' in data) || data.deliveredAt == null || isValidDateString(data.deliveredAt)) &&
@@ -294,7 +317,14 @@ service cloud.firestore {
              (!('cheapDataHubNetworkCode' in data) || data.cheapDataHubNetworkCode is string) &&
              (!('logisticsOfferStatus' in data) || data.logisticsOfferStatus is string) &&
              (!('deliveredWorkNotes' in data) || data.deliveredWorkNotes is string) &&
-             (!('confirmOrderPressed' in data) || data.confirmOrderPressed is bool);
+             (!('confirmOrderPressed' in data) || data.confirmOrderPressed is bool) &&
+             (!('refundStatus' in data) || data.refundStatus in ['none', 'requested', 'under_review', 'approved', 'rejected', 'processing', 'completed']) &&
+             (!('refundAmount' in data) || data.refundAmount is number) &&
+             (!('refundFee' in data) || data.refundFee is number) &&
+             (!('buyerRefundAmount' in data) || data.buyerRefundAmount is number) &&
+             (!('settlementOnHold' in data) || data.settlementOnHold is bool) &&
+             (!('buyerDeliveryConfirmed' in data) || data.buyerDeliveryConfirmed is bool) &&
+             (!('handoverVerified' in data) || data.handoverVerified is bool);
     }
 
     function isValidNotification(data) {
@@ -468,7 +498,10 @@ service cloud.firestore {
           // Allow logistics or system updates to only change status & tracking details
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'status', 'logisticsOfferStatus', 'kwikRiderId', 'kwikTrackingUrl', 
-            'deliveredWorkNotes', 'deliveredAt', 'updatedAt'
+            'deliveredWorkNotes', 'deliveredAt', 'updatedAt', 'logisticsId', 'logisticsName', 
+            'logisticsPhone', 'logisticsDeliveryPrice', 'logisticsEstimatedDeliveryTimeline', 
+            'logisticsAssignedAt', 'logisticsAcceptedAt', 'logisticsTimeline', 'deliveryTime', 'deliveryTimeUnit',
+            'deliveryPrice', 'deliveryFee'
           ]) &&
           request.resource.data.buyerId == resource.data.buyerId &&
           request.resource.data.sellerId == resource.data.sellerId &&
@@ -576,6 +609,20 @@ service cloud.firestore {
     match /contact_moderation_logs/{logId} {
       allow create: if isAuthenticated();
       allow read, list, delete: if isAdminEmail() || isAdmin();
+    }
+
+    match /refunds/{refundId} {
+      allow get: if isAuthenticated() && (resource.data.buyerId == request.auth.uid || resource.data.sellerId == request.auth.uid || isAdmin());
+      allow list: if isAuthenticated() && (resource.data.buyerId == request.auth.uid || resource.data.sellerId == request.auth.uid || isAdminEmail());
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && (resource.data.buyerId == request.auth.uid || resource.data.sellerId == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /order_events/{eventId} {
+      allow read, list: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAdmin();
     }
   }
 }

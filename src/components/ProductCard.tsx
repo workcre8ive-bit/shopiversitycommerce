@@ -70,15 +70,27 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                 referrerPolicy="no-referrer"
               />
 
-              {/* Floating Category Badge (top left) with seller's custom color theme */}
-              <div 
-                className="absolute top-3 left-3 bg-white/95 dark:bg-zinc-900/95 px-2.5 py-1 rounded-lg text-[8px] font-black uppercase tracking-wider shadow-sm z-10 transition-colors border"
-                style={{
-                  color: brandColor,
-                  borderColor: `${brandColor}35`
-                }}
-              >
-                {product.category}
+              {/* Top Badges Row (Product Type & Discount Percent) with safe spacing on mobile */}
+              <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between gap-2 z-10 pointer-events-none">
+                {/* Floating Category / Type Badge with seller's custom color theme */}
+                <div 
+                  className="bg-white/95 dark:bg-zinc-900/95 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-lg text-[8px] font-black uppercase tracking-wider shadow-sm transition-colors border max-w-[60%] truncate shrink"
+                  style={{
+                    color: brandColor,
+                    borderColor: `${brandColor}35`
+                  }}
+                  title={product.category}
+                >
+                  {product.category}
+                </div>
+
+                {/* Discount Percentage Badge */}
+                {discountPct > 0 && (
+                  <div className="bg-gradient-to-r from-red-600 via-rose-600 to-pink-600 text-white px-2 py-0.5 rounded-full text-[8.5px] sm:text-[9px] font-black uppercase tracking-wider shadow-md border border-white/20 flex items-center gap-1 shrink-0 ml-auto">
+                    <Tag className="w-2.5 h-2.5 shrink-0" />
+                    <span className="whitespace-nowrap">-{discountPct}%</span>
+                  </div>
+                )}
               </div>
 
               {/* Stock Status Badge (bottom left) */}
@@ -91,15 +103,6 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                   Low Stock
                 </div>
               ) : null}
-              
-              <div className="absolute top-2.5 right-2.5 flex flex-col items-end gap-1.5 z-10 pointer-events-none">
-                {discountPct > 0 && (
-                  <div className="bg-gradient-to-r from-red-600 via-rose-600 to-pink-600 text-white px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider shadow-md border border-white/20 flex items-center gap-1">
-                    <Tag className="w-2.5 h-2.5" />
-                    <span>-{discountPct}%</span>
-                  </div>
-                )}
-              </div>
             </div>
 
             {/* Product info details */}

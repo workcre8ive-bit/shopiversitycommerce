@@ -15,7 +15,6 @@
     "@google/genai": "^1.29.0",
     "@paystack/inline-js": "^2.24.0",
     "@tailwindcss/vite": "^4.1.14",
-    "@vis.gl/react-google-maps": "^1.8.3",
     "@vitejs/plugin-react": "^5.0.4",
     "axios": "^1.15.0",
     "clsx": "^2.1.1",

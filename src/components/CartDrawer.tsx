@@ -79,25 +79,15 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
   }, [hasService, selectedItems, paymentMethod]);
 
   const subtotal = selectedItems.reduce((acc, item) => acc + item.price * item.quantity, 0);
-  const deliveryFee = React.useMemo(() => {
-    if (deliveryType !== "delivery" || selectedItems.length === 0) return 0;
-    // Calculate total delivery fee as sum of unique sellers' fees
-    const sellerFees = new Map<string, number>();
-    selectedItems.forEach(item => {
-      const fee = item.deliveryOptions?.deliveryPrice || 500;
-      if (!sellerFees.has(item.sellerId) || fee > sellerFees.get(item.sellerId)!) {
-        sellerFees.set(item.sellerId, fee);
-      }
-    });
-    return Array.from(sellerFees.values()).reduce((sum, fee) => sum + fee, 0);
-  }, [selectedItems, deliveryType]);
-
-  const total = subtotal + deliveryFee;
+  
+  // Delivery fee is not charged at initial checkout because logistics booking is done after seller acceptance
+  const deliveryFee = 0;
+  const total = subtotal;
 
   const config = {
     reference: (new Date()).getTime().toString(),
     email: currentUser?.email || auth.currentUser?.email || "",
-    amount: Math.round(total * 100), // Paystack amount is in kobo, ensure it's an integer
+    amount: Math.round(total * 100), // Paystack amount is in kobo for items subtotal
     publicKey: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || "",
     metadata: {
       custom_fields: []
@@ -157,12 +147,11 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
         const itemReferralCommission = referrerDoc ? Math.floor((itemTotal * commissionRate) * 0.013) : 0;
         const itemPlatformCommission = (itemTotal * commissionRate) - itemReferralCommission;
         
-        // Extract delivery price for this seller's products
-        const sellerItems = sellerGrouped[item.sellerId];
-        const sellerFee = sellerItems[0].deliveryOptions?.deliveryPrice || 500;
-        const itemDeliveryFee = deliveryType === "delivery" ? (sellerFee / sellerItems.length) : 0;
+        // Delivery fee is 0 at checkout; determined and added when seller accepts and books campus logistics
+        const itemDeliveryFee = 0;
 
-        const itemSellerEarnings = itemTotal - (itemTotal * commissionRate) + itemDeliveryFee;
+        // Seller earnings only come from product price minus commission; delivery fee goes to logistics company
+        const itemSellerEarnings = itemTotal - (itemTotal * commissionRate);
 
         // Fetch seller profile to get seller profile name
         let dbSellerName = "Merchant";
@@ -197,7 +186,11 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
           productName: item.name,
           productImageUrl: item.imageUrl || "",
           quantity: item.quantity,
-          totalPrice: itemTotal + itemDeliveryFee,
+          itemSubtotal: itemTotal,
+          totalPrice: itemTotal,
+          deliveryFee: 0,
+          deliveryPrice: 0,
+          logisticsOfferStatus: "not_booked",
           commissionAmount: itemPlatformCommission,
           referrerId: referrerDoc?.id || null,
           referralCommissionAmount: itemReferralCommission,
@@ -745,13 +738,26 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
                 <span className="font-bold text-slate-900 dark:text-white">₦{subtotal.toLocaleString()}</span>
               </div>
               {deliveryType === "delivery" && (
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-slate-500 dark:text-zinc-400 font-bold">Delivery Charge</span>
-                  <span className="font-bold text-slate-900 dark:text-white">₦{deliveryFee.toLocaleString()}</span>
+                <div className="p-2.5 bg-purple-50/50 dark:bg-purple-950/20 border border-purple-100 dark:border-purple-900/30 rounded-xl space-y-1">
+                  <div className="flex justify-between items-center text-sm">
+                    <div>
+                      <span className="text-slate-700 dark:text-zinc-200 font-bold block">Campus Delivery Fee</span>
+                      <span className="text-[10px] text-purple-600 dark:text-purple-400 font-medium">Billed upon seller logistics booking</span>
+                    </div>
+                    <span className="text-xs font-bold text-amber-600 dark:text-amber-400 bg-amber-100/70 dark:bg-amber-950/40 px-2 py-0.5 rounded-full">
+                      Pending Assignment
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight">
+                    * The exact delivery fee is determined when the seller accepts your order and books an official campus courier.
+                  </p>
                 </div>
               )}
-              <div className="flex justify-between items-center pt-3 border-t border-slate-205 dark:border-zinc-800">
-                <span className="text-slate-900 dark:text-white font-bold">Total:</span>
+              <div className="flex justify-between items-center pt-3 border-t border-slate-200 dark:border-zinc-800">
+                <div>
+                  <span className="text-slate-900 dark:text-white font-bold block">Checkout Total:</span>
+                  <span className="text-[10px] text-slate-400 dark:text-slate-500 font-medium">Items Subtotal</span>
+                </div>
                 <span className="text-2xl font-black text-purple-600 dark:text-purple-400 tracking-tight">₦{total.toLocaleString()}</span>
               </div>
             </div>

@@ -5,13 +5,6 @@ import { motion, AnimatePresence } from "motion/react";
 import { auth, db } from "../firebase";
 import { collection, query, where, orderBy, onSnapshot, addDoc, doc, getDoc, setDoc, getDocs, updateDoc, deleteDoc } from "firebase/firestore";
 import { usePaystackPayment } from "../hooks/usePaystackPayment";
-import { APIProvider, Map as GoogleMap, AdvancedMarker, Pin } from '@vis.gl/react-google-maps';
-
-const GOOGLE_MAPS_API_KEY =
-  process.env.GOOGLE_MAPS_PLATFORM_KEY ||
-  (import.meta as any).env?.VITE_GOOGLE_MAPS_PLATFORM_KEY ||
-  (globalThis as any).GOOGLE_MAPS_PLATFORM_KEY ||
-  "";
 
 import { cn } from "../lib/utils";
 import ReportModal from "./ReportModal";
@@ -900,15 +893,15 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                     </div>
                   </div>
                   
-                  {/* Discount percentage tag directly on picture */}
+                  {/* Top Badges: Discount percentage tag directly on picture with safe mobile margin */}
                   {computedDiscountPct > 0 && (
-                    <div className="absolute top-4 right-4 z-10 bg-gradient-to-r from-red-600 via-rose-600 to-pink-600 text-white font-black text-xs px-2.5 py-1 rounded-full shadow-lg border border-white/20 tracking-wider flex items-center gap-1">
-                      <Tag className="w-3 h-3" />
+                    <div className="absolute top-4 left-4 sm:left-auto sm:right-4 z-10 bg-gradient-to-r from-red-600 via-rose-600 to-pink-600 text-white font-black text-xs px-2.5 py-1 rounded-full shadow-lg border border-white/20 tracking-wider flex items-center gap-1">
+                      <Tag className="w-3 h-3 shrink-0" />
                       <span>-{computedDiscountPct}%</span>
                     </div>
                   )}
 
-                  <div className="flex items-center gap-2 bottom-6 left-6 absolute z-10">
+                  <div className="flex flex-wrap items-center gap-2 bottom-4 left-4 sm:bottom-6 sm:left-6 max-w-[calc(100%-2rem)] absolute z-10">
                     <span className="px-3 py-1.5 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md rounded-xl text-[10px] font-bold text-indigo-600 uppercase tracking-wider shadow-sm">
                       {product.category}
                     </span>
@@ -1394,55 +1387,17 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                               <p className="text-xs font-bold">Free • At {product.location || "Seller's Location"}</p>
                             </div>
                           </div>
-                          {(product.pickupCoordinates || (product.location && product.location.trim() !== "")) && (
-                            <div className="rounded-[1.5rem] overflow-hidden border border-slate-200 dark:border-slate-700 relative mt-1 w-full flex flex-col bg-white dark:bg-slate-900 shadow-sm">
-                              <div className="h-44 relative w-full bg-slate-50 dark:bg-slate-950">
-                                {GOOGLE_MAPS_API_KEY && product.pickupCoordinates ? (
-                                  <APIProvider apiKey={GOOGLE_MAPS_API_KEY}>
-                                    <GoogleMap
-                                      defaultZoom={15}
-                                      defaultCenter={product.pickupCoordinates}
-                                      mapId="DEMO_MAP_ID"
-                                      gestureHandling="cooperative"
-                                      style={{ width: '100%', height: '100%' }}
-                                      internalUsageAttributionIds={['gmp_mcp_codeassist_v1_aistudio']}
-                                    >
-                                      <AdvancedMarker position={product.pickupCoordinates}>
-                                        <Pin background={'#4f46e5'} borderColor={'#3730a3'} glyphColor={'#ffffff'} />
-                                      </AdvancedMarker>
-                                    </GoogleMap>
-                                  </APIProvider>
-                                ) : (
-                                  <iframe
-                                    width="100%"
-                                    height="100%"
-                                    style={{ border: 0 }}
-                                    loading="lazy"
-                                    allowFullScreen
-                                    referrerPolicy="no-referrer-when-downgrade"
-                                    src={
-                                      product.pickupCoordinates 
-                                        ? `https://maps.google.com/maps?q=${product.pickupCoordinates.lat},${product.pickupCoordinates.lng}&z=15&output=embed`
-                                        : `https://maps.google.com/maps?q=${encodeURIComponent(product.location!.trim())}&z=15&output=embed`
-                                    }
-                                  />
-                                )}
+                          {product.location && product.location.trim() !== "" && (
+                            <div className="p-3 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700/60 flex items-center justify-between gap-3 text-xs shadow-xs mt-0.5">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0 animate-pulse" />
+                                <span className="font-bold text-slate-800 dark:text-slate-200 truncate">
+                                  {product.location}
+                                </span>
                               </div>
-                              <a
-                                href={
-                                  product.pickupCoordinates
-                                    ? `https://www.google.com/maps/dir/?api=1&destination=${product.pickupCoordinates.lat},${product.pickupCoordinates.lng}`
-                                    : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(product.location!.trim())}`
-                                }
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="w-full h-10 bg-slate-100 hover:bg-slate-150 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-zinc-250 font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-1.5 transition-colors border-t border-slate-150 dark:border-slate-750/50"
-                              >
-                                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                                  <polygon points="3 11 22 2 13 21 11 13 3 11"/>
-                                </svg>
-                                Launch GPS Directions
-                              </a>
+                              <span className="text-[10px] font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400 shrink-0 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-md">
+                                Pickup Point
+                              </span>
                             </div>
                           )}
                         </div>
