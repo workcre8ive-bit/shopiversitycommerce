@@ -25,6 +25,7 @@ import AuthPage from "./components/AuthPage";
 import { ProductCard, ProductCardSkeleton } from "./components/ProductCard";
 import ProductDetail from "./components/ProductDetail";
 import CartDrawer from "./components/CartDrawer";
+import CartPage from "./components/CartPage";
 import SellerDashboard from "./components/SellerDashboard";
 import ProfileSettings from "./components/ProfileSettings";
 import UserProfileHub from "./components/UserProfileHub";
@@ -1292,12 +1293,16 @@ export default function App() {
 
         {/* Right actions: Theme toggle and Cart */}
         <div className="flex items-center gap-2 sm:gap-3 md:gap-4 shrink-0">
-          {/* Cart with count (only in buyer explore tab) */}
-          {activeRole === "buyer" && (
+          {/* Cart with count (only in buyer explore tab or when items in cart) */}
+          {(activeRole === "buyer" || cart.length > 0) && (
             <button 
-              onClick={() => setIsCartOpen(true)}
-              className="relative p-1.5 hover:bg-orange-50 dark:hover:bg-zinc-800/80 rounded-xl text-[#ff6b00] cursor-pointer transition-colors border-none"
+              onClick={() => setActiveTab("cart")}
+              className={cn(
+                "relative p-1.5 hover:bg-orange-50 dark:hover:bg-zinc-800/80 rounded-xl cursor-pointer transition-colors border-none",
+                activeTab === "cart" ? "bg-orange-100/70 dark:bg-orange-950/40 text-[#ff6b00]" : "text-[#ff6b00]"
+              )}
               aria-label="View shopping cart"
+              title="Shopping Cart"
             >
               <ShoppingCart className="w-5 h-5" />
               {cart.length > 0 && (
@@ -2043,6 +2048,33 @@ export default function App() {
                 className="p-4 sm:p-6 lg:p-8 max-w-[1600px] mx-auto space-y-6"
               >
                 <AdminDashboard currentUser={currentUser} onBack={handleGoBack} />
+              </motion.div>
+            ) : activeTab === "cart" ? (
+              <motion.div 
+                key="cart"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+              >
+                <CartPage
+                  cart={cart}
+                  onUpdateQuantity={(productId, delta, menuItemId, ticketTierId) => {
+                    setCart(prev => prev.map(item => 
+                      (item.productId === productId && item.menuItemId === menuItemId && item.ticketTierId === ticketTierId)
+                        ? { ...item, quantity: Math.max(0, item.quantity + delta) } 
+                        : item
+                    ).filter(item => item.quantity > 0));
+                  }}
+                  onRemove={(productId, menuItemId, ticketTierId) => 
+                    setCart(prev => prev.filter(item => 
+                      !(item.productId === productId && item.menuItemId === menuItemId && item.ticketTierId === ticketTierId)
+                    ))
+                  }
+                  onClear={() => setCart([])}
+                  currentUser={currentUser}
+                  setActiveTab={setActiveTab}
+                  onBack={handleGoBack}
+                />
               </motion.div>
             ) : activeTab === "logistics" ? (
               <motion.div 

@@ -153,15 +153,20 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
         // Seller earnings only come from product price minus commission; delivery fee goes to logistics company
         const itemSellerEarnings = itemTotal - (itemTotal * commissionRate);
 
-        // Fetch seller profile to get seller profile name
+        // Fetch seller profile to get seller profile name and contact
         let dbSellerName = "Merchant";
+        let dbSellerPhone = "";
+        let dbSellerAddress = "";
         try {
           const sellerSnap = await getDoc(doc(db, "users", item.sellerId));
           if (sellerSnap.exists()) {
-            dbSellerName = sellerSnap.data().displayName || "Merchant";
+            const sData = sellerSnap.data();
+            dbSellerName = sData.displayName || "Merchant";
+            dbSellerPhone = sData.phoneNumber || sData.phone || "";
+            dbSellerAddress = sData.deliveryAddress || sData.location || sData.campus || "";
           }
         } catch (err) {
-          console.error("Error fetching seller profile name:", err);
+          console.error("Error fetching seller profile details:", err);
         }
 
         // Generate unique Order ID and unique Product ID
@@ -182,6 +187,8 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
           buyerPhone: currentUser?.phoneNumber || "N/A",
           sellerId: item.sellerId,
           sellerName: dbSellerName,
+          sellerPhone: dbSellerPhone,
+          sellerAddress: dbSellerAddress,
           productId: item.productId,
           productName: item.name,
           productImageUrl: item.imageUrl || "",

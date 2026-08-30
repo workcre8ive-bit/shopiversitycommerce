@@ -358,6 +358,7 @@ export interface DeliveryJob {
   buyerAddress: string;
   sellerId: string;
   sellerName: string;
+  sellerPhone?: string;
   sellerAddress: string;
   campus: string;
   status: "pending" | "accepted" | "picked_up" | "in_transit" | "delivered" | "cancelled" | "declined";

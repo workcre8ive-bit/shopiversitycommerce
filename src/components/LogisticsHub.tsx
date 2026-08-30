@@ -104,6 +104,7 @@ interface DeliveryJob {
   buyerAddress: string;
   sellerId: string;
   sellerName: string;
+  sellerPhone?: string;
   sellerAddress: string;
   campus: string;
   status: "pending" | "accepted" | "picked_up" | "in_transit" | "delivered" | "cancelled";
@@ -383,6 +384,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
             buyerAddress: ord.deliveryAddress || ord.address || "Campus Hostel/Department",
             sellerId: ord.sellerId || "",
             sellerName: ord.sellerName || "Campus Merchant",
+            sellerPhone: ord.sellerPhone || ord.sellerPhoneNumber || ord.sellerContact || "",
             sellerAddress: ord.sellerAddress || "Campus Merchant Store",
             campus: ord.pickupSchool || ord.campus || "General Campus",
             status: mappedStatus,
@@ -810,8 +812,10 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
         buyerName: jobItem?.buyerName || "Buyer",
         buyerPhone: jobItem?.buyerPhone || "",
         buyerAddress: jobItem?.buyerAddress || "",
-        sellerName: jobItem?.sellerName || "Merchant",
-        sellerAddress: jobItem?.sellerAddress || "",
+        sellerName: jobItem?.sellerName || orderData.sellerName || "Merchant",
+        sellerPhone: jobItem?.sellerPhone || orderData.sellerPhone || orderData.sellerPhoneNumber || "",
+        sellerAddress: jobItem?.sellerAddress || orderData.sellerAddress || "",
+        sellerId: jobItem?.sellerId || orderData.sellerId || "",
         campus: jobItem?.campus || "Campus",
         updatedAt: new Date().toISOString()
       }, { merge: true });
@@ -1678,13 +1682,26 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                       Active / Online
                     </span>
                   </div>
-                  <button 
-                    onClick={handleLogout}
-                    className="p-2 bg-white/5 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded-xl transition-all cursor-pointer border-none"
-                    title="Log Out"
-                  >
-                    <LogOut className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => {
+                        setActiveTab("profile");
+                        setIsEditingProfile(true);
+                      }}
+                      className="p-2 bg-white/10 hover:bg-orange-500 text-white rounded-xl transition-all cursor-pointer border-none text-[11px] font-bold flex items-center gap-1"
+                      title="Edit Company Profile"
+                    >
+                      <Building className="w-3.5 h-3.5" />
+                      <span>Edit</span>
+                    </button>
+                    <button 
+                      onClick={handleLogout}
+                      className="p-2 bg-white/5 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded-xl transition-all cursor-pointer border-none"
+                      title="Log Out"
+                    >
+                      <LogOut className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -1848,8 +1865,18 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                               <div className="flex gap-2.5 items-start p-2.5 rounded-xl bg-slate-50 dark:bg-zinc-850/50">
                                 <div className="w-5 h-5 rounded-full bg-slate-200 dark:bg-zinc-700 text-slate-700 dark:text-zinc-200 flex items-center justify-center text-[10px] font-black shrink-0 mt-0.5">A</div>
                                 <div className="space-y-0.5 min-w-0 flex-1">
-                                  <p className="font-bold text-slate-500 uppercase tracking-wider text-[9px]">Pickup Location (Merchant)</p>
-                                  <p className="font-bold text-slate-800 dark:text-zinc-200 truncate">{job.sellerName}</p>
+                                  <div className="flex items-center justify-between">
+                                    <p className="font-bold text-slate-500 uppercase tracking-wider text-[9px]">Pickup Location (Merchant)</p>
+                                    {job.sellerPhone && (
+                                      <a
+                                        href={`tel:${job.sellerPhone}`}
+                                        className="inline-flex items-center gap-1 text-[10px] font-bold text-orange-600 dark:text-orange-400 hover:underline"
+                                      >
+                                        <Phone className="w-2.5 h-2.5" /> Call Seller ({job.sellerPhone})
+                                      </a>
+                                    )}
+                                  </div>
+                                  <p className="font-bold text-slate-800 dark:text-zinc-200 truncate">{job.sellerName} {job.sellerPhone ? `• ${job.sellerPhone}` : ""}</p>
                                   <p className="text-slate-400 text-[11px] truncate">{job.sellerAddress}</p>
                                 </div>
                               </div>
@@ -1857,8 +1884,18 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                               <div className="flex gap-2.5 items-start p-2.5 rounded-xl bg-orange-50/50 dark:bg-orange-950/10 border border-orange-100/50 dark:border-orange-900/20">
                                 <div className="w-5 h-5 rounded-full bg-orange-600 text-white flex items-center justify-center text-[10px] font-black shrink-0 mt-0.5">B</div>
                                 <div className="space-y-0.5 min-w-0 flex-1">
-                                  <p className="font-bold text-orange-600 uppercase tracking-wider text-[9px]">Dropoff Destination (Buyer)</p>
-                                  <p className="font-bold text-slate-800 dark:text-zinc-200 truncate">{job.buyerName}</p>
+                                  <div className="flex items-center justify-between">
+                                    <p className="font-bold text-orange-600 uppercase tracking-wider text-[9px]">Dropoff Destination (Buyer)</p>
+                                    {job.buyerPhone && (
+                                      <a
+                                        href={`tel:${job.buyerPhone}`}
+                                        className="inline-flex items-center gap-1 text-[10px] font-bold text-orange-600 hover:underline"
+                                      >
+                                        <Phone className="w-2.5 h-2.5" /> Call Buyer ({job.buyerPhone})
+                                      </a>
+                                    )}
+                                  </div>
+                                  <p className="font-bold text-slate-800 dark:text-zinc-200 truncate">{job.buyerName} {job.buyerPhone ? `• ${job.buyerPhone}` : ""}</p>
                                   <p className="text-slate-400 text-[11px] truncate">{job.buyerAddress}</p>
                                 </div>
                               </div>
@@ -1998,8 +2035,20 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
 
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div className="space-y-2 p-3.5 rounded-2xl bg-slate-50 dark:bg-zinc-850/50">
-                              <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Pickup Location (Seller)</span>
-                              <p className="text-xs font-bold text-slate-800 dark:text-zinc-200">{job.sellerName} ({job.campus})</p>
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Pickup Location (Seller)</span>
+                                {job.sellerPhone && (
+                                  <a
+                                    href={`tel:${job.sellerPhone}`}
+                                    className="inline-flex items-center gap-1 text-[10px] font-bold text-orange-600 dark:text-orange-400 hover:underline"
+                                  >
+                                    <Phone className="w-3 h-3" /> Call Seller
+                                  </a>
+                                )}
+                              </div>
+                              <p className="text-xs font-bold text-slate-800 dark:text-zinc-200">
+                                {job.sellerName} ({job.campus}) {job.sellerPhone ? `• ${job.sellerPhone}` : ""}
+                              </p>
                               <p className="text-xs text-slate-500 leading-relaxed">{job.sellerAddress}</p>
                             </div>
 
@@ -2015,7 +2064,9 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                                   </a>
                                 )}
                               </div>
-                              <p className="text-xs font-bold text-slate-800 dark:text-zinc-200">{job.buyerName} ({job.buyerPhone})</p>
+                              <p className="text-xs font-bold text-slate-800 dark:text-zinc-200">
+                                {job.buyerName} {job.buyerPhone ? `(${job.buyerPhone})` : ""}
+                              </p>
                               <p className="text-xs text-slate-500 leading-relaxed">{job.buyerAddress}</p>
                             </div>
                           </div>

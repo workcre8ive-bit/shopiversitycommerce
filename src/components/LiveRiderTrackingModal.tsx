@@ -234,23 +234,35 @@ export default function LiveRiderTrackingModal({ order, progress, onClose }: Liv
             </div>
 
             {/* Quick Actions Panel */}
-            <div className="grid grid-cols-2 gap-3 pt-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2">
               <a
-                href="tel:+2348147204142"
-                className="h-10 border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-[10px] uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-2 active:scale-95"
+                href={`tel:${order.logisticsPhone || order.courierPhone || "+2348147204142"}`}
+                className="h-10 border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-[10px] uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-1.5 active:scale-95"
               >
-                <Phone className="w-3.5 h-3.5" />
+                <Phone className="w-3.5 h-3.5 text-orange-500" />
                 Call Courier
               </a>
+              {order.sellerPhone ? (
+                <a
+                  href={`tel:${order.sellerPhone}`}
+                  className="h-10 border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-[10px] uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-1.5 active:scale-95"
+                >
+                  <Phone className="w-3.5 h-3.5 text-emerald-500" />
+                  Call Seller
+                </a>
+              ) : null}
               <button
                 type="button"
                 onClick={() => {
                   alert("Rider details matched! If you have dispatch questions, please raise a dispute or write to Support.");
                 }}
-                className="h-10 bg-slate-900 hover:bg-slate-800 dark:bg-amber-500 dark:hover:bg-amber-600 text-white dark:text-slate-950 font-bold text-[10px] uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-2 active:scale-95 cursor-pointer"
+                className={cn(
+                  "h-10 bg-slate-900 hover:bg-slate-800 dark:bg-amber-500 dark:hover:bg-amber-600 text-white dark:text-slate-950 font-bold text-[10px] uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-1.5 active:scale-95 cursor-pointer",
+                  !order.sellerPhone && "col-span-1"
+                )}
               >
                 <MessageSquare className="w-3.5 h-3.5" />
-                Chat/Message
+                Help / Chat
               </button>
             </div>
           </div>

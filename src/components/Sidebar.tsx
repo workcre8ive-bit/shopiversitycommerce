@@ -25,7 +25,8 @@ import {
   Zap,
   MessageSquare,
   Menu,
-  Truck
+  Truck,
+  ShoppingCart
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { motion, AnimatePresence } from "motion/react";
@@ -60,6 +61,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
 
   const navItems = !user ? [
     { id: "market", label: "Marketplace", icon: Store },
+    { id: "cart", label: "My Cart", icon: ShoppingCart },
     { id: "search", label: "Search", icon: Search },
     { id: "logistics", label: "Campus Logistics", icon: Truck },
     { id: "settings", label: "Sign In", icon: User },
@@ -75,6 +77,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
     ...adminItem,
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "market", label: "Marketplace", icon: Store },
+    { id: "cart", label: "My Cart", icon: ShoppingCart },
     { id: "search", label: "Search", icon: Search },
     { id: "logistics", label: "Campus Logistics", icon: Truck },
     { id: "orders", label: "My Orders", icon: ShoppingBag },
@@ -106,6 +109,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
     ...adminItem,
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "market", label: "Marketplace", icon: Store },
+    { id: "cart", label: "My Cart", icon: ShoppingCart },
     { id: "search", label: "Search", icon: Search },
     { id: "logistics", label: "Campus Logistics", icon: Truck },
     { id: "orders", label: "My Orders", icon: ShoppingBag },

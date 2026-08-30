@@ -32,6 +32,7 @@ import ReceiptModal from "./ReceiptModal";
 import LiveRiderTrackingModal from "./LiveRiderTrackingModal";
 import ReviewSuccessModal from "./ReviewSuccessModal";
 import RefundRequestModal from "./RefundRequestModal";
+import CancelRefundModal from "./CancelRefundModal";
 import OrderAuditTrailModal from "./OrderAuditTrailModal";
 import OrderDisputeModal from "./OrderDisputeModal";
 import { Star, MessageSquare, AlertTriangle, ExternalLink as ExternalLinkIcon, Shield, History, Undo2, KeyRound, Lock } from "lucide-react";
@@ -72,8 +73,9 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
   const [trackingRiderOrder, setTrackingRiderOrder] = React.useState<Order | null>(null);
   const [trackingProgress, setTrackingProgress] = React.useState(20);
 
-  // New states for Refund, Dispute, and Audit Trail
+  // New states for Refund, Cancellation, Dispute, and Audit Trail
   const [refundModalOrder, setRefundModalOrder] = React.useState<Order | null>(null);
+  const [cancelRefundOrder, setCancelRefundOrder] = React.useState<Order | null>(null);
   const [disputeModalOrder, setDisputeModalOrder] = React.useState<Order | null>(null);
   const [auditModalOrder, setAuditModalOrder] = React.useState<Order | null>(null);
 
@@ -1824,11 +1826,11 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                       {/* Anti-Scam Cancellation Lock & Role Guards */}
                       {((order.status === "pending" || order.status === "Pending Seller Acceptance") && order.status !== "cancelled" && order.status !== "completed") ? (
                         <button
-                          onClick={() => handleClearIndividual(order)}
-                          className="w-full py-3 bg-red-50 dark:bg-red-900/10 text-red-600 dark:text-red-400 rounded-2xl font-bold text-xs hover:bg-red-100 dark:hover:bg-red-900/20 transition-all flex items-center justify-center gap-2"
+                          onClick={() => setCancelRefundOrder(order)}
+                          className="w-full py-3.5 bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 rounded-2xl font-bold text-xs hover:bg-red-100 dark:hover:bg-red-900/40 transition-all flex items-center justify-center gap-2 border border-red-200/50 dark:border-red-900/30 shadow-xs cursor-pointer"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
-                          Cancel Order
+                          Cancel Order & Process Refund
                         </button>
                       ) : (order.status !== "cancelled" && order.status !== "completed" && order.status !== "acquired") ? (
                         <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-700/50 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
@@ -2201,6 +2203,16 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
           isOpen={!!refundModalOrder}
           onClose={() => setRefundModalOrder(null)}
           onSuccess={() => setRefundModalOrder(null)}
+        />
+      )}
+
+      {cancelRefundOrder && (
+        <CancelRefundModal
+          order={cancelRefundOrder}
+          isOpen={!!cancelRefundOrder}
+          onClose={() => setCancelRefundOrder(null)}
+          onSuccess={() => setCancelRefundOrder(null)}
+          currentUser={currentUser}
         />
       )}
 
