@@ -43,7 +43,8 @@ import {
   Users,
   Home,
   Info,
-  RefreshCw
+  RefreshCw,
+  Sparkles
 } from "lucide-react";
 import Logo from "./Logo";
 import { cn, generateReferralCode } from "../lib/utils";
@@ -53,6 +54,19 @@ import { compressImage } from "../lib/imageUtils";
 import { SCHOOL_TYPES, NIGERIAN_SCHOOLS } from "../constants/schools";
 import { NIGERIAN_STATES, STATE_CITIES } from "../constants/locations";
 import TermsAndConditions from "./TermsAndConditions";
+import campusMarketTrading from "../assets/images/campus_market_trading_1788161927669.jpg";
+import campusDeliveryRider from "../assets/images/campus_delivery_rider_1788161947290.jpg";
+import campusStudentFashion from "../assets/images/campus_student_fashion_1788161963031.jpg";
+import campusFoodDelivery from "../assets/images/campus_food_delivery_1788161978183.jpg";
+import campusAuthBg from "../assets/images/campus_auth_bg_1788161412388.jpg";
+
+const BACKGROUND_IMAGES = [
+  campusMarketTrading,
+  campusDeliveryRider,
+  campusStudentFashion,
+  campusFoodDelivery,
+  campusAuthBg
+];
 
 export default function AuthPage({ initialNeedsProfile = false }: { initialNeedsProfile?: boolean }) {
   const [isLogin, setIsLogin] = React.useState(!initialNeedsProfile);
@@ -61,6 +75,15 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState("");
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({});
+  const [currentBgIndex, setCurrentBgIndex] = React.useState(0);
+
+  // Background picture rotation every 3 seconds
+  React.useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentBgIndex((prev) => (prev + 1) % BACKGROUND_IMAGES.length);
+    }, 3000);
+    return () => clearInterval(timer);
+  }, []);
 
   React.useEffect(() => {
     if (initialNeedsProfile) {
@@ -127,6 +150,22 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
         handleCodeInApp: false
       };
       await sendPasswordResetEmail(auth, resetEmail.trim(), actionCodeSettings);
+
+      // Also trigger customized Brevo password reset notification
+      try {
+        await fetch("/api/send-password-reset", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: resetEmail.trim(),
+            code: Math.floor(100000 + Math.random() * 900000).toString(),
+            resetUrl: `${window.location.origin}/?reset=true`
+          })
+        });
+      } catch (brevoErr) {
+        console.warn("Brevo reset notification notice:", brevoErr);
+      }
+
       setResetEmailSent(true);
     } catch (err: any) {
       console.error("Password reset error:", err);
@@ -1056,29 +1095,66 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
   }
 
   return (
-    <div className="min-h-screen bg-white dark:bg-zinc-955 flex flex-col items-center justify-center p-4 sm:p-6 transition-colors duration-300 font-sans select-none">
-      {/* Home Link */}
-      <div className="fixed top-6 left-6 z-[100]">
+    <div className="relative min-h-screen flex flex-col items-center justify-center p-4 sm:p-6 font-sans select-none overflow-x-hidden">
+      {/* High-Quality Rotating Campus Activity Backgrounds (Clean, clear, seamless 3s fade) */}
+      <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
+        {BACKGROUND_IMAGES.map((img, idx) => {
+          const isActive = idx === currentBgIndex;
+          return (
+            <div
+              key={`auth-bg-slide-${idx}`}
+              className={cn(
+                "absolute inset-0 transition-opacity ease-in-out",
+                isActive ? "opacity-100 scale-100" : "opacity-0 scale-100"
+              )}
+              style={{
+                transitionProperty: "opacity",
+                transitionDuration: "1000ms"
+              }}
+            >
+              <img
+                src={img}
+                alt="Campus Marketplace"
+                className="w-full h-full object-cover object-center filter brightness-[0.95] dark:brightness-[0.70] contrast-[1.04] saturate-[1.1]"
+                referrerPolicy="no-referrer"
+              />
+            </div>
+          );
+        })}
+        {/* Subtle, balanced overlay keeping photographic background crisp and visible */}
+        <div className="absolute inset-0 bg-black/25 dark:bg-black/45" />
+      </div>
+
+      {/* Top Navigation */}
+      <div className="fixed top-5 left-5 z-[100] flex items-center pointer-events-auto">
         <button 
           onClick={() => window.location.href = "/"}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-800 rounded shadow-sm hover:border-slate-400 text-slate-705 dark:text-zinc-300 font-medium text-xs cursor-pointer transition-colors"
+          className="flex items-center gap-2 px-4 py-2 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border border-white/60 dark:border-zinc-700/80 rounded-2xl shadow-lg hover:shadow-xl hover:bg-white dark:hover:bg-zinc-900 text-slate-800 dark:text-zinc-100 font-bold text-xs cursor-pointer transition-all duration-200 active:scale-95 group"
+          id="auth-home-btn"
         >
-          <Home className="w-4 h-4 text-slate-500" />
+          <Home className="w-4 h-4 text-[#ff6b00] group-hover:scale-110 transition-transform" />
           <span>Home</span>
         </button>
       </div>
+
       <motion.div 
-        initial={{ opacity: 0, scale: 0.98 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="w-full max-w-[380px]"
+        initial={{ opacity: 0, y: 15, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.4, ease: "easeOut" }}
+        className="w-full max-w-[420px] relative z-10 my-6"
       >
-        {/* Logo */}
-        <div className="flex flex-col items-center mb-5 shrink-0 justify-center">
-          <Logo className="scale-110" />
+        {/* Header Title */}
+        <div className="flex flex-col items-center mb-5 shrink-0 justify-center space-y-1 text-center">
+          <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-white drop-shadow-md">
+            {isLogin ? "Welcome Back" : "Join Shopiversity"}
+          </h2>
+          <p className="text-xs font-semibold text-white/90 drop-shadow-sm">
+            The Campus Marketplace for Nigerian Universities
+          </p>
         </div>
 
-        {/* Auth Card */}
-        <div className="bg-white dark:bg-zinc-900 rounded-[8px] border border-slate-300 dark:border-zinc-800 p-6 sm:p-7 shadow-sm">
+        {/* Auth Card with Glassmorphic Elevation */}
+        <div className="bg-white/95 dark:bg-zinc-900/95 backdrop-blur-2xl rounded-3xl border border-white/60 dark:border-zinc-750/80 p-6 sm:p-8 shadow-2xl ring-1 ring-black/5 dark:ring-white/5">
           <AnimatePresence mode="popLayout">
 
             {isVerificationSuccess ? (
@@ -1671,18 +1747,18 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
                         
                         <div className="space-y-1 text-left">
                           <label className="block text-xs font-bold text-zinc-850 dark:text-zinc-205">Mobile Number (Active)</label>
-                          <div className="flex gap-1.5">
+                          <div className="flex gap-2">
                             <select 
                               value={phonePrefix}
                               onChange={(e) => setPhonePrefix(e.target.value)}
-                              className="w-20 h-[34px] px-1.5 bg-slate-50 dark:bg-zinc-900 border border-slate-300 dark:border-zinc-700 rounded text-xs font-semibold text-slate-700 dark:text-zinc-200 focus:border-[#9333ea]"
+                              className="w-28 h-10 px-2.5 bg-slate-50 dark:bg-zinc-850 border border-slate-300 dark:border-zinc-700 rounded-xl text-xs font-bold text-slate-800 dark:text-zinc-100 focus:border-[#ff6b00] shadow-sm cursor-pointer transition-all"
                             >
-                              <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="+234">🇳🇬 +234</option>
-                              <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="+233">🇬🇭 +233</option>
-                              <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="+254">🇰🇪 +254</option>
-                              <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="+27">🇿🇦 +27</option>
-                              <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="+44">🇬🇧 +44</option>
-                              <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="+1">🇺🇸 +1</option>
+                              <option className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100" value="+234">🇳🇬 +234</option>
+                              <option className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100" value="+233">🇬🇭 +233</option>
+                              <option className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100" value="+254">🇰🇪 +254</option>
+                              <option className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100" value="+27">🇿🇦 +27</option>
+                              <option className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100" value="+44">🇬🇧 +44</option>
+                              <option className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100" value="+1">🇺🇸 +1</option>
                             </select>
                             <input 
                               required
@@ -1698,10 +1774,10 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
                                 }
                               }}
                               className={cn(
-                                "flex-1 h-[34px] px-3 bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 rounded text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-[#9333ea] focus:ring-1 focus:ring-[#9333ea] outline-none text-[13px] shadow-sm transition-all",
+                                "flex-1 h-10 px-3 bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-[#ff6b00] focus:ring-1 focus:ring-[#ff6b00] outline-none text-[13px] shadow-sm transition-all font-medium",
                                 fieldErrors.phone && "border-red-500"
                               )}
-                              placeholder={phonePrefix === "+234" ? "08012345678 or 8012345678" : "8012345678"}
+                              placeholder={phonePrefix === "+234" ? "08012345678" : "8012345678"}
                             />
                           </div>
                           {fieldErrors.phone && (

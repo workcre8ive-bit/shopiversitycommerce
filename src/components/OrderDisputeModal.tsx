@@ -183,8 +183,8 @@ export default function OrderDisputeModal({ order, isOpen, onClose, onSuccess }:
                   onChange={(e) => setReasonCategory(e.target.value)}
                   className="w-full p-3.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs font-semibold text-slate-900 dark:text-white outline-none focus:border-red-500"
                 >
-                  {DISPUTE_REASONS.map((r) => (
-                    <option key={r.id} value={r.id}>
+                  {DISPUTE_REASONS.map((r, idx) => (
+                    <option key={`dispute-reason-${r.id}-${idx}`} value={r.id}>
                       {r.label}
                     </option>
                   ))}

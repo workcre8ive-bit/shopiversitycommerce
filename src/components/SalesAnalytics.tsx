@@ -107,11 +107,11 @@ function BeautifulDropdown<T extends string>({
                 align === 'right' ? "right-0" : "left-0"
               )}
             >
-              {options.map((option) => {
+              {options.map((option, optIdx) => {
                 const isSelected = option.value === value;
                 return (
                   <button
-                    key={option.value}
+                    key={`opt-val-${option.value}-${optIdx}`}
                     type="button"
                     onClick={() => {
                       onChange(option.value);

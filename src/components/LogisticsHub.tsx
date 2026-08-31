@@ -797,7 +797,12 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
       const jobItem = allDeliveries.find(j => j.id === jobId || j.orderId === jobId);
       const actualOrderId = jobItem?.orderId || jobId.replace("DLV_", "");
 
-      // 1. Update / create logistics_deliveries doc with setDoc merge
+      // 1. Fetch existing order data first
+      const orderRef = doc(db, "orders", actualOrderId);
+      const orderSnap = await getDoc(orderRef);
+      const orderData = orderSnap.exists() ? orderSnap.data() : {};
+
+      // 2. Update / create logistics_deliveries doc with setDoc merge
       const deliveryDocId = jobId.startsWith("DLV_") ? jobId : `DLV_${actualOrderId}`;
       const jobDocRef = doc(db, "logistics_deliveries", deliveryDocId);
       await setDoc(jobDocRef, {
@@ -820,11 +825,8 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
         updatedAt: new Date().toISOString()
       }, { merge: true });
 
-      // 2. Update standard orders doc
-      const orderRef = doc(db, "orders", actualOrderId);
-      const orderSnap = await getDoc(orderRef);
+      // 3. Update standard orders doc
       if (orderSnap.exists()) {
-        const orderData = orderSnap.data();
         const itemSubtotal = orderData.itemSubtotal || (orderData.totalPrice - (orderData.deliveryFee || 0));
         const finalDeliveryPrice = jobItem?.deliveryPrice || orderData.deliveryFee || courierPrice;
         const newTotalPrice = itemSubtotal + finalDeliveryPrice;
@@ -1119,10 +1121,10 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
       {/* Top Banner Header */}
       <div className="bg-gradient-to-r from-orange-600 to-amber-500 py-6 px-6 text-white flex flex-wrap items-center justify-between gap-4 shadow-md animate-in fade-in slide-in-from-top-4 duration-300">
         <div className="flex items-center gap-3">
-          <Logo showText={true} className="bg-white/10 p-2 rounded-2xl backdrop-blur-sm border border-white/20" />
-          <span className="text-white/40 hidden sm:inline">|</span>
-          <div className="flex items-center gap-2">
-            <Truck className="w-7 h-7 text-white animate-bounce shrink-0" />
+          <div className="flex items-center gap-2.5">
+            <div className="p-2.5 bg-white/15 rounded-2xl backdrop-blur-sm border border-white/20 shadow-inner">
+              <Truck className="w-6 h-6 text-white shrink-0" />
+            </div>
             <div>
               <h1 className="text-lg sm:text-xl font-black tracking-tight uppercase !text-white leading-tight">Shopiversity Logistics</h1>
               <p className="text-[11px] text-orange-100 font-medium">Campus Delivery Network Partner</p>
@@ -1917,9 +1919,9 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                                   </button>
                                 </div>
                                 <div className="grid grid-cols-3 gap-1.5">
-                                  {["30-45 Mins", "1-2 Hours", "Today by 5pm"].map((preset) => (
+                                  {["30-45 Mins", "1-2 Hours", "Today by 5pm"].map((preset, pIdx) => (
                                     <button
-                                      key={preset}
+                                      key={`eta-preset-${preset}-${pIdx}`}
                                       type="button"
                                       onClick={() => setJobEtaInput(preset)}
                                       className={cn(
@@ -2428,11 +2430,11 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                       <div className="space-y-2 pt-2">
                         <label className="text-xs font-bold text-slate-700 dark:text-zinc-300 block">Fleet Vehicles Available *</label>
                         <div className="flex flex-wrap gap-2">
-                          {["Bike / Motorcycle", "Bicycle", "Tricycle / Keke", "Car / Sedan", "Van / Bus", "Walking Courier"].map((v) => {
+                          {["Bike / Motorcycle", "Bicycle", "Tricycle / Keke", "Car / Sedan", "Van / Bus", "Walking Courier"].map((v, vIdx) => {
                             const isSelected = editSelectedVehicles.includes(v);
                             return (
                               <button
-                                key={v}
+                                key={`edit-veh-${v}-${vIdx}`}
                                 type="button"
                                 onClick={() => {
                                   if (isSelected) {
@@ -2474,9 +2476,9 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                         {/* Selected Campus Tags */}
                         {editSelectedCampuses.length > 0 && (
                           <div className="flex flex-wrap gap-1.5 p-3 rounded-2xl bg-orange-50/50 dark:bg-orange-950/10 border border-orange-200/60 dark:border-orange-900/30 max-h-32 overflow-y-auto">
-                            {editSelectedCampuses.map((c) => (
+                            {editSelectedCampuses.map((c, cIdx) => (
                               <span
-                                key={c}
+                                key={`edit-camp-sel-${c}-${cIdx}`}
                                 className="inline-flex items-center gap-1 px-2.5 py-1 bg-white dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 rounded-lg text-[11px] font-bold shadow-2xs border border-orange-200/50 dark:border-zinc-700"
                               >
                                 <span>{c}</span>
@@ -2506,11 +2508,11 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                           </div>
 
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-40 overflow-y-auto p-2 border border-slate-200 dark:border-zinc-800 rounded-xl bg-slate-50/50 dark:bg-zinc-900/50">
-                            {NIGERIAN_CAMPUSES.filter(c => c.toLowerCase().includes(profileCampusSearch.toLowerCase())).slice(0, 15).map((campus) => {
+                            {NIGERIAN_CAMPUSES.filter(c => c.toLowerCase().includes(profileCampusSearch.toLowerCase())).slice(0, 15).map((campus, campIdx) => {
                               const isSelected = editSelectedCampuses.includes(campus);
                               return (
                                 <button
-                                  key={campus}
+                                  key={`camp-search-${campus}-${campIdx}`}
                                   type="button"
                                   onClick={() => {
                                     if (isSelected) {

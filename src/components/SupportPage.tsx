@@ -74,11 +74,40 @@ export default function SupportPage({ user, onBack, mode = "support" }: SupportP
         status: "open",
         createdAt: new Date().toISOString()
       };
-      await addDoc(collection(db, "supportTickets"), ticketData);
+      const docRef = await addDoc(collection(db, "supportTickets"), ticketData);
 
-      // 2. Open in email client
-      const mailto = `mailto:${supportEmail}?subject=${encodeURIComponent(`[SHOPIVERSITY ${mode === "support" ? "Support" : "Feedback"}] ${subject}`)}&body=${encodeURIComponent(formattedMsg)}`;
-      window.open(mailto, "_blank");
+      // 2. Dispatch live confirmation email via Brevo backend
+      try {
+        if (mode === "support") {
+          await fetch("/api/send-support-ticket", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              userEmail: currentEmail,
+              userName: senderName || user?.displayName || "Student",
+              category: selectedCategory || "General Inquiry",
+              subject: subject || "Support Request",
+              message,
+              mode,
+              ticketId: `TCK-${docRef.id.slice(-6).toUpperCase()}`
+            })
+          });
+        } else {
+          await fetch("/api/send-feedback", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              userEmail: currentEmail,
+              userName: senderName || user?.displayName || "Student",
+              feedbackType: selectedCategory || "Platform Feedback",
+              message,
+              campus: user?.campus || "Campus"
+            })
+          });
+        }
+      } catch (emailErr) {
+        console.warn("Backend Brevo dispatch notice:", emailErr);
+      }
 
       setSubmitted(true);
       setSubject("");

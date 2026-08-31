@@ -1517,7 +1517,7 @@ export default function App() {
                         <select 
                           value={filterCondition}
                           onChange={(e) => setFilterCondition(e.target.value)}
-                          className="h-9 px-3 bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-700 rounded-md text-xs font-medium text-slate-700 dark:text-zinc-300 outline-none focus:border-[#ff6b00] transition-all shadow-sm cursor-pointer"
+                          className="h-10 px-3.5 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-750 rounded-2xl text-xs font-bold text-slate-700 dark:text-zinc-200 outline-none focus:border-[#ff6b00] hover:border-orange-400 transition-all shadow-sm cursor-pointer"
                         >
                           <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="All">All Conditions</option>
                           <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="new">Brand New</option>
@@ -1526,7 +1526,7 @@ export default function App() {
                         <select 
                           value={filterPriceRange}
                           onChange={(e) => setFilterPriceRange(e.target.value)}
-                          className="h-9 px-3 bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-700 rounded-md text-xs font-medium text-slate-700 dark:text-zinc-300 outline-none focus:border-amber-500 transition-all shadow-sm cursor-pointer"
+                          className="h-10 px-3.5 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-750 rounded-2xl text-xs font-bold text-slate-700 dark:text-zinc-200 outline-none focus:border-[#ff6b00] hover:border-orange-400 transition-all shadow-sm cursor-pointer"
                         >
                           <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="All">Any Price</option>
                           <option className="bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100" value="0-5000">Under ₦5,000</option>
@@ -2038,16 +2038,6 @@ export default function App() {
                 className="p-6"
               >
                 <TermsAndConditions onBack={handleGoBack} />
-              </motion.div>
-            ) : activeTab === "admin" ? (
-              <motion.div 
-                key="admin"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                className="p-4 sm:p-6 lg:p-8 max-w-[1600px] mx-auto space-y-6"
-              >
-                <AdminDashboard currentUser={currentUser} onBack={handleGoBack} />
               </motion.div>
             ) : activeTab === "cart" ? (
               <motion.div 

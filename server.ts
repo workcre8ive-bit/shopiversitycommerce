@@ -36,73 +36,127 @@ async function startServer() {
   const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
   const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 
-  // API Routes
-  app.post("/api/send-verification", async (req, res) => {
-    const { email, code } = req.body;
+  // Brevo Transactional Email Engine Configuration & Runtime Store
+  let runtimeBrevoConfig = {
+    apiKey: process.env.BREVO_API_KEY || "",
+    senderEmail: process.env.BREVO_SENDER_EMAIL || "shopiversitycommerce@gmail.com",
+    senderName: process.env.BREVO_SENDER_NAME || "SHOPIVERSITY Campus Marketplace"
+  };
 
-    if (!email || !code) {
-      return res.status(400).json({ error: "Email and code are required" });
+  /**
+   * Unified Email Sender
+   * Tries Brevo (Sendinblue) first -> then Resend -> then SMTP -> then fallback
+   */
+  async function sendBrevoOrFallbackEmail(options: {
+    to: string | string[] | { email: string; name?: string }[];
+    subject: string;
+    htmlContent: string;
+    textContent?: string;
+    senderName?: string;
+    senderEmail?: string;
+    replyTo?: { email: string; name?: string };
+    tags?: string[];
+    customApiKey?: string;
+  }): Promise<{ success: boolean; provider: string; messageId?: string; error?: string }> {
+    const activeKey = (options.customApiKey || runtimeBrevoConfig.apiKey || process.env.BREVO_API_KEY || "").trim();
+    const fromName = options.senderName || runtimeBrevoConfig.senderName || "SHOPIVERSITY Campus Marketplace";
+    const fromEmail = options.senderEmail || runtimeBrevoConfig.senderEmail || "shopiversitycommerce@gmail.com";
+
+    // Normalize recipients
+    let recipients: { email: string; name?: string }[] = [];
+    if (typeof options.to === "string") {
+      recipients = [{ email: options.to.trim() }];
+    } else if (Array.isArray(options.to)) {
+      recipients = options.to.map(item => {
+        if (typeof item === "string") return { email: item.trim() };
+        return { email: item.email.trim(), name: item.name };
+      });
     }
 
-    const targetEmail = email.trim();
-    console.log(`[VERIFICATION ENGINE] Sending verification code ${code} directly to recipient: ${targetEmail}`);
+    if (recipients.length === 0) {
+      return { success: false, provider: "none", error: "No recipient email provided" };
+    }
 
-    const htmlContent = `
-      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
-        <div style="text-align: center; padding-bottom: 20px;">
-          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0; tracking: -0.5px;">SHOPIVERSITY</h1>
-          <p style="color: #64748b; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Campus Marketplace & Logistics</p>
-        </div>
-        <div style="background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%); padding: 32px; text-align: center; border-radius: 20px; border: 1px solid #fed7aa; margin-bottom: 24px;">
-          <h2 style="color: #1e293b; font-size: 20px; font-weight: 800; margin-top: 0; margin-bottom: 8px;">Verify Your Email Address</h2>
-          <p style="color: #475569; font-size: 14px; margin-bottom: 20px; line-height: 1.5;">
-            Thank you for joining SHOPIVERSITY. Enter the 6-digit code below to complete your verification:
-          </p>
-          <div style="background-color: #ffffff; padding: 18px 24px; display: inline-block; border-radius: 16px; border: 2px border-dashed #ff6b00; box-shadow: 0 10px 15px -3px rgba(255, 107, 0, 0.1);">
-            <span style="font-size: 36px; font-weight: 900; letter-spacing: 10px; color: #ff6b00; font-family: monospace;">${code}</span>
-          </div>
-        </div>
-        <p style="color: #64748b; font-size: 13px; line-height: 1.6; text-align: center;">
-          This code was sent directly to <strong>${targetEmail}</strong>. If you did not request this verification code, please ignore this email.
-        </p>
-        <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 24px 0;" />
-        <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">
-          &copy; 2026 SHOPIVERSITY Campus Network. All rights reserved.
-        </p>
-      </div>
-    `;
+    let lastError: string | null = null;
 
-    let emailSentSuccessfully = false;
-    let dispatchDetails: any = null;
-    let deliveryError: string | null = null;
+    // 1. Try Brevo REST API v3
+    if (activeKey) {
+      try {
+        console.log(`[BREVO DISPATCHER] Sending email "${options.subject}" via Brevo to ${recipients.map(r => r.email).join(", ")}`);
+        
+        const brevoPayload: any = {
+          sender: {
+            name: fromName,
+            email: fromEmail
+          },
+          to: recipients,
+          subject: options.subject,
+          htmlContent: options.htmlContent
+        };
 
-    // 1. Try Resend if API Key is configured
+        if (options.textContent) {
+          brevoPayload.textContent = options.textContent;
+        }
+        if (options.replyTo) {
+          brevoPayload.replyTo = options.replyTo;
+        }
+        if (options.tags && options.tags.length > 0) {
+          brevoPayload.tags = options.tags;
+        }
+
+        const brevoResponse = await axios.post("https://api.brevo.com/v3/smtp/email", brevoPayload, {
+          headers: {
+            "accept": "application/json",
+            "api-key": activeKey,
+            "content-type": "application/json"
+          },
+          timeout: 10000
+        });
+
+        const messageId = brevoResponse.data?.messageId || brevoResponse.data?.id || `BREVO_${Date.now()}`;
+        console.log(`[BREVO SUCCESS] Email successfully dispatched! MessageId: ${messageId}`);
+        return {
+          success: true,
+          provider: "brevo",
+          messageId
+        };
+      } catch (brevoErr: any) {
+        const errorData = brevoErr.response?.data;
+        const msg = errorData?.message || brevoErr.message || "Unknown Brevo error";
+        console.warn(`[BREVO ERROR] Failed sending via Brevo: ${msg}`, errorData || "");
+        lastError = `Brevo: ${msg}`;
+      }
+    } else {
+      console.log(`[BREVO NOTICE] Brevo API Key not configured in .env or settings. Checking fallback providers...`);
+    }
+
+    // 2. Try Resend Fallback
     if (resend) {
       try {
-        const fromAddress = process.env.RESEND_FROM_EMAIL || "SHOPIVERSITY <onboarding@resend.dev>";
+        const resendFrom = process.env.RESEND_FROM_EMAIL || `${fromName} <onboarding@resend.dev>`;
+        const targetList = recipients.map(r => r.email);
         const { data, error } = await resend.emails.send({
-          from: fromAddress,
-          to: [targetEmail],
-          subject: `${code} is your SHOPIVERSITY Verification Code`,
-          html: htmlContent,
+          from: resendFrom,
+          to: targetList,
+          subject: options.subject,
+          html: options.htmlContent
         });
 
         if (!error && data?.id) {
-          console.log(`[RESEND SUCCESS] Verification email sent to ${targetEmail}, ID: ${data.id}`);
-          emailSentSuccessfully = true;
-          dispatchDetails = { method: "resend", id: data.id };
+          console.log(`[RESEND FALLBACK SUCCESS] Sent via Resend ID: ${data.id}`);
+          return { success: true, provider: "resend", messageId: data.id };
         } else if (error) {
           console.warn(`[RESEND NOTICE] ${error.message}`);
-          deliveryError = error.message;
+          lastError = `Resend: ${error.message}`;
         }
       } catch (resendErr: any) {
-        console.warn(`[RESEND EXCEPTION] ${resendErr.message}`);
-        deliveryError = resendErr.message;
+        console.warn(`[RESEND ERROR] ${resendErr.message}`);
+        lastError = `Resend: ${resendErr.message}`;
       }
     }
 
-    // 2. Try Nodemailer SMTP if configured
-    if (!emailSentSuccessfully && process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+    // 3. Try Nodemailer SMTP Fallback
+    if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
       try {
         const transporter = nodemailer.createTransport({
           host: process.env.SMTP_HOST,
@@ -110,53 +164,639 @@ async function startServer() {
           secure: process.env.SMTP_SECURE === "true",
           auth: {
             user: process.env.SMTP_USER,
-            pass: process.env.SMTP_PASS,
-          },
+            pass: process.env.SMTP_PASS
+          }
         });
 
         const info = await transporter.sendMail({
-          from: process.env.SMTP_FROM || `"SHOPIVERSITY" <${process.env.SMTP_USER}>`,
-          to: targetEmail,
-          subject: `${code} is your SHOPIVERSITY Verification Code`,
-          html: htmlContent,
+          from: `"${fromName}" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
+          to: recipients.map(r => r.email).join(", "),
+          subject: options.subject,
+          html: options.htmlContent
         });
 
-        console.log(`[SMTP SUCCESS] Email sent to ${targetEmail}, MessageId: ${info.messageId}`);
-        emailSentSuccessfully = true;
-        dispatchDetails = { method: "smtp", messageId: info.messageId };
+        console.log(`[SMTP SUCCESS] Sent via SMTP ID: ${info.messageId}`);
+        return { success: true, provider: "smtp", messageId: info.messageId };
       } catch (smtpErr: any) {
-        console.warn(`[SMTP NOTICE] ${smtpErr.message}`);
-        if (!deliveryError) deliveryError = smtpErr.message;
+        console.warn(`[SMTP ERROR] ${smtpErr.message}`);
+        lastError = `SMTP: ${smtpErr.message}`;
       }
     }
 
-    // If neither provider delivered the email, handle gracefully with fallback code so verification is never blocked
-    if (!emailSentSuccessfully) {
-      const isResendRestriction = deliveryError?.includes("testing emails") || deliveryError?.includes("verify a domain");
-      const reason = isResendRestriction
-        ? "Resend test mode limit (emails can only be delivered to fashopcommerce@gmail.com until domain verified)."
-        : (deliveryError || "No live email provider keys set in .env.");
+    return {
+      success: false,
+      provider: "none",
+      error: lastError || "No active email service key (BREVO_API_KEY / RESEND_API_KEY) found."
+    };
+  }
 
-      console.log(`[VERIFICATION ENGINE] ${targetEmail} code generated: ${code} (${reason})`);
+  // Brevo Status & Config Endpoints
+  app.get("/api/brevo/status", (req, res) => {
+    const key = (runtimeBrevoConfig.apiKey || process.env.BREVO_API_KEY || "").trim();
+    const hasKey = key.length > 5;
+    const maskedKey = hasKey ? `${key.substring(0, 8)}••••••••${key.slice(-4)}` : "";
+
+    return res.status(200).json({
+      configured: hasKey,
+      hasKey,
+      maskedKey,
+      senderEmail: runtimeBrevoConfig.senderEmail,
+      senderName: runtimeBrevoConfig.senderName,
+      provider: "brevo",
+      activeFallback: Boolean(process.env.RESEND_API_KEY || (process.env.SMTP_HOST && process.env.SMTP_USER))
+    });
+  });
+
+  app.post("/api/brevo/save-config", (req, res) => {
+    const { apiKey, senderEmail, senderName } = req.body;
+    if (apiKey !== undefined) {
+      runtimeBrevoConfig.apiKey = String(apiKey).trim();
+    }
+    if (senderEmail) {
+      runtimeBrevoConfig.senderEmail = String(senderEmail).trim();
+    }
+    if (senderName) {
+      runtimeBrevoConfig.senderName = String(senderName).trim();
+    }
+
+    console.log(`[BREVO CONFIG UPDATED] Sender: ${runtimeBrevoConfig.senderName} <${runtimeBrevoConfig.senderEmail}>, Key Set: ${Boolean(runtimeBrevoConfig.apiKey)}`);
+
+    return res.status(200).json({
+      success: true,
+      message: "Brevo configuration saved successfully",
+      configured: Boolean(runtimeBrevoConfig.apiKey),
+      senderEmail: runtimeBrevoConfig.senderEmail,
+      senderName: runtimeBrevoConfig.senderName
+    });
+  });
+
+  // Brevo Test Connection Endpoint
+  app.post("/api/brevo/test-connection", async (req, res) => {
+    const { apiKey, senderEmail, senderName, testRecipientEmail } = req.body;
+    const targetEmail = (testRecipientEmail || "shopiversitycommerce@gmail.com").trim();
+
+    const testKey = apiKey ? String(apiKey).trim() : (runtimeBrevoConfig.apiKey || process.env.BREVO_API_KEY || "").trim();
+
+    if (!testKey) {
+      return res.status(400).json({
+        success: false,
+        error: "Brevo API Key is required to test the connection. Please provide your Brevo API key (starts with xkeysib-)."
+      });
+    }
+
+    const testHtml = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
+        <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ff6b00;">
+          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">SHOPIVERSITY</h1>
+          <p style="color: #64748b; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Brevo Email Integration Active</p>
+        </div>
+        <div style="background: linear-gradient(135deg, #059669 0%, #10b981 100%); padding: 24px; border-radius: 18px; color: #ffffff; margin: 24px 0; text-align: center;">
+          <h2 style="font-size: 20px; font-weight: 800; margin: 0 0 8px 0;">🎉 Brevo Connection Test Successful!</h2>
+          <p style="font-size: 14px; margin: 0; opacity: 0.95;">
+            Your Brevo API Key has been verified. All transactional emails across SHOPIVERSITY will now be delivered via Brevo.
+          </p>
+        </div>
+        <div style="background-color: #f8fafc; padding: 18px; border-radius: 16px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
+          <h3 style="font-size: 13px; font-weight: 800; color: #1e293b; margin: 0 0 10px 0; text-transform: uppercase;">Configured Integration Parameters:</h3>
+          <ul style="margin: 0; padding-left: 20px; color: #475569; font-size: 13px; line-height: 1.8;">
+            <li><strong>Provider:</strong> Brevo REST API v3</li>
+            <li><strong>Sender Name:</strong> ${senderName || runtimeBrevoConfig.senderName}</li>
+            <li><strong>Sender Email:</strong> ${senderEmail || runtimeBrevoConfig.senderEmail}</li>
+            <li><strong>Test Recipient:</strong> ${targetEmail}</li>
+            <li><strong>Timestamp:</strong> ${new Date().toISOString()}</li>
+          </ul>
+        </div>
+        <div style="text-align: center; color: #64748b; font-size: 12px;">
+          <p>SHOPIVERSITY uses Brevo for Email Verification, Receipts, Password Resets, Customer Service, and Feedback.</p>
+        </div>
+      </div>
+    `;
+
+    const result = await sendBrevoOrFallbackEmail({
+      to: targetEmail,
+      subject: "✅ SHOPIVERSITY & Brevo Email Integration Test",
+      htmlContent: testHtml,
+      senderName: senderName || runtimeBrevoConfig.senderName,
+      senderEmail: senderEmail || runtimeBrevoConfig.senderEmail,
+      customApiKey: testKey,
+      tags: ["test-connection", "brevo-setup"]
+    });
+
+    if (result.success) {
+      return res.status(200).json({
+        success: true,
+        provider: result.provider,
+        messageId: result.messageId,
+        message: `Test email successfully delivered to ${targetEmail} via ${result.provider.toUpperCase()}!`
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      error: result.error || "Failed to send test email via Brevo. Please verify your API Key and sender domain."
+    });
+  });
+
+  // API Routes: 1. Email Verification Endpoint (Powered by Brevo)
+  app.post("/api/send-verification", async (req, res) => {
+    const { email, code, userName } = req.body;
+
+    if (!email || !code) {
+      return res.status(400).json({ error: "Email and code are required" });
+    }
+
+    const targetEmail = email.trim();
+    console.log(`[VERIFICATION ENGINE] Dispatching verification code ${code} to: ${targetEmail}`);
+
+    const htmlContent = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
+        <div style="text-align: center; padding-bottom: 20px;">
+          <h1 style="color: #ff6b00; font-size: 28px; font-weight: 900; margin: 0; letter-spacing: -0.5px;">SHOPIVERSITY</h1>
+          <p style="color: #64748b; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Campus Marketplace & Secure Escrow</p>
+        </div>
+        <div style="background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%); padding: 32px; text-align: center; border-radius: 20px; border: 1px solid #fed7aa; margin-bottom: 24px;">
+          <div style="display: inline-block; background-color: #ff6b00; color: #ffffff; padding: 4px 12px; border-radius: 999px; font-size: 11px; font-weight: 900; letter-spacing: 1px; margin-bottom: 12px;">
+            ACCOUNT VERIFICATION
+          </div>
+          <h2 style="color: #1e293b; font-size: 22px; font-weight: 800; margin-top: 0; margin-bottom: 8px;">Verify Your Email Address</h2>
+          <p style="color: #475569; font-size: 14px; margin-bottom: 24px; line-height: 1.5;">
+            Welcome ${userName ? `<strong>${userName}</strong>` : "to SHOPIVERSITY"}! Please enter the 6-digit confirmation code below to activate your student account:
+          </p>
+          <div style="background-color: #ffffff; padding: 20px 32px; display: inline-block; border-radius: 16px; border: 2px dashed #ff6b00; box-shadow: 0 10px 20px -3px rgba(255, 107, 0, 0.15);">
+            <span style="font-size: 38px; font-weight: 900; letter-spacing: 12px; color: #ff6b00; font-family: monospace;">${code}</span>
+          </div>
+          <p style="color: #94a3b8; font-size: 11px; margin-top: 16px; margin-bottom: 0;">Code expires in 15 minutes.</p>
+        </div>
+        <div style="background-color: #f8fafc; padding: 16px; border-radius: 14px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
+          <p style="color: #64748b; font-size: 12px; line-height: 1.5; margin: 0; text-align: center;">
+            🔒 This code was requested for <strong>${targetEmail}</strong>. If you did not initiate this request, no action is needed.
+          </p>
+        </div>
+        <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 24px 0;" />
+        <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">
+          &copy; 2026 SHOPIVERSITY Campus Network. Escrow-Protected Marketplace.
+        </p>
+      </div>
+    `;
+
+    const dispatchResult = await sendBrevoOrFallbackEmail({
+      to: targetEmail,
+      subject: `${code} is your SHOPIVERSITY Verification Code`,
+      htmlContent,
+      tags: ["verification", "signup-auth"]
+    });
+
+    if (!dispatchResult.success) {
+      console.log(`[VERIFICATION ENGINE] Brevo/email unavailable, enabling seamless fallback code: ${code}`);
       return res.status(200).json({
         success: true,
         sent: false,
         fallback: true,
         code,
         message: "Verification code generated.",
-        notice: isResendRestriction 
-          ? "Resend is in test mode. Verification code has been auto-filled for quick entry."
-          : "Verification code generated and auto-filled for quick entry.",
+        notice: "Verification code generated and auto-filled for quick entry.",
         targetEmail
       });
     }
 
-    // Return clean response confirming dispatch
     return res.status(200).json({
       success: true,
-      message: `Verification email sent directly to ${targetEmail}`,
-      targetEmail,
-      details: dispatchDetails
+      sent: true,
+      provider: dispatchResult.provider,
+      messageId: dispatchResult.messageId,
+      message: `Verification email sent directly to ${targetEmail} via ${dispatchResult.provider.toUpperCase()}`,
+      targetEmail
+    });
+  });
+
+  // API Routes: 2. Send Official Escrow Transaction Receipt (Powered by Brevo)
+  app.post("/api/send-receipt", async (req, res) => {
+    const { orderId, recipientEmail, recipientName, order } = req.body;
+
+    if (!recipientEmail || (!orderId && !order)) {
+      return res.status(400).json({ error: "Recipient email and order details are required" });
+    }
+
+    const targetEmail = recipientEmail.trim();
+    const orderData = order || {};
+    const finalOrderId = orderId || orderData.uniqueOrderId || orderData.id || `ORD-${Date.now()}`;
+    const orderDate = orderData.createdAt ? new Date(orderData.createdAt).toLocaleString() : new Date().toLocaleString();
+    const totalPrice = Number(orderData.totalPrice || 0);
+    const productName = orderData.productName || "Campus Marketplace Product";
+    const quantity = orderData.quantity || 1;
+    const buyerName = recipientName || orderData.buyerName || "Valued Student";
+    const sellerName = orderData.sellerName || "Verified Campus Merchant";
+    const deliveryType = (orderData.deliveryType || "Pickup / Campus Courier").toUpperCase();
+    const campus = orderData.campus || "University Campus";
+
+    console.log(`[RECEIPT ENGINE] Dispatching official escrow receipt for order ${finalOrderId} to ${targetEmail}`);
+
+    const receiptHtml = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
+        <!-- Header -->
+        <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ff6b00;">
+          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">SHOPIVERSITY</h1>
+          <p style="color: #64748b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Official Escrow Transaction Receipt</p>
+        </div>
+
+        <!-- Success Banner -->
+        <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 24px; border-radius: 18px; color: #ffffff; margin: 20px 0;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <span style="background-color: #10b981; color: #ffffff; font-size: 11px; font-weight: 800; padding: 3px 10px; border-radius: 999px; text-transform: uppercase;">
+              Payment Secured & Verified
+            </span>
+            <span style="color: #94a3b8; font-size: 11px;">${orderDate}</span>
+          </div>
+          <h2 style="font-size: 22px; font-weight: 800; margin: 0 0 6px 0; color: #ffffff;">₦${totalPrice.toLocaleString()}</h2>
+          <p style="color: #94a3b8; font-size: 12px; margin: 0;">
+            Order Reference: <strong style="color: #38bdf8; font-family: monospace;">${finalOrderId}</strong>
+          </p>
+        </div>
+
+        <!-- Escrow Protection Badge -->
+        <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; padding: 14px; border-radius: 14px; margin-bottom: 20px;">
+          <p style="color: #166534; font-size: 12px; font-weight: 700; margin: 0; line-height: 1.5;">
+            🛡️ <strong>48-Hour Campus Escrow Guarantee Active:</strong> Your funds are safely vaulted. The seller only receives payout after you confirm physical handover or inspection.
+          </p>
+        </div>
+
+        <!-- Order Summary Table -->
+        <div style="border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; margin-bottom: 20px;">
+          <div style="background-color: #f8fafc; padding: 12px 16px; border-bottom: 1px solid #e2e8f0; font-size: 12px; font-weight: 800; color: #334155; text-transform: uppercase;">
+            Order Itemization
+          </div>
+          <div style="padding: 16px;">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; color: #1e293b;">
+              <span><strong>${productName}</strong> (x${quantity})</span>
+              <span style="font-weight: 700;">₦${totalPrice.toLocaleString()}</span>
+            </div>
+            <div style="font-size: 12px; color: #64748b; margin-bottom: 12px;">
+              Campus: ${campus} • Merchant: ${sellerName}
+            </div>
+            <hr style="border: 0; border-top: 1px dashed #e2e8f0; margin: 12px 0;" />
+            <div style="display: flex; justify-content: space-between; font-size: 12px; color: #64748b; margin-bottom: 4px;">
+              <span>Fulfillment Method</span>
+              <span style="font-weight: 600; color: #1e293b;">${deliveryType}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 12px; color: #64748b; margin-bottom: 4px;">
+              <span>Buyer</span>
+              <span style="font-weight: 600; color: #1e293b;">${buyerName}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 12px; color: #64748b; margin-bottom: 4px;">
+              <span>Platform Escrow Protection Fee</span>
+              <span style="font-weight: 600; color: #10b981;">₦0.00 (Free)</span>
+            </div>
+            <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 12px 0;" />
+            <div style="display: flex; justify-content: space-between; font-size: 15px; font-weight: 800; color: #1e293b;">
+              <span>Total Paid</span>
+              <span style="color: #ff6b00;">₦${totalPrice.toLocaleString()}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Next Steps -->
+        <div style="background-color: #fff7ed; border: 1px solid #fed7aa; padding: 16px; border-radius: 14px; margin-bottom: 20px;">
+          <h4 style="color: #9a3412; font-size: 13px; font-weight: 800; margin: 0 0 6px 0;">What happens next?</h4>
+          <p style="color: #c2410c; font-size: 12px; margin: 0; line-height: 1.5;">
+            1. The merchant prepares your order for handover/delivery.<br />
+            2. You can track courier dispatch live inside your SHOPIVERSITY Orders tab.<br />
+            3. Tap <strong>Confirm Received</strong> upon handover to release the payout.
+          </p>
+        </div>
+
+        <!-- Footer -->
+        <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;" />
+        <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">
+          Need help? Reply directly to this email or visit SHOPIVERSITY Support.<br />
+          &copy; 2026 SHOPIVERSITY Campus Marketplace. All rights reserved.
+        </p>
+      </div>
+    `;
+
+    const dispatchResult = await sendBrevoOrFallbackEmail({
+      to: targetEmail,
+      subject: `🧾 Official Escrow Receipt: Order ${finalOrderId} (₦${totalPrice.toLocaleString()})`,
+      htmlContent: receiptHtml,
+      tags: ["receipt", "order-confirmation", "escrow"]
+    });
+
+    return res.status(200).json({
+      success: dispatchResult.success,
+      provider: dispatchResult.provider,
+      messageId: dispatchResult.messageId,
+      message: dispatchResult.success 
+        ? `Official receipt dispatched to ${targetEmail} via ${dispatchResult.provider.toUpperCase()}`
+        : "Failed to dispatch receipt email",
+      orderId: finalOrderId
+    });
+  });
+
+  // API Routes: 3. Send Password Reset / Change Password Email (Powered by Brevo)
+  app.post("/api/send-password-reset", async (req, res) => {
+    const { email, code, resetLink, userName } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: "Email is required" });
+    }
+
+    const targetEmail = email.trim();
+    const resetCode = code || Math.floor(100000 + Math.random() * 900000).toString();
+    console.log(`[PASSWORD SECURITY] Sending password change/reset code to ${targetEmail}`);
+
+    const htmlContent = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
+        <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ef4444;">
+          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">SHOPIVERSITY</h1>
+          <p style="color: #64748b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Security & Password Management</p>
+        </div>
+
+        <div style="background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%); padding: 30px; text-align: center; border-radius: 20px; border: 1px solid #fecaca; margin: 24px 0;">
+          <div style="display: inline-block; background-color: #ef4444; color: #ffffff; padding: 4px 12px; border-radius: 999px; font-size: 11px; font-weight: 900; letter-spacing: 1px; margin-bottom: 12px;">
+            PASSWORD RESET REQUEST
+          </div>
+          <h2 style="color: #991b1b; font-size: 22px; font-weight: 800; margin: 0 0 10px 0;">Reset Your Password</h2>
+          <p style="color: #475569; font-size: 14px; margin-bottom: 20px; line-height: 1.5;">
+            Hello ${userName ? `<strong>${userName}</strong>` : ""}, we received a request to change the password for your SHOPIVERSITY account. Enter the 6-digit security code below:
+          </p>
+
+          <div style="background-color: #ffffff; padding: 18px 28px; display: inline-block; border-radius: 16px; border: 2px dashed #ef4444; box-shadow: 0 10px 20px -3px rgba(239, 68, 68, 0.15); margin-bottom: 16px;">
+            <span style="font-size: 36px; font-weight: 900; letter-spacing: 10px; color: #dc2626; font-family: monospace;">${resetCode}</span>
+          </div>
+
+          ${resetLink ? `
+            <div style="margin-top: 16px;">
+              <a href="${resetLink}" target="_blank" style="display: inline-block; background-color: #ef4444; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 12px; font-size: 13px; font-weight: 800;">
+                Click Here to Reset Password
+              </a>
+            </div>
+          ` : ""}
+
+          <p style="color: #94a3b8; font-size: 11px; margin-top: 16px; margin-bottom: 0;">
+            This security code will expire in 15 minutes.
+          </p>
+        </div>
+
+        <div style="background-color: #f8fafc; padding: 16px; border-radius: 14px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
+          <p style="color: #64748b; font-size: 12px; line-height: 1.5; margin: 0;">
+            ⚠️ <strong>Security Alert:</strong> If you did not make this request, someone may be attempting to access your account. Please log in immediately and review your profile security settings.
+          </p>
+        </div>
+
+        <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;" />
+        <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">
+          &copy; 2026 SHOPIVERSITY Campus Network. All rights reserved.
+        </p>
+      </div>
+    `;
+
+    const dispatchResult = await sendBrevoOrFallbackEmail({
+      to: targetEmail,
+      subject: `🔑 SHOPIVERSITY Password Reset Security Code (${resetCode})`,
+      htmlContent,
+      tags: ["security", "password-reset"]
+    });
+
+    return res.status(200).json({
+      success: dispatchResult.success,
+      sent: dispatchResult.success,
+      provider: dispatchResult.provider,
+      messageId: dispatchResult.messageId,
+      code: resetCode,
+      message: dispatchResult.success 
+        ? `Password reset code sent to ${targetEmail}`
+        : "Failed to deliver reset email, code auto-generated",
+      targetEmail
+    });
+  });
+
+  // API Routes: 4. Send Customer Service & Support Ticket Email (Powered by Brevo)
+  app.post("/api/send-support-ticket", async (req, res) => {
+    const { userEmail, userName, category, subject, message, mode, ticketId } = req.body;
+
+    const requesterEmail = (userEmail || "").trim();
+    const requesterName = userName || "Student";
+    const refId = ticketId || `TCK-${Math.floor(100000 + Math.random() * 900000)}`;
+    const teamEmail = "shopiversitycommerce@gmail.com";
+
+    console.log(`[SUPPORT ENGINE] Dispatching support confirmation for ticket ${refId} to ${requesterEmail}`);
+
+    // Email to the student/requester confirming receipt
+    const studentHtml = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
+        <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ff6b00;">
+          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">SHOPIVERSITY</h1>
+          <p style="color: #64748b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Student Support & Customer Care</p>
+        </div>
+
+        <div style="background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); padding: 24px; border-radius: 18px; margin: 20px 0; border: 1px solid #bfdbfe;">
+          <div style="display: inline-block; background-color: #2563eb; color: #ffffff; padding: 3px 10px; border-radius: 999px; font-size: 10px; font-weight: 900; letter-spacing: 1px; margin-bottom: 8px;">
+            TICKET RECEIVED: ${refId}
+          </div>
+          <h2 style="color: #1e3a8a; font-size: 20px; font-weight: 800; margin: 0 0 8px 0;">We've received your request!</h2>
+          <p style="color: #1e40af; font-size: 13px; margin: 0; line-height: 1.5;">
+            Hi ${requesterName}, our customer support team has received your inquiry regarding <strong>"${subject || category || "General Support"}"</strong> and is reviewing it.
+          </p>
+        </div>
+
+        <div style="background-color: #f8fafc; padding: 18px; border-radius: 16px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
+          <h4 style="font-size: 12px; font-weight: 800; color: #334155; margin: 0 0 10px 0; text-transform: uppercase;">Ticket Overview:</h4>
+          <p style="font-size: 13px; color: #475569; margin: 0 0 8px 0;"><strong>Category:</strong> ${category || "General Inquiry"}</p>
+          <p style="font-size: 13px; color: #475569; margin: 0 0 8px 0;"><strong>Subject:</strong> ${subject || "N/A"}</p>
+          <div style="background-color: #ffffff; padding: 12px; border-radius: 10px; border: 1px solid #e2e8f0; font-size: 12px; color: #334155; line-height: 1.5;">
+            ${message ? message.replace(/\n/g, "<br/>") : "No message provided"}
+          </div>
+        </div>
+
+        <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; padding: 14px; border-radius: 14px; margin-bottom: 20px;">
+          <p style="color: #166534; font-size: 12px; margin: 0; line-height: 1.5;">
+            ⏱️ <strong>Typical Response Time:</strong> Under 2 hours during active campus trading hours (8:00 AM - 10:00 PM).
+          </p>
+        </div>
+
+        <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;" />
+        <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">
+          SHOPIVERSITY Customer Care • <a href="mailto:shopiversitycommerce@gmail.com" style="color: #ff6b00;">shopiversitycommerce@gmail.com</a>
+        </p>
+      </div>
+    `;
+
+    // 1. Send confirmation to student
+    let studentSent = false;
+    if (requesterEmail) {
+      const studentResult = await sendBrevoOrFallbackEmail({
+        to: requesterEmail,
+        subject: `[Ticket ${refId}] SHOPIVERSITY Support: ${subject || category || "Inquiry Received"}`,
+        htmlContent: studentHtml,
+        tags: ["customer-service", "support-ticket"]
+      });
+      studentSent = studentResult.success;
+    }
+
+    // 2. Alert the support team desk
+    const teamHtml = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 16px;">
+        <h2 style="color: #ff6b00; margin: 0 0 10px 0;">New Support Ticket Submitted</h2>
+        <p><strong>Ticket ID:</strong> ${refId}</p>
+        <p><strong>From:</strong> ${requesterName} (${requesterEmail})</p>
+        <p><strong>Category:</strong> ${category}</p>
+        <p><strong>Subject:</strong> ${subject}</p>
+        <div style="background-color: #f1f5f9; padding: 14px; border-radius: 8px; margin: 14px 0;">
+          <strong>Message:</strong><br/>
+          ${message ? message.replace(/\n/g, "<br/>") : ""}
+        </div>
+        <p style="font-size: 12px; color: #64748b;">Submitted at ${new Date().toISOString()}</p>
+      </div>
+    `;
+
+    await sendBrevoOrFallbackEmail({
+      to: teamEmail,
+      subject: `🚨 [NEW TICKET ${refId}] ${category}: ${subject || requesterName}`,
+      htmlContent: teamHtml,
+      replyTo: requesterEmail ? { email: requesterEmail, name: requesterName } : undefined,
+      tags: ["admin-alert", "support-inbox"]
+    });
+
+    return res.status(200).json({
+      success: true,
+      ticketId: refId,
+      studentNotified: studentSent,
+      message: `Support ticket ${refId} logged and confirmation dispatched!`
+    });
+  });
+
+  // API Routes: 5. Send User Feedback Email (Powered by Brevo)
+  app.post("/api/send-feedback", async (req, res) => {
+    const { userEmail, userName, feedbackType, rating, message, campus } = req.body;
+    const requesterEmail = (userEmail || "").trim();
+    const requesterName = userName || "Student";
+    const teamEmail = "shopiversitycommerce@gmail.com";
+
+    console.log(`[FEEDBACK ENGINE] User feedback received from ${requesterName} (${requesterEmail})`);
+
+    const thankYouHtml = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
+        <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ff6b00;">
+          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">SHOPIVERSITY</h1>
+          <p style="color: #64748b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Student Voice & Platform Feedback</p>
+        </div>
+
+        <div style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); padding: 24px; border-radius: 18px; margin: 20px 0; border: 1px solid #fcd34d; text-align: center;">
+          <h2 style="color: #92400e; font-size: 20px; font-weight: 800; margin: 0 0 8px 0;">💛 Thank You for Your Feedback!</h2>
+          <p style="color: #b45309; font-size: 13px; margin: 0; line-height: 1.5;">
+            Hi ${requesterName}, your thoughts help us make campus commerce safer, faster, and more rewarding for every student.
+          </p>
+        </div>
+
+        <div style="background-color: #f8fafc; padding: 18px; border-radius: 16px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
+          <h4 style="font-size: 12px; font-weight: 800; color: #334155; margin: 0 0 10px 0; text-transform: uppercase;">Your Submission:</h4>
+          <p style="font-size: 13px; color: #475569; margin: 0 0 6px 0;"><strong>Category:</strong> ${feedbackType || "General Feedback"}</p>
+          ${rating ? `<p style="font-size: 13px; color: #475569; margin: 0 0 6px 0;"><strong>Rating:</strong> ⭐ ${rating}/5</p>` : ""}
+          ${campus ? `<p style="font-size: 13px; color: #475569; margin: 0 0 6px 0;"><strong>Campus:</strong> ${campus}</p>` : ""}
+          <div style="background-color: #ffffff; padding: 12px; border-radius: 10px; border: 1px solid #e2e8f0; font-size: 12px; color: #334155; line-height: 1.5; margin-top: 10px;">
+            ${message ? message.replace(/\n/g, "<br/>") : "No comment entered"}
+          </div>
+        </div>
+
+        <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;" />
+        <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">
+          &copy; 2026 SHOPIVERSITY Campus Network. All rights reserved.
+        </p>
+      </div>
+    `;
+
+    if (requesterEmail) {
+      await sendBrevoOrFallbackEmail({
+        to: requesterEmail,
+        subject: "💌 Thank You for Your Feedback on SHOPIVERSITY",
+        htmlContent: thankYouHtml,
+        tags: ["feedback", "user-appreciation"]
+      });
+    }
+
+    // Alert moderation desk
+    const teamNotice = `
+      <div style="font-family: sans-serif; padding: 16px;">
+        <h3>New User Feedback Received</h3>
+        <p><strong>User:</strong> ${requesterName} (${requesterEmail || "Anonymous"})</p>
+        <p><strong>Type:</strong> ${feedbackType || "General"}</p>
+        <p><strong>Rating:</strong> ${rating || "N/A"}</p>
+        <p><strong>Feedback:</strong><br/>${message}</p>
+      </div>
+    `;
+
+    await sendBrevoOrFallbackEmail({
+      to: teamEmail,
+      subject: `💡 [FEEDBACK] ${feedbackType || "User Review"} from ${requesterName}`,
+      htmlContent: teamNotice,
+      tags: ["internal-feedback"]
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Feedback received and appreciation email dispatched!"
+    });
+  });
+
+  // API Routes: 6. Send Order Status Updates (Powered by Brevo)
+  app.post("/api/send-order-status", async (req, res) => {
+    const { orderId, recipientEmail, buyerName, sellerName, status, statusTitle, statusMessage, deliveryOtp } = req.body;
+
+    if (!recipientEmail || !orderId) {
+      return res.status(400).json({ error: "Recipient email and order ID required" });
+    }
+
+    const targetEmail = recipientEmail.trim();
+    console.log(`[ORDER NOTIFICATION] Sending status update "${status}" for order ${orderId} to ${targetEmail}`);
+
+    const htmlContent = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
+        <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ff6b00;">
+          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">SHOPIVERSITY</h1>
+          <p style="color: #64748b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Live Order Notification</p>
+        </div>
+
+        <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 24px; border-radius: 18px; color: #ffffff; margin: 20px 0;">
+          <div style="display: inline-block; background-color: #ff6b00; color: #ffffff; padding: 3px 10px; border-radius: 999px; font-size: 10px; font-weight: 900; letter-spacing: 1px; margin-bottom: 8px;">
+            ORDER STATUS UPDATE
+          </div>
+          <h2 style="font-size: 20px; font-weight: 800; margin: 0 0 6px 0; color: #ffffff;">${statusTitle || "Your Order Has Been Updated"}</h2>
+          <p style="color: #94a3b8; font-size: 13px; margin: 0;">
+            Order Reference: <strong style="color: #38bdf8; font-family: monospace;">${orderId}</strong>
+          </p>
+        </div>
+
+        <div style="background-color: #f8fafc; padding: 18px; border-radius: 16px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
+          <p style="color: #334155; font-size: 14px; line-height: 1.6; margin: 0 0 12px 0;">
+            ${statusMessage || `Your order status has been updated to: <strong>${status}</strong>`}
+          </p>
+          ${deliveryOtp ? `
+            <div style="background-color: #ffffff; padding: 14px; border-radius: 12px; border: 2px dashed #ff6b00; text-align: center; margin-top: 14px;">
+              <span style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; display: block; margin-bottom: 4px;">Handover OTP Code:</span>
+              <span style="font-size: 28px; font-weight: 900; letter-spacing: 8px; color: #ff6b00; font-family: monospace;">${deliveryOtp}</span>
+              <span style="font-size: 11px; color: #94a3b8; display: block; margin-top: 4px;">Share this OTP with your courier only upon item inspection.</span>
+            </div>
+          ` : ""}
+        </div>
+
+        <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;" />
+        <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">
+          &copy; 2026 SHOPIVERSITY Campus Network. Escrow-Protected Marketplace.
+        </p>
+      </div>
+    `;
+
+    const dispatchResult = await sendBrevoOrFallbackEmail({
+      to: targetEmail,
+      subject: `📦 Order ${orderId}: ${statusTitle || "Status Updated"}`,
+      htmlContent,
+      tags: ["order-status", status]
+    });
+
+    return res.status(200).json({
+      success: dispatchResult.success,
+      provider: dispatchResult.provider,
+      messageId: dispatchResult.messageId,
+      message: `Status email sent to ${targetEmail}`
     });
   });
 
@@ -273,53 +913,15 @@ async function startServer() {
       </div>
     `;
 
-    let emailSent = false;
-    let details: any = null;
+    const dispatchResult = await sendBrevoOrFallbackEmail({
+      to: recipients,
+      subject: `SHOPIVERSITY Admin Credentials & Portal Link (${passkeyDisplay})`,
+      htmlContent,
+      tags: ["admin-credentials", "security-alert"]
+    });
 
-    if (resend) {
-      try {
-        const fromAddress = process.env.RESEND_FROM_EMAIL || "SHOPIVERSITY Security <onboarding@resend.dev>";
-        const { data, error } = await resend.emails.send({
-          from: fromAddress,
-          to: recipients,
-          subject: `SHOPIVERSITY Admin Credentials & Portal Link (${passkeyDisplay})`,
-          html: htmlContent,
-        });
-
-        if (!error && data?.id) {
-          emailSent = true;
-          details = { method: "resend", id: data.id };
-        }
-      } catch (err: any) {
-        console.warn(`[ADMIN RESEND] ${err.message}`);
-      }
-    }
-
-    if (!emailSent && process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-      try {
-        const transporter = nodemailer.createTransport({
-          host: process.env.SMTP_HOST,
-          port: Number(process.env.SMTP_PORT) || 587,
-          secure: process.env.SMTP_SECURE === "true",
-          auth: {
-            user: process.env.SMTP_USER,
-            pass: process.env.SMTP_PASS,
-          },
-        });
-
-        const info = await transporter.sendMail({
-          from: process.env.SMTP_FROM || `"SHOPIVERSITY Security" <${process.env.SMTP_USER}>`,
-          to: recipients.join(", "),
-          subject: `SHOPIVERSITY Admin Credentials & Portal Link (${passkeyDisplay})`,
-          html: htmlContent,
-        });
-
-        emailSent = true;
-        details = { method: "smtp", messageId: info.messageId };
-      } catch (err: any) {
-        console.warn(`[ADMIN SMTP] ${err.message}`);
-      }
-    }
+    const emailSent = dispatchResult.success;
+    const details = { method: dispatchResult.provider, messageId: dispatchResult.messageId };
 
     return res.status(200).json({
       success: true,

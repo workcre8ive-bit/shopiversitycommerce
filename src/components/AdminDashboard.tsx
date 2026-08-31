@@ -52,6 +52,7 @@ import AdminSuspendModal from "./AdminSuspendModal";
 import AdminUserDetailModal from "./AdminUserDetailModal";
 import AdminAnalyticsCharts from "./AdminAnalyticsCharts";
 import AdminSecurityRenewalModal from "./AdminSecurityRenewalModal";
+import AdminEmailBrevoSettings from "./AdminEmailBrevoSettings";
 
 interface AdminDashboardProps {
   currentUser: any;
@@ -59,7 +60,7 @@ interface AdminDashboardProps {
 }
 
 export default function AdminDashboard({ currentUser, onBack }: AdminDashboardProps) {
-  const [activeTab, setActiveTab] = useState<"analytics" | "users" | "products" | "payouts" | "reports" | "moderation">("analytics");
+  const [activeTab, setActiveTab] = useState<"analytics" | "users" | "products" | "payouts" | "reports" | "moderation" | "email">("analytics");
   
   // Real Firestore Collections State
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -518,6 +519,19 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
           <ShieldAlert className="w-4 h-4 text-red-500" />
           Contact Logs ({moderationLogs.length})
         </button>
+
+        <button
+          onClick={() => setActiveTab("email")}
+          className={cn(
+            "px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer",
+            activeTab === "email"
+              ? "bg-orange-600 text-white shadow-md shadow-orange-600/20"
+              : "bg-orange-50 dark:bg-orange-950/40 text-orange-700 dark:text-orange-300 hover:bg-orange-100 dark:hover:bg-orange-950/60 border border-orange-200/60 dark:border-orange-800/40"
+          )}
+        >
+          <Mail className="w-4 h-4" />
+          Brevo Email Engine
+        </button>
       </div>
 
       {/* TAB 1: ANALYTICS & GENERAL DETAILS */}
@@ -672,7 +686,7 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
 
                     return (
                       <tr 
-                        key={`adm-user-${u.uid || u.id || uIdx}`} 
+                        key={`adm-user-${u.uid || u.id || uIdx}-${uIdx}`} 
                         className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors"
                       >
                         {/* User Details */}
@@ -1234,6 +1248,11 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
             </div>
           )}
         </div>
+      )}
+
+      {/* TAB 7: BREVO EMAIL ENGINE & TRANSACTIONAL SETTINGS */}
+      {activeTab === "email" && (
+        <AdminEmailBrevoSettings />
       )}
 
       {/* MODAL 1: BAN / SUSPEND ACCOUNT */}

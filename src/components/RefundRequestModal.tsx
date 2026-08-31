@@ -253,8 +253,8 @@ export default function RefundRequestModal({
                 onChange={(e) => setReasonCategory(e.target.value)}
                 className="w-full h-11 px-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-amber-500 text-xs font-semibold text-slate-900 dark:text-white"
               >
-                {REASON_CATEGORIES.map((cat) => (
-                  <option key={cat.id} value={cat.id}>
+                {REASON_CATEGORIES.map((cat, idx) => (
+                  <option key={`refund-cat-${cat.id}-${idx}`} value={cat.id}>
                     {cat.label}
                   </option>
                 ))}

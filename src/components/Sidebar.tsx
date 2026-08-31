@@ -257,7 +257,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
                <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-widest">Explore Campus</h3>
             </div>
             <div className="space-y-1">
-               {navItems.filter(item => ["market", "search", "dashboard", "add-product", "my-products", "storefront", "logistics"].includes(item.id)).map((item, idx) => (
+               {navItems.filter(item => ["market", "cart", "search", "dashboard", "add-product", "my-products", "storefront", "logistics"].includes(item.id)).map((item, idx) => (
                 <button
                   key={`nav-explore-${item.id}-${idx}`}
                   onClick={() => {

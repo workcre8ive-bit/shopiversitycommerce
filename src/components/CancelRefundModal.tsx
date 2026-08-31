@@ -432,8 +432,8 @@ export default function CancelRefundModal({
                             className="w-full h-10 px-3 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs outline-none focus:border-orange-500"
                           >
                             <option value="">Select Bank...</option>
-                            {NIGERIAN_BANKS.map((b) => (
-                              <option key={b} value={b}>{b}</option>
+                            {NIGERIAN_BANKS.map((b, idx) => (
+                              <option key={`bank-opt-${b}-${idx}`} value={b}>{b}</option>
                             ))}
                           </select>
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -471,8 +471,8 @@ export default function CancelRefundModal({
                     onChange={(e) => setSelectedReason(e.target.value)}
                     className="w-full h-11 px-3 bg-slate-50 dark:bg-zinc-800/80 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs outline-none focus:border-orange-500 font-medium"
                   >
-                    {CANCEL_REASONS.map((r) => (
-                      <option key={r.id} value={r.id}>{r.label}</option>
+                    {CANCEL_REASONS.map((r, idx) => (
+                      <option key={`cancel-reason-${r.id}-${idx}`} value={r.id}>{r.label}</option>
                     ))}
                   </select>
                 </div>

@@ -1,6 +1,7 @@
 import React from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { X, MapPin, Phone, MessageSquare, Compass, Shield, Navigation, AlertCircle } from "lucide-react";
+import { cn } from "../lib/utils";
 
 interface LiveRiderTrackingModalProps {
   order: any;

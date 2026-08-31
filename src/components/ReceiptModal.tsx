@@ -1,7 +1,7 @@
-import React from "react";
+import React, { useState } from "react";
 import { Order } from "../types";
 import { motion, AnimatePresence } from "motion/react";
-import { X, Download, ShieldCheck, Printer, CheckCircle2, Info } from "lucide-react";
+import { X, Download, ShieldCheck, Printer, CheckCircle2, Info, Mail, Loader2, Check, Send } from "lucide-react";
 
 interface ReceiptModalProps {
   order: Order;
@@ -10,7 +10,45 @@ interface ReceiptModalProps {
 }
 
 export default function ReceiptModal({ order, isOpen, onClose }: ReceiptModalProps) {
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [emailSentSuccess, setEmailSentSuccess] = useState(false);
+  const [emailInput, setEmailInput] = useState("");
+  const [showEmailPrompt, setShowEmailPrompt] = useState(false);
+
   if (!order) return null;
+
+  const handleSendEmail = async () => {
+    const targetEmail = (emailInput || (order as any).buyerEmail || "").trim();
+    if (!targetEmail) {
+      setShowEmailPrompt(true);
+      return;
+    }
+
+    setIsSendingEmail(true);
+    try {
+      const res = await fetch("/api/send-receipt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderId: order.uniqueOrderId || order.id,
+          recipientEmail: targetEmail,
+          recipientName: order.buyerName,
+          order
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to dispatch receipt");
+
+      setEmailSentSuccess(true);
+      setShowEmailPrompt(false);
+      setTimeout(() => setEmailSentSuccess(false), 4000);
+    } catch (err: any) {
+      alert("Email Dispatch Error: " + err.message);
+    } finally {
+      setIsSendingEmail(false);
+    }
+  };
 
   const handlePrint = () => {
     window.print();
@@ -87,7 +125,21 @@ ${divider}
             className="relative w-full max-w-md bg-[#faf8f5] dark:bg-[#faf8f5] rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-stone-200 text-stone-800 print:shadow-none print:border-none print:rounded-none print:max-w-full print:bg-white print:text-black font-mono text-xs"
           >
             {/* Action Buttons (Hidden on print) */}
-            <div className="absolute top-4 right-4 z-20 flex gap-2 print:hidden">
+            <div className="absolute top-4 right-4 z-20 flex items-center gap-2 print:hidden">
+              <button
+                onClick={handleSendEmail}
+                disabled={isSendingEmail}
+                className="p-2.5 bg-white/95 rounded-xl text-stone-700 hover:text-orange-600 transition-all border border-stone-200 active:scale-95 shadow-sm flex items-center gap-1.5"
+                title="Send Receipt to Email via Brevo"
+              >
+                {isSendingEmail ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-orange-600" />
+                ) : emailSentSuccess ? (
+                  <Check className="w-4 h-4 text-emerald-600" />
+                ) : (
+                  <Mail className="w-4 h-4" />
+                )}
+              </button>
               <button
                 onClick={handlePrint}
                 className="p-2.5 bg-white/95 rounded-xl text-stone-700 hover:text-stone-900 transition-all border border-stone-200 active:scale-95 shadow-sm"
@@ -273,12 +325,40 @@ ${divider}
               </div>
             </div>
 
-            {/* Download/Print controls for quick mobile action */}
+            {/* Email Prompt Bar if recipient email is needed */}
+            {showEmailPrompt && (
+              <div className="p-3 bg-orange-50 border-t border-orange-200 flex items-center gap-2 print:hidden">
+                <input
+                  type="email"
+                  value={emailInput}
+                  onChange={(e) => setEmailInput(e.target.value)}
+                  placeholder="Enter email to receive receipt..."
+                  className="flex-1 px-3 py-1.5 rounded-lg bg-white border border-orange-200 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-orange-500 font-sans"
+                />
+                <button
+                  onClick={handleSendEmail}
+                  disabled={isSendingEmail}
+                  className="px-3 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold font-sans uppercase tracking-wider flex items-center gap-1 shrink-0"
+                >
+                  {isSendingEmail ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                  Send
+                </button>
+              </div>
+            )}
+
+            {/* Download/Print/Email controls for quick mobile action */}
             <div className="p-4 bg-stone-100 border-t border-stone-200 sm:flex sm:justify-between items-center print:hidden">
               <span className="text-[9px] text-stone-500 uppercase font-black tracking-widest block sm:inline mb-2 sm:mb-0">
-                Safe Campus Marketplace
+                {emailSentSuccess ? "✅ Receipt Dispatched to Inbox" : "Safe Campus Marketplace"}
               </span>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => setShowEmailPrompt(!showEmailPrompt)}
+                  className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-orange-600 text-white rounded-xl text-[10px] font-bold hover:bg-orange-700 transition-colors uppercase tracking-wider"
+                >
+                  <Mail className="w-3 h-3" />
+                  Email Receipt
+                </button>
                 <button
                   onClick={handleDownload}
                   className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-[10px] font-bold hover:bg-indigo-700 transition-colors uppercase tracking-wider"
