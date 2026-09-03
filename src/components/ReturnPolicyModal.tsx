@@ -104,7 +104,7 @@ export default function ReturnPolicyModal({ isOpen, onClose, onViewOrders }: Ret
                   <div className="p-3.5 bg-slate-50 dark:bg-zinc-800/60 border border-slate-200 dark:border-zinc-700/60 rounded-2xl space-y-1.5">
                     <div className="flex items-center gap-2 font-bold text-slate-900 dark:text-white text-xs">
                       <Clock className="w-4 h-4 text-orange-500 shrink-0" />
-                      <span>24-48 Hr Inspection Period</span>
+                      <span>72 Hr Escrow Inspection Period</span>
                     </div>
                     <p className="text-[11px] text-slate-500 dark:text-zinc-400">
                       Take time to test electronics, check textbook pages, or verify clothing fit before releasing payment.

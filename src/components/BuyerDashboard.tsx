@@ -274,18 +274,6 @@ export default function BuyerDashboard({ user, setActiveTab, onBack }: BuyerDash
                         )}>
                           {order.status.replace(/-/g, ' ')}
                         </span>
-                        {order.sellerId && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              window.dispatchEvent(new CustomEvent('open-chat', { detail: order.sellerId }));
-                            }}
-                            className="p-2.5 text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/15 rounded-xl transition-all"
-                            title="Chat with Seller"
-                          >
-                            <MessageCircle className="w-4 h-4" />
-                          </button>
-                        )}
                         <button
                           onClick={(e) => {
                             e.stopPropagation();

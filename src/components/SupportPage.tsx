@@ -125,7 +125,7 @@ export default function SupportPage({ user, onBack, mode = "support" }: SupportP
   const faqs = [
     {
       q: "How does SHOPIVERSITY Escrow protect me?",
-      a: "When you purchase an item, your funds are safely held in escrow. They are only released to the vendor after you confirm delivery or after 48 hours pass without any disputes."
+      a: "When you purchase an item, your funds are safely held in escrow. They are only released to the vendor after you confirm delivery or after 72 hours pass without any disputes."
     },
     {
       q: "What should I do if my order is not delivered?",

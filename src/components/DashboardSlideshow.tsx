@@ -84,7 +84,7 @@ export const SELLER_SLIDES: SlideItem[] = [
   {
     id: "seller-payouts",
     title: "Automated Bank Payouts",
-    subtitle: "Your earnings are automatically deposited directly to your bank account with reliable 48-hour escrow protection.",
+    subtitle: "Your earnings are automatically deposited directly to your bank account with reliable 72-hour escrow protection.",
     tag: "Payouts & Escrow",
     tagIcon: Wallet,
     image: "https://images.unsplash.com/photo-1559526324-4b87b5e36e44?auto=format&fit=crop&w=1920&q=80",

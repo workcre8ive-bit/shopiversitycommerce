@@ -26,7 +26,8 @@ import {
   MessageSquare,
   Menu,
   Truck,
-  ShoppingCart
+  ShoppingCart,
+  UserPlus
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { motion, AnimatePresence } from "motion/react";
@@ -61,14 +62,13 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
 
   const navItems = !user ? [
     { id: "market", label: "Marketplace", icon: Store },
-    { id: "cart", label: "My Cart", icon: ShoppingCart },
+    { id: "signup", label: "Sign Up", icon: UserPlus },
     { id: "search", label: "Search", icon: Search },
     { id: "logistics", label: "Campus Logistics", icon: Truck },
     { id: "settings", label: "Sign In", icon: User },
   ] : (user?.state === "Logistics Partner") ? [
     ...adminItem,
     { id: "logistics", label: "Campus Logistics Hub", icon: Truck },
-    { id: "messages", label: "Messages", icon: MessageSquare },
     { id: "notifications", label: "Notifications", icon: Bell },
     { id: "support", label: "Customer Support", icon: HeartHandshake },
     { id: "feedback-help", label: "Feedback & Help", icon: MessageSquare },
@@ -86,7 +86,6 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
     { id: "support", label: "Customer Support", icon: HeartHandshake },
     { id: "feedback-help", label: "Feedback & Help", icon: MessageSquare },
     { id: "notifications", label: "Notifications", icon: Bell },
-    { id: "messages", label: "Messages", icon: MessageSquare },
     { id: "settings", label: "Settings", icon: Settings },
   ] : activeRole === "seller" ? [
     ...adminItem,
@@ -103,7 +102,6 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
     { id: "support", label: "Customer Support", icon: HeartHandshake },
     { id: "feedback-help", label: "Feedback & Help", icon: MessageSquare },
     { id: "notifications", label: "Notifications", icon: Bell },
-    { id: "messages", label: "Messages", icon: MessageSquare },
     { id: "settings", label: "Settings", icon: Settings },
   ] : [
     ...adminItem,
@@ -118,7 +116,6 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
     { id: "feedback-help", label: "Feedback & Help", icon: MessageSquare },
     { id: "history", label: "Product Trash", icon: Trash2 },
     { id: "notifications", label: "Notifications", icon: Bell },
-    { id: "messages", label: "Messages", icon: MessageSquare },
     { id: "settings", label: "Profile", icon: User },
   ];
 

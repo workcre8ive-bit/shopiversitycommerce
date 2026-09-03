@@ -24,7 +24,6 @@ import SupportPage from "./components/SupportPage";
 import AuthPage from "./components/AuthPage";
 import { ProductCard, ProductCardSkeleton } from "./components/ProductCard";
 import ProductDetail from "./components/ProductDetail";
-import CartDrawer from "./components/CartDrawer";
 import CartPage from "./components/CartPage";
 import SellerDashboard from "./components/SellerDashboard";
 import ProfileSettings from "./components/ProfileSettings";
@@ -37,6 +36,7 @@ import AdminDashboard from "./components/AdminDashboard";
 import SecretAdminGatewayModal from "./components/SecretAdminGatewayModal";
 import ChatView from "./components/Chat/ChatView";
 import TermsAndConditions from "./components/TermsAndConditions";
+import PrivacyPolicy from "./components/PrivacyPolicy";
 import ReturnPolicyModal from "./components/ReturnPolicyModal";
 import Carousel from "./components/HeroCarousel";
 import Logo from "./components/Logo";
@@ -79,7 +79,8 @@ import {
   Palette,
   Paintbrush,
   Truck,
-  ShieldAlert
+  ShieldAlert,
+  UserPlus
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -369,6 +370,7 @@ export default function App() {
   }, []);
 
   const [activeRole, setActiveRole] = React.useState<"buyer" | "seller">("buyer");
+  const [authMode, setAuthMode] = React.useState<"login" | "signup">("signup");
   const [chatWithUserId, setChatWithUserId] = React.useState<string | null>(null);
   const [isCartOpen, setIsCartOpen] = React.useState(false);
   const [isReturnPolicyOpen, setIsReturnPolicyOpen] = React.useState(false);
@@ -378,6 +380,12 @@ export default function App() {
   const [connectionError, setConnectionError] = React.useState<string | null>(null);
   const [needsProfile, setNeedsProfile] = React.useState(false);
   const [hibernationMessage, setHibernationMessage] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (currentUser && (activeTab === "auth" || activeTab === "signup")) {
+      setActiveTab("market");
+    }
+  }, [currentUser, activeTab, setActiveTab]);
 
   const handleGoBack = React.useCallback(() => {
     if (viewingProduct) {
@@ -892,7 +900,8 @@ export default function App() {
         formResponses,
         previousTab: activeTab
       });
-      setActiveTab("settings");
+      setAuthMode("signup");
+      setActiveTab("signup");
       return;
     }
 
@@ -942,7 +951,7 @@ export default function App() {
         },
       ];
     });
-    setIsCartOpen(true);
+    setActiveTab("cart");
     triggerDynamicIsland("Added to Cart! 🛒");
 
     // Analytics: Log add to cart
@@ -1196,7 +1205,7 @@ export default function App() {
   }
 
   // Determine if we should show AuthPage based on selected tab for non-logged users
-  const restrictedTabs = ["settings", "orders", "notifications", "messages", "history", "referrals", "dashboard", "analytics", "add-product", "products", "admin"];
+  const restrictedTabs = ["settings", "orders", "notifications", "messages", "history", "referrals", "dashboard", "analytics", "add-product", "products", "admin", "auth", "signup"];
   const isTabRestricted = restrictedTabs.includes(activeTab);
   
   const isUserAdmin = currentUser?.role === "admin" || 
@@ -1282,6 +1291,11 @@ export default function App() {
         {activeTab === "referrals" && (
           <span className="hidden sm:inline-block text-xs font-bold text-slate-700 dark:text-slate-300 font-sans">Referral Network</span>
         )}
+        {(activeTab === "auth" || activeTab === "signup") && (
+          <span className="hidden sm:inline-block text-xs font-bold text-slate-700 dark:text-slate-300 font-sans">
+            {authMode === "signup" ? "Create Account" : "Sign In"}
+          </span>
+        )}
         {activeTab === "orders" && (
           <span className="hidden sm:inline-block text-xs font-bold text-slate-700 dark:text-slate-300 font-sans">
             {activeRole === "seller" ? "Sales Orders" : "My Orders"}
@@ -1291,26 +1305,42 @@ export default function App() {
           <span className="hidden sm:inline-block text-xs font-bold text-slate-700 dark:text-slate-300 font-sans">Inbox Chats</span>
         )}
 
-        {/* Right actions: Theme toggle and Cart */}
+        {/* Right actions: Theme toggle and Cart / Sign Up */}
         <div className="flex items-center gap-2 sm:gap-3 md:gap-4 shrink-0">
-          {/* Cart with count (only in buyer explore tab or when items in cart) */}
-          {(activeRole === "buyer" || cart.length > 0) && (
+          {!currentUser ? (
             <button 
-              onClick={() => setActiveTab("cart")}
-              className={cn(
-                "relative p-1.5 hover:bg-orange-50 dark:hover:bg-zinc-800/80 rounded-xl cursor-pointer transition-colors border-none",
-                activeTab === "cart" ? "bg-orange-100/70 dark:bg-orange-950/40 text-[#ff6b00]" : "text-[#ff6b00]"
-              )}
-              aria-label="View shopping cart"
-              title="Shopping Cart"
+              id="header-signup-btn"
+              onClick={() => {
+                setAuthMode("signup");
+                setActiveTab("signup");
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 sm:px-3.5 sm:py-1.5 bg-[#ff6b00] hover:bg-[#ea6200] active:scale-95 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer border-none"
+              title="Sign Up / Create Account"
             >
-              <ShoppingCart className="w-5 h-5" />
-              {cart.length > 0 && (
-                <span className="absolute -top-0.5 -right-0.5 px-1 bg-[#ff6b00] text-[8px] font-black text-white rounded-full min-w-[14px] h-[14px] flex items-center justify-center border border-white dark:border-zinc-900 leading-none">
-                  {cart.reduce((acc, item) => acc + item.quantity, 0)}
-                </span>
-              )}
+              <UserPlus className="w-4 h-4 shrink-0" />
+              <span>Sign Up</span>
             </button>
+          ) : (
+            /* Cart with count (only in buyer explore tab or when items in cart) */
+            (activeRole === "buyer" || cart.length > 0) && (
+              <button 
+                id="header-cart-btn"
+                onClick={() => setActiveTab("cart")}
+                className={cn(
+                  "relative p-1.5 hover:bg-orange-50 dark:hover:bg-zinc-800/80 rounded-xl cursor-pointer transition-colors border-none",
+                  activeTab === "cart" ? "bg-orange-100/70 dark:bg-orange-950/40 text-[#ff6b00]" : "text-[#ff6b00]"
+                )}
+                aria-label="View shopping cart"
+                title="Shopping Cart"
+              >
+                <ShoppingCart className="w-5 h-5" />
+                {cart.length > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 px-1 bg-[#ff6b00] text-[8px] font-black text-white rounded-full min-w-[14px] h-[14px] flex items-center justify-center border border-white dark:border-zinc-900 leading-none">
+                    {cart.reduce((acc, item) => acc + item.quantity, 0)}
+                  </span>
+                )}
+              </button>
+            )
           )}
 
           {/* Theme Mode toggle */}
@@ -1370,7 +1400,7 @@ export default function App() {
                 exit={{ opacity: 0, y: -10 }}
                 className="min-h-full flex flex-col justify-center"
               >
-                <AuthPage initialNeedsProfile={needsProfile} />
+                <AuthPage initialNeedsProfile={needsProfile} initialMode={authMode} />
               </motion.div>
             ) : activeTab === "admin" && isUserAdmin ? (
               <motion.div
@@ -2037,7 +2067,20 @@ export default function App() {
                 exit={{ opacity: 0, y: -10 }}
                 className="p-6"
               >
-                <TermsAndConditions onBack={handleGoBack} />
+                <TermsAndConditions 
+                  onBack={handleGoBack} 
+                  onNavigatePrivacy={() => setActiveTab("privacy")}
+                />
+              </motion.div>
+            ) : activeTab === "privacy" ? (
+              <motion.div 
+                key="privacy"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="p-6"
+              >
+                <PrivacyPolicy onBack={handleGoBack} />
               </motion.div>
             ) : activeTab === "cart" ? (
               <motion.div 
@@ -2105,27 +2148,6 @@ export default function App() {
           user={currentUser}
           onSelectAllCategories={() => setFilterCategory("All")}
         />
-
-        <CartDrawer
-          isOpen={isCartOpen}
-          onClose={() => setIsCartOpen(false)}
-        cart={cart}
-        onUpdateQuantity={(productId, delta, menuItemId, ticketTierId) => {
-          setCart(prev => prev.map(item => 
-            (item.productId === productId && item.menuItemId === menuItemId && item.ticketTierId === ticketTierId)
-              ? { ...item, quantity: Math.max(0, item.quantity + delta) } 
-              : item
-          ).filter(item => item.quantity > 0));
-        }}
-        onRemove={(productId, menuItemId, ticketTierId) => 
-          setCart(prev => prev.filter(item => 
-            !(item.productId === productId && item.menuItemId === menuItemId && item.ticketTierId === ticketTierId)
-          ))
-        }
-        onClear={() => setCart([])}
-        currentUser={currentUser}
-        setActiveTab={setActiveTab}
-      />
 
       <ReturnPolicyModal
         isOpen={isReturnPolicyOpen}

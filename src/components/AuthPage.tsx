@@ -54,6 +54,7 @@ import { compressImage } from "../lib/imageUtils";
 import { SCHOOL_TYPES, NIGERIAN_SCHOOLS } from "../constants/schools";
 import { NIGERIAN_STATES, STATE_CITIES } from "../constants/locations";
 import TermsAndConditions from "./TermsAndConditions";
+import PrivacyPolicy from "./PrivacyPolicy";
 import campusMarketTrading from "../assets/images/campus_market_trading_1788161927669.jpg";
 import campusDeliveryRider from "../assets/images/campus_delivery_rider_1788161947290.jpg";
 import campusStudentFashion from "../assets/images/campus_student_fashion_1788161963031.jpg";
@@ -68,8 +69,16 @@ const BACKGROUND_IMAGES = [
   campusAuthBg
 ];
 
-export default function AuthPage({ initialNeedsProfile = false }: { initialNeedsProfile?: boolean }) {
-  const [isLogin, setIsLogin] = React.useState(!initialNeedsProfile);
+export default function AuthPage({ 
+  initialNeedsProfile = false,
+  initialMode
+}: { 
+  initialNeedsProfile?: boolean;
+  initialMode?: "login" | "signup";
+}) {
+  const [isLogin, setIsLogin] = React.useState(
+    initialNeedsProfile ? false : (initialMode ? initialMode === "login" : true)
+  );
   const [role, setRole] = React.useState<"buyer" | "seller">("buyer");
   const [step, setStep] = React.useState(1);
   const [loading, setLoading] = React.useState(false);
@@ -77,11 +86,21 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({});
   const [currentBgIndex, setCurrentBgIndex] = React.useState(0);
 
-  // Background picture rotation every 3 seconds
+  // Synchronize mode if prop changes
+  React.useEffect(() => {
+    if (!initialNeedsProfile && initialMode) {
+      setIsLogin(initialMode === "login");
+      setStep(1);
+      setError("");
+      setFieldErrors({});
+    }
+  }, [initialMode, initialNeedsProfile]);
+
+  // Background picture rotation every 3.5 seconds
   React.useEffect(() => {
     const timer = setInterval(() => {
       setCurrentBgIndex((prev) => (prev + 1) % BACKGROUND_IMAGES.length);
-    }, 3000);
+    }, 3500);
     return () => clearInterval(timer);
   }, []);
 
@@ -126,6 +145,7 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
   const [signupSuccess, setSignupSuccess] = React.useState(false);
   const [showTerms, setShowTerms] = React.useState(false);
   const [showTermsPage, setShowTermsPage] = React.useState(false);
+  const [showPrivacyPage, setShowPrivacyPage] = React.useState(false);
   const [isVerifyingId, setIsVerifyingId] = React.useState(false);
   const [idVerificationError, setIdVerificationError] = React.useState("");
 
@@ -1089,7 +1109,21 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
   if (showTermsPage) {
     return (
       <div className="min-h-screen bg-white dark:bg-zinc-950 p-6 overflow-y-auto">
-        <TermsAndConditions onBack={() => setShowTermsPage(false)} />
+        <TermsAndConditions 
+          onBack={() => setShowTermsPage(false)} 
+          onNavigatePrivacy={() => {
+            setShowTermsPage(false);
+            setShowPrivacyPage(true);
+          }}
+        />
+      </div>
+    );
+  }
+
+  if (showPrivacyPage) {
+    return (
+      <div className="min-h-screen bg-white dark:bg-zinc-950 p-6 overflow-y-auto">
+        <PrivacyPolicy onBack={() => setShowPrivacyPage(false)} />
       </div>
     );
   }
@@ -1840,9 +1874,17 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
                     <button 
                       type="button"
                       onClick={() => setShowTermsPage(true)}
-                      className="text-[#0066c0] hover:underline hover:text-[#c45500] font-sans border-none bg-transparent cursor-pointer p-0"
+                      className="text-[#0066c0] hover:underline hover:text-[#c45500] font-sans border-none bg-transparent cursor-pointer p-0 font-bold"
                     >
                       Conditions of Use & Terms
+                    </button>
+                    {" "}and{" "}
+                    <button 
+                      type="button"
+                      onClick={() => setShowPrivacyPage(true)}
+                      className="text-[#0066c0] hover:underline hover:text-[#c45500] font-sans border-none bg-transparent cursor-pointer p-0 font-bold"
+                    >
+                      Privacy Policy
                     </button>.
                   </p>
                 </form>
@@ -2021,12 +2063,12 @@ export default function AuthPage({ initialNeedsProfile = false }: { initialNeeds
                       <p>SHOPIVERSITY holds your money in escrow. Sellers receive payment after you confirm delivery, minus a 5% commission.</p>
                     </section>
                     <section>
-                      <h4 className="text-slate-900 dark:text-white font-bold mb-1">2. 48-Hour Protection</h4>
-                      <p>You have 48 hours from delivery to inspect your order. After 48 hours, all sales are final.</p>
+                      <h4 className="text-slate-900 dark:text-white font-bold mb-1">2. 72-Hour Protection</h4>
+                      <p>You have 72 hours from delivery to inspect your order. After 72 hours without a dispute, all sales are final and escrow is paid to the seller.</p>
                     </section>
                     <section>
                       <h4 className="text-slate-900 dark:text-white font-bold mb-1">3. Dispute Resolution</h4>
-                      <p>Raise disputes within 48 hours. Sellers must provide proof of delivery within 24 hours of the complaint.</p>
+                      <p>Raise disputes within 72 hours. Sellers must provide proof of delivery within 24 to 48 hours of the complaint.</p>
                     </section>
                     <section>
                       <h4 className="text-slate-900 dark:text-white font-bold mb-1">4. Payment Security & Off-App Policy</h4>

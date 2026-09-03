@@ -91,14 +91,6 @@ export default function UserProfileHub({
           onClick: () => onNavigateTab("orders")
         },
         {
-          id: "messages",
-          label: "Direct Messages & Chats",
-          sublabel: "Contact sellers or buyers on campus",
-          icon: MessageSquare,
-          color: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400",
-          onClick: () => onNavigateTab("messages")
-        },
-        {
           id: "referrals",
           label: "Refer & Earn ₦1,500",
           sublabel: `Referrals: ${user?.referralCount || 0} • Share dynamic link`,
@@ -144,6 +136,14 @@ export default function UserProfileHub({
           icon: ShieldAlert,
           color: "bg-red-500/10 text-red-600 dark:text-red-400",
           onClick: () => onNavigateTab("terms")
+        },
+        {
+          id: "privacy",
+          label: "Privacy Policy",
+          sublabel: "Campus data confidentiality & safety",
+          icon: ShieldCheck,
+          color: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+          onClick: () => onNavigateTab("privacy")
         }
       ]
     }

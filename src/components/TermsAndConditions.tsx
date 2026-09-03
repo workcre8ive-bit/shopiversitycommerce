@@ -4,22 +4,33 @@ import { FileText, ChevronLeft, Shield, Scale, Lock, Info } from "lucide-react";
 
 interface TermsAndConditionsProps {
   onBack: () => void;
+  onNavigatePrivacy?: () => void;
 }
 
-export default function TermsAndConditions({ onBack }: TermsAndConditionsProps) {
+export default function TermsAndConditions({ onBack, onNavigatePrivacy }: TermsAndConditionsProps) {
   return (
-    <div className="max-w-4xl mx-auto space-y-8 pb-20">
+    <div className="max-w-4xl mx-auto space-y-8 pb-20 font-sans">
       <div className="flex items-center justify-between">
         <button 
           onClick={onBack}
-          className="flex items-center gap-2 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white transition-colors font-bold text-sm"
+          className="flex items-center gap-2 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white transition-colors font-bold text-sm bg-white dark:bg-slate-900 px-4 py-2 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs cursor-pointer active:scale-95"
         >
           <ChevronLeft className="w-4 h-4" />
           Back
         </button>
-        <div className="flex items-center gap-2 px-4 py-2 bg-slate-100 dark:bg-slate-800 rounded-2xl">
-          <FileText className="w-4 h-4 text-slate-400" />
-          <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">Last Updated: April 2024</span>
+        <div className="flex items-center gap-2">
+          {onNavigatePrivacy && (
+            <button
+              onClick={onNavigatePrivacy}
+              className="px-3.5 py-2 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 rounded-2xl text-xs font-bold hover:bg-emerald-100 transition-all border border-emerald-200/60 dark:border-emerald-800/60 cursor-pointer"
+            >
+              View Privacy Policy
+            </button>
+          )}
+          <div className="flex items-center gap-2 px-4 py-2 bg-slate-100 dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700/60">
+            <FileText className="w-4 h-4 text-slate-400" />
+            <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">Updated: August 2026</span>
+          </div>
         </div>
       </div>
 
@@ -86,38 +97,40 @@ export default function TermsAndConditions({ onBack }: TermsAndConditionsProps) 
               Escrow & Payment Before Delivery
             </h3>
             <div className="space-y-2 pl-8">
-              <p>1.1. When you pay for an item, SHOPIVERSITY holds your money in escrow. The seller will not receive payment until you confirm delivery.</p>
+              <p>1.1. When you pay for an item, SHOPIVERSITY holds your money in escrow. The seller will not receive payment until you confirm delivery or until the 72-hour protection inspection window expires.</p>
               <p>1.2. After you tap “Confirm Delivery” in the app, SHOPIVERSITY disburses payment to the seller within 24 hours, minus a 5% SHOPIVERSITY commission.</p>
+              <p>1.3. <strong>Strict Disablement of Direct Messaging:</strong> To prevent phishing, off-platform solicitation, and fraud, open messaging between buyers and sellers is disabled. All handovers and claims are managed systematically through order tracking.</p>
+              <p>1.4. <strong>Off-Platform Payment Prohibition (Severe Risk Notice):</strong> All payments must be processed directly on the SHOPIVERSITY platform. Paying sellers, merchants, or couriers outside the app (e.g. via direct bank transfer, private cash, or third-party links) completely voids all Escrow Buyer Protection, terminates 72-Hour Refund & Dispute eligibility, and results in immediate account suspension. SHOPIVERSITY cannot recover funds paid off-platform.</p>
             </div>
           </section>
 
           <section className="space-y-3">
             <h3 className="text-lg font-bold text-white dark:text-slate-900 flex items-center gap-2">
               <span className="w-6 h-6 bg-purple-500 text-white text-[10px] flex items-center justify-center rounded-full shrink-0">2</span>
-              48-Hour Buyer Protection Window
+              72-Hour Buyer Protection & Escrow Window
             </h3>
             <div className="space-y-2 pl-8">
-              <p>2.1. You have <strong>48 hours from the stated delivery time</strong> to inspect your order.</p>
-              <p>2.2. Within 48 hours, you must either:</p>
+              <p>2.1. You have <strong>72 hours from the stated delivery time</strong> to inspect your order and test product functionality.</p>
+              <p>2.2. Within 72 hours, you must either:</p>
               <ul className="list-disc pl-5 space-y-1">
-                <li>Tap <strong>“Confirm Delivery”</strong> &rarr; Seller gets paid. Case closed.</li>
-                <li>Tap <strong>“Raise Dispute”</strong> &rarr; Funds stay in escrow while we investigate.</li>
+                <li>Tap <strong>“Confirm Delivery”</strong> &rarr; Seller gets paid. Escrow is released. Case closed.</li>
+                <li>Tap <strong>“Raise Dispute / Request Refund”</strong> &rarr; Funds stay safely locked in escrow while the complaint is investigated.</li>
               </ul>
-              <p>2.3. If you do nothing for 48 hours, SHOPIVERSITY will automatically mark the order as “Delivered” and pay the seller. <strong>All sales are final after 48 hours.</strong></p>
+              <p>2.3. If you do nothing for 72 hours after delivery, SHOPIVERSITY will automatically mark the order as “Delivered” and pay the seller. <strong>All sales are final after 72 hours.</strong></p>
             </div>
           </section>
 
           <section className="space-y-3">
             <h3 className="text-lg font-bold text-white dark:text-slate-900 flex items-center gap-2">
               <span className="w-6 h-6 bg-purple-500 text-white text-[10px] flex items-center justify-center rounded-full shrink-0">3</span>
-              Disputes & Seller Response Time
+              Disputes & Resolution Timeline
             </h3>
             <div className="space-y-2 pl-8">
-              <p>3.1. If you raise a dispute, the seller has <strong>24 hours from the time you complained</strong> to provide valid proof of delivery.</p>
-              <p>3.2. <strong>Total timeline = 48 hours + 24 hours = 72 hours from the original delivery time.</strong> This is not an extra 72 hours after your complaint. If you complain at hour 47, the seller still only has until hour 72 to respond.</p>
-              <p>3.3. <strong>Valid proof of delivery includes:</strong> A signed delivery note from you, OR logistics tracking confirmation showing “Delivered”. Timestamped photos are accepted only if the courier provides them.</p>
-              <p>3.4. <strong>If seller provides valid proof within 72 hours:</strong> Order is confirmed. Seller is paid after your 48-hour protection window ends.</p>
-              <p>3.5. <strong>If seller fails to respond or provide valid proof within 72 hours:</strong> You get a full refund from escrow. The seller receives a <em>warning strike</em>. A second offense will result in <em>account suspension</em>. SHOPIVERSITY is not liable.</p>
+              <p>3.1. If you raise a dispute within the 72-hour window, the seller has <strong>24 to 48 hours from the time you complained</strong> to provide valid proof of delivery and counter-evidence.</p>
+              <p>3.2. <strong>Active Escrow Lock:</strong> When a dispute is submitted, the 72-hour automatic payout countdown is paused immediately, ensuring no merchant funds can be withdrawn until our compliance team validates the case.</p>
+              <p>3.3. <strong>Valid proof of delivery includes:</strong> A signed delivery note, handover verification ID / PIN confirmation, OR logistics tracking confirmation showing verified delivery. Timestamped photos are accepted only if provided by verified courier partners.</p>
+              <p>3.4. <strong>If seller provides valid proof:</strong> Order is confirmed and seller is paid according to escrow terms.</p>
+              <p>3.5. <strong>If seller fails to respond or provide valid proof:</strong> You receive a full refund from escrow. The seller receives a <em>warning strike</em>. A second offense results in <em>account suspension</em>.</p>
             </div>
           </section>
 

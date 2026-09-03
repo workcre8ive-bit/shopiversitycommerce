@@ -67,7 +67,7 @@ Order ID:    ${order.uniqueOrderId || order.id}
 Product ID:  ${order.uniqueProductId || order.productId || "N/A"}
              [Term 9.3: Mandated Unique Code Verified]
 Date/Time:   ${new Date(order.createdAt).toLocaleString()}
-             [Term 2.1: 48hr Protection Window Active]
+             [Term 2.1: 72hr Protection Window Active]
 Fulfillment: ${(order.deliveryType || "pickup").toUpperCase()}
              [Term 5.1: Subject to Campus Logistic SLA & Estimates]
 Payment:     ${(order.paymentStatus || "paid").toUpperCase()}
@@ -211,7 +211,7 @@ ${divider}
                       <span className="font-bold text-stone-900">{new Date(order.createdAt).toLocaleString()}</span>
                     </div>
                     <span className="text-[8px] text-indigo-600 block text-right font-sans font-bold uppercase tracking-wider">
-                      [Term 2.1] 48-Hour Protection Starts From Here
+                      [Term 2.1] 72-Hour Escrow Protection Window Starts From Delivery
                     </span>
                   </div>
 

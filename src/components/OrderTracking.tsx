@@ -409,7 +409,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
     if (e) e.preventDefault();
     if (!verifyingOrder) return;
     if (!productIdInput.trim()) {
-      setVerificationError("Please enter the 6-digit Verification OTP / PIN.");
+      setVerificationError("Please enter the Order ID or Product ID provided by the seller or courier.");
       return;
     }
 
@@ -418,27 +418,53 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
     try {
       const isPickup = verifyingOrder.deliveryType === "pickup";
       const isPod = verifyingOrder.paymentMethod === "pod" && verifyingOrder.paymentStatus !== "paid";
-      const expectedCode = verifyingOrder.deliveryOtp || verifyingOrder.pickupOtp || verifyingOrder.handoverCode;
+      const cleanInput = productIdInput.trim().toLowerCase();
 
-      // 1. Strict Server-Side Verification against order document
-      const res = await fetch("/api/orders/verify-delivery-otp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          orderId: verifyingOrder.id,
-          expectedOtp: expectedCode,
-          providedOtp: productIdInput.trim(),
-          role: "buyer",
-          actorId: auth.currentUser?.uid,
-          isPickup,
-          isPod
-        })
-      });
+      // Check valid identifiers (Order ID, Product ID, uniqueOrderId, OTP)
+      const validIdentifiers: string[] = [
+        verifyingOrder.id.toLowerCase(),
+        verifyingOrder.id.slice(0, 6).toLowerCase(),
+        verifyingOrder.id.slice(0, 8).toLowerCase(),
+      ];
+      if (verifyingOrder.uniqueOrderId) validIdentifiers.push(verifyingOrder.uniqueOrderId.toLowerCase());
+      if (verifyingOrder.orderId) validIdentifiers.push(verifyingOrder.orderId.toLowerCase());
+      if (verifyingOrder.productId) validIdentifiers.push(verifyingOrder.productId.toLowerCase());
+      if (verifyingOrder.deliveryOtp) validIdentifiers.push(verifyingOrder.deliveryOtp.toLowerCase());
+      if (verifyingOrder.pickupOtp) validIdentifiers.push(verifyingOrder.pickupOtp.toLowerCase());
+      if (verifyingOrder.handoverCode) validIdentifiers.push(verifyingOrder.handoverCode.toLowerCase());
+      if (Array.isArray(verifyingOrder.items)) {
+        verifyingOrder.items.forEach((it: any) => {
+          if (it.productId) validIdentifiers.push(it.productId.toLowerCase());
+        });
+      }
 
-      const data = await res.json().catch(() => ({}));
+      const clientMatch = validIdentifiers.some(id => id === cleanInput || cleanInput.includes(id) || id.includes(cleanInput));
 
-      if (!res.ok || data.success === false) {
-        setVerificationError(data.error || "Invalid 6-digit Verification OTP / PIN. Please check the recipient's tracking screen and try again.");
+      // 1. Server-Side Verification against order document
+      let serverConfirmed = false;
+      try {
+        const res = await fetch("/api/orders/verify-delivery-otp", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            orderId: verifyingOrder.id,
+            providedOtp: productIdInput.trim(),
+            role: "buyer",
+            actorId: auth.currentUser?.uid,
+            isPickup,
+            isPod
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.success !== false) {
+          serverConfirmed = true;
+        }
+      } catch (apiErr) {
+        console.warn("Backend verification endpoint unavailable, evaluating client match:", apiErr);
+      }
+
+      if (!clientMatch && !serverConfirmed) {
+        setVerificationError("Invalid Order ID or Product ID. Please ask your seller or logistics courier for the correct ID provided on your package handover receipt.");
         setConfirmingDelivery(false);
         return;
       }
@@ -536,13 +562,15 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
 
   const getComplaintCountdown = (order: Order) => {
     if (order.status !== "completed") return null;
+    const isPaid = order.paymentStatus === "paid" || order.paymentMethod === "online";
+    if (!isPaid) return null;
     
     const baseTime = order.deliveredAt || order.updatedAt || order.createdAt;
     if (!baseTime) return null;
     
     const deliveredAt = new Date(baseTime).getTime();
-    const fortyEightHours = 48 * 60 * 60 * 1000;
-    const expiryTime = deliveredAt + fortyEightHours;
+    const seventyTwoHours = 72 * 60 * 60 * 1000;
+    const expiryTime = deliveredAt + seventyTwoHours;
     const remaining = expiryTime - currentTime;
 
     if (remaining <= 0) return "expired";
@@ -993,15 +1021,6 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                     </div>
                   </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  {order.sellerId && (
-                    <button
-                      onClick={() => window.dispatchEvent(new CustomEvent('open-chat', { detail: order.sellerId }))}
-                      className="px-3 py-1.5 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 rounded-xl font-bold text-[10px] uppercase tracking-wider flex items-center gap-2 hover:bg-indigo-100 transition-all border border-indigo-100/50 dark:border-indigo-900/30"
-                    >
-                      <MessageSquare className="w-3 h-3" />
-                      Chat with Seller
-                    </button>
-                  )}
                   <span className={cn(
                     "px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider flex items-center gap-2",
                     order.deliveryType === "delivery" ? "bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400" : "bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400"
@@ -1011,10 +1030,10 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                   </span>
                   <span className={cn(
                     "px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider flex items-center gap-2",
-                    order.paymentMethod === "online" ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400" : "bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400"
+                    (order.paymentStatus === "paid" || order.paymentMethod === "online") ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400" : "bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400"
                   )}>
-                    {order.paymentMethod === "online" ? <CreditCard className="w-3 h-3" /> : <Wallet className="w-3 h-3" />}
-                    {order.paymentMethod === "online" ? "Paid Online" : "Pay on Delivery"}
+                    {(order.paymentStatus === "paid" || order.paymentMethod === "online") ? <CreditCard className="w-3 h-3" /> : <Wallet className="w-3 h-3" />}
+                    {(order.paymentStatus === "paid" || order.paymentMethod === "online") ? "Paid Online (In Escrow)" : "Pay on Delivery (Unpaid)"}
                   </span>
                   <button
                     onClick={() => handleClearIndividual(order)}
@@ -1034,60 +1053,70 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                     {/* Complaint/Support Window */}
                     <div className={cn(
                       "rounded-[2rem] p-6 border transition-all",
-                      getComplaintCountdown(order) !== "expired" 
-                        ? "bg-amber-50 dark:bg-amber-900/10 border-amber-100 dark:border-amber-900/20 shadow-lg shadow-amber-500/5 rotate-1" 
+                      (order.paymentStatus === "paid" || order.paymentMethod === "online") && getComplaintCountdown(order) !== "expired" 
+                        ? "bg-amber-50 dark:bg-amber-900/10 border-amber-100 dark:border-amber-900/20 shadow-lg shadow-amber-500/5" 
                         : "bg-slate-50 dark:bg-slate-900/50 border-slate-100 dark:border-slate-800"
                     )}>
                       <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center gap-3">
                           <div className={cn(
                             "w-10 h-10 rounded-xl flex items-center justify-center",
-                            getComplaintCountdown(order) !== "expired" ? "bg-amber-100 text-amber-600" : "bg-slate-100 text-slate-400"
+                            (order.paymentStatus === "paid" || order.paymentMethod === "online") && getComplaintCountdown(order) !== "expired" ? "bg-amber-100 text-amber-600" : "bg-slate-100 text-slate-400"
                           )}>
                             <ShieldCheck className="w-5 h-5" />
                           </div>
                           <div>
                             <h5 className="text-[10px] font-black uppercase tracking-wider text-slate-900 dark:text-white">Active Buyer Protection</h5>
-                            <p className="text-[9px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">To be reported within 48hrs</p>
+                            <p className="text-[9px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">
+                              {(order.paymentStatus === "paid" || order.paymentMethod === "online") ? "72h Escrow Inspection Window" : "Payment Required for Escrow"}
+                            </p>
                           </div>
                         </div>
-                        {getComplaintCountdown(order) !== "expired" ? (
+                        {!(order.paymentStatus === "paid" || order.paymentMethod === "online") ? (
+                          <div className="px-2.5 py-1 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 rounded-full text-[8px] font-black uppercase tracking-wider">
+                            Unpaid Order
+                          </div>
+                        ) : getComplaintCountdown(order) !== "expired" ? (
                           <div className="flex flex-col items-end">
                             <div className="flex items-center gap-1.5 text-[10px] font-black text-amber-600 animate-pulse">
                               <div className="w-2 h-2 bg-amber-500 rounded-full" />
                               {getComplaintCountdown(order)}
                             </div>
-                            <span className="text-[8px] font-bold text-amber-500/50 uppercase tracking-widest">Time Remaining</span>
+                            <span className="text-[8px] font-bold text-amber-500/50 uppercase tracking-widest">Countdown Active</span>
                           </div>
                         ) : (
                           <div className="px-3 py-1 bg-slate-200 dark:bg-slate-800 text-slate-500 rounded-full text-[8px] font-black uppercase tracking-widest">
-                            Protection Expired
+                            72h Window Expired
                           </div>
                         )}
                       </div>
                       
                       <div className="space-y-4">
-                        <div className="p-4 bg-white/60 dark:bg-slate-900/40 rounded-2xl border border-white/40 dark:border-slate-800/40 space-y-3">
+                        <div className="p-4 bg-white/70 dark:bg-slate-900/50 rounded-2xl border border-slate-200/60 dark:border-slate-800/60 space-y-3">
                            <div className="space-y-2">
                              <p className="text-[10px] text-slate-600 dark:text-slate-400 font-medium leading-relaxed">
-                               <span className="font-black text-slate-900 dark:text-white uppercase mr-1">Term 2.1:</span> You have 48 hours from the stated delivery time to inspect your order and raise a dispute if there are issues.
+                               <span className="font-black text-slate-900 dark:text-white uppercase mr-1">Term 2.1:</span> You have <strong>72 hours</strong> from delivery to inspect your order and raise a dispute if there are issues.
                              </p>
                              <p className="text-[10px] text-slate-600 dark:text-slate-400 font-medium leading-relaxed">
-                               <span className="font-black text-slate-900 dark:text-white uppercase mr-1">Term 2.3:</span> If you do nothing for 48 hours, SHOPIVERSITY will automatically mark the order as "Delivered" and pay the seller. All sales are final after 48 hours.
+                               <span className="font-black text-slate-900 dark:text-white uppercase mr-1">Term 2.3:</span> If no dispute is raised for 72 hours, SHOPIVERSITY marks the order final and pays the seller.
                              </p>
+                             {/* Off-platform payment implication point */}
+                             <div className="p-2.5 bg-red-50 dark:bg-red-950/30 border border-red-200/70 dark:border-red-900/40 rounded-xl text-[10px] text-red-700 dark:text-red-300 font-medium leading-relaxed">
+                               <span className="font-black uppercase mr-1">Term 7.2 & 1.4 (Off-Platform Payment Risk):</span> Never pay sellers or couriers outside the SHOPIVERSITY app (e.g. personal cash or direct transfers). Paying outside completely voids Escrow Protection and forfeits your 72-hour refund eligibility.
+                             </div>
                            </div>
-                           <div className="flex items-center gap-2 text-[9px] text-amber-600/60 font-bold italic border-t border-amber-100/50 pt-2">
+                           <div className="flex items-center gap-2 text-[9px] text-amber-600/80 font-bold italic border-t border-amber-100/50 pt-2">
                               <Info className="w-3 h-3 shrink-0" />
-                              Points related to Section 2 of the Terms of Service
+                              Governed by SHOPIVERSITY 72-Hour Escrow & Security Rules
                            </div>
                         </div>
 
-                        {getComplaintCountdown(order) !== "expired" && (
+                        {(order.paymentStatus === "paid" || order.paymentMethod === "online") && getComplaintCountdown(order) !== "expired" && (!order.disputeStatus || order.disputeStatus === "none") && (
                           <button
                             onClick={() => setDisputeModalOrder(order)}
-                            className="w-full h-12 bg-slate-900 dark:bg-amber-500 text-white dark:text-slate-950 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2 shadow-xl shadow-amber-500/10"
+                            className="w-full h-12 bg-slate-900 dark:bg-amber-500 text-white dark:text-slate-950 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2 shadow-xl shadow-amber-500/10 cursor-pointer"
                           >
-                            <MessageSquare className="w-4 h-4" />
+                            <AlertCircle className="w-4 h-4" />
                             Report a Problem (Raise Dispute)
                           </button>
                         )}
@@ -1749,7 +1778,12 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                         </div>
                       ) : order.deliveryType === "pickup" ? (
                         <button
-                          onClick={() => handleConfirmPickup(order)}
+                          onClick={() => {
+                            setVerifyingOrder(order);
+                            setProductIdInput("");
+                            setVerificationError(null);
+                            setShowIdVerification(true);
+                          }}
                           disabled={
                             markingId === order.id || 
                             order.disputeStatus === "active" || 
@@ -1793,35 +1827,51 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                         </button>
                       )}
 
-                      {/* Refund Action Button */}
-                      {(!order.refundStatus || order.refundStatus === "none" || order.refundStatus === "rejected") && order.status !== "cancelled" && (
-                        <button
-                          onClick={() => setRefundModalOrder(order)}
-                          className="w-full py-3 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 rounded-2xl font-bold text-xs hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-all flex items-center justify-center gap-2 border border-indigo-100 dark:border-indigo-900/30 shadow-sm"
-                        >
-                          <ShieldAlert className="w-3.5 h-3.5" />
-                          Request Refund (1.5% Fee)
-                        </button>
-                      )}
+                      {/* Refund & Dispute Action Buttons - ONLY shown after payment is made */}
+                      {(() => {
+                        const isOrderPaid = order.paymentStatus === "paid" || order.paymentMethod === "online";
+                        const canRequestRefund = isOrderPaid && (!order.refundStatus || order.refundStatus === "none" || order.refundStatus === "rejected") && order.status !== "cancelled";
+                        const canRaiseDispute = isOrderPaid && (order.status === "Out To Pickup Station" || order.status === "Out For Delivery" || order.status === "Ready For Pickup" || order.status === "accepted" || order.status === "out_for_delivery" || order.status === "transit") && (!order.disputeStatus || order.disputeStatus === "none");
+
+                        return (
+                          <>
+                            {canRequestRefund && (
+                              <button
+                                onClick={() => setRefundModalOrder(order)}
+                                className="w-full py-3 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 rounded-2xl font-bold text-xs hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-all flex items-center justify-center gap-2 border border-indigo-100 dark:border-indigo-900/30 shadow-sm cursor-pointer"
+                              >
+                                <ShieldAlert className="w-3.5 h-3.5" />
+                                Request Refund (1.5% Fee)
+                              </button>
+                            )}
+
+                            {canRaiseDispute && (
+                              <button
+                                onClick={() => setDisputeModalOrder(order)}
+                                className="w-full py-3 bg-amber-50 dark:bg-amber-900/10 text-amber-600 dark:text-amber-400 rounded-2xl font-bold text-xs hover:bg-amber-100 dark:hover:bg-amber-900/20 transition-all flex items-center justify-center gap-2 border border-amber-200/50 dark:border-amber-900/30 cursor-pointer"
+                              >
+                                <AlertCircle className="w-3.5 h-3.5" />
+                                Raise Escrow Dispute
+                              </button>
+                            )}
+
+                            {!isOrderPaid && (
+                              <div className="p-2.5 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200/60 dark:border-slate-700/50 text-[10px] text-slate-500 dark:text-slate-400 font-medium text-center">
+                                🔒 Escrow Refund & Dispute eligibility activates after in-app payment is confirmed.
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
 
                       {/* Audit Trail Button */}
                       <button
                         onClick={() => setAuditModalOrder(order)}
-                        className="w-full py-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700/60 text-slate-700 dark:text-slate-300 rounded-2xl font-bold text-xs transition-all flex items-center justify-center gap-2"
+                        className="w-full py-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700/60 text-slate-700 dark:text-slate-300 rounded-2xl font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
                       >
                         <History className="w-3.5 h-3.5 text-slate-500" />
                         View Security Audit Trail
                       </button>
-
-                      {(order.status === "Out To Pickup Station" || order.status === "Out For Delivery" || order.status === "Ready For Pickup" || order.status === "accepted" || order.status === "out_for_delivery" || order.status === "transit") && (!order.disputeStatus || order.disputeStatus === "none") && (
-                        <button
-                          onClick={() => setDisputeModalOrder(order)}
-                          className="w-full py-3 bg-amber-50 dark:bg-amber-900/10 text-amber-600 dark:text-amber-400 rounded-2xl font-bold text-xs hover:bg-amber-100 dark:hover:bg-amber-900/20 transition-all flex items-center justify-center gap-2 border border-amber-200/50 dark:border-amber-900/30"
-                        >
-                          <AlertCircle className="w-3.5 h-3.5" />
-                          Raise Escrow Dispute
-                        </button>
-                      )}
 
                       {/* Anti-Scam Cancellation Lock & Role Guards */}
                       {((order.status === "pending" || order.status === "Pending Seller Acceptance") && order.status !== "cancelled" && order.status !== "completed") ? (
@@ -1830,7 +1880,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                           className="w-full py-3.5 bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 rounded-2xl font-bold text-xs hover:bg-red-100 dark:hover:bg-red-900/40 transition-all flex items-center justify-center gap-2 border border-red-200/50 dark:border-red-900/30 shadow-xs cursor-pointer"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
-                          Cancel Order & Process Refund
+                          Cancel Order
                         </button>
                       ) : (order.status !== "cancelled" && order.status !== "completed" && order.status !== "acquired") ? (
                         <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-700/50 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
@@ -1847,18 +1897,28 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                   {/* Completed order actions: Refund and Audit Trail buttons */}
                   {order.status === "completed" && (
                     <div className="flex flex-col gap-2 pt-2">
-                      {(!order.refundStatus || order.refundStatus === "none" || order.refundStatus === "rejected") && (
-                        <button
-                          onClick={() => setRefundModalOrder(order)}
-                          className="w-full py-3 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 rounded-2xl font-bold text-xs hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-all flex items-center justify-center gap-2 border border-indigo-100 dark:border-indigo-900/30 shadow-sm"
-                        >
-                          <ShieldAlert className="w-3.5 h-3.5" />
-                          Request Refund (1.5% Fee)
-                        </button>
-                      )}
+                      {(() => {
+                        const isOrderPaid = order.paymentStatus === "paid" || order.paymentMethod === "online";
+                        const isWindowActive = getComplaintCountdown(order) !== "expired";
+                        const canRequestRefund = isOrderPaid && isWindowActive && (!order.refundStatus || order.refundStatus === "none" || order.refundStatus === "rejected");
+
+                        return (
+                          <>
+                            {canRequestRefund && (
+                              <button
+                                onClick={() => setRefundModalOrder(order)}
+                                className="w-full py-3 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 rounded-2xl font-bold text-xs hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-all flex items-center justify-center gap-2 border border-indigo-100 dark:border-indigo-900/30 shadow-sm cursor-pointer"
+                              >
+                                <ShieldAlert className="w-3.5 h-3.5" />
+                                Request Refund (1.5% Fee)
+                              </button>
+                            )}
+                          </>
+                        );
+                      })()}
                       <button
                         onClick={() => setAuditModalOrder(order)}
-                        className="w-full py-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700/60 text-slate-700 dark:text-slate-300 rounded-2xl font-bold text-xs transition-all flex items-center justify-center gap-2"
+                        className="w-full py-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700/60 text-slate-700 dark:text-slate-300 rounded-2xl font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
                       >
                         <History className="w-3.5 h-3.5 text-slate-500" />
                         View Security Audit Trail
@@ -2092,52 +2152,27 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
               </div>
 
               <h3 className="text-xl font-black italic tracking-tight text-slate-900 dark:text-white mb-2">
-                Verify Handover OTP / PIN
+                Verify Handover ID
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 mb-4 font-medium leading-relaxed">
-                Enter the 6-digit delivery verification OTP or pickup PIN provided on this order to authenticate physical receipt before escrow funds are released.
+                To confirm physical receipt and protect escrow settlement, please enter the <strong>Order ID</strong> or <strong>Product ID</strong> given to you by the seller or courier at handover.
               </p>
-
-              {(verifyingOrder.deliveryOtp || verifyingOrder.pickupOtp || verifyingOrder.handoverCode) && (
-                <div className="p-3.5 bg-emerald-50/60 dark:bg-emerald-950/25 rounded-2xl border border-emerald-200/60 dark:border-emerald-900/40 mb-5 flex items-center justify-between">
-                  <div>
-                    <p className="text-[9px] font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-widest leading-none mb-1">
-                      {verifyingOrder.deliveryType === "pickup" ? "Pickup PIN" : "Delivery OTP"}
-                    </p>
-                    <p className="text-sm font-mono font-black text-emerald-800 dark:text-emerald-300 select-all tracking-wider">
-                      {verifyingOrder.deliveryOtp || verifyingOrder.pickupOtp || verifyingOrder.handoverCode}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const code = verifyingOrder.deliveryOtp || verifyingOrder.pickupOtp || verifyingOrder.handoverCode || "";
-                      setProductIdInput(code);
-                      navigator.clipboard.writeText(code);
-                    }}
-                    className="px-2.5 py-1.5 bg-white dark:bg-slate-800 hover:bg-slate-100 text-emerald-600 dark:text-emerald-400 rounded-xl text-[10px] font-bold transition-all flex items-center gap-1 shadow-sm active:scale-95 border border-emerald-100 dark:border-emerald-800/40"
-                  >
-                    <Copy className="w-3 h-3" /> Auto-Fill
-                  </button>
-                </div>
-              )}
 
               <form onSubmit={handleVerifyProductIdAndConfirm} className="space-y-4">
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1">
-                    Enter 6-Digit Code
+                    Enter Order ID or Product ID
                   </label>
                   <input
                     type="text"
                     required
-                    maxLength={10}
                     value={productIdInput}
                     onChange={(e) => {
                       setProductIdInput(e.target.value);
                       setVerificationError(null);
                     }}
-                    placeholder="e.g. 849201"
-                    className="w-full h-12 px-4 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/70 outline-none focus:bg-white dark:focus:bg-slate-900 focus:ring-2 focus:ring-emerald-500 font-bold text-base text-slate-900 dark:text-white font-mono tracking-widest text-center"
+                    placeholder="e.g. ORD-AB12CD or PRD-987"
+                    className="w-full h-12 px-4 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/70 outline-none focus:bg-white dark:focus:bg-slate-900 focus:ring-2 focus:ring-emerald-500 font-bold text-base text-slate-900 dark:text-white font-mono tracking-wider text-center uppercase"
                   />
                   {verificationError && (
                     <motion.p 

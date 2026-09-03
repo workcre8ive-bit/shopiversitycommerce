@@ -624,5 +624,9 @@ service cloud.firestore {
       allow create: if isAuthenticated();
       allow update, delete: if isAdmin();
     }
+
+    match /test/{testId} {
+      allow read: if true;
+    }
   }
 }

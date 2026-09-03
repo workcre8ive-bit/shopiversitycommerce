@@ -55,9 +55,12 @@ export default function CartPage({
 
   const getItemKey = (item: CartItem) => `${item.productId}-${item.menuItemId || 'main'}-${item.ticketTierId || 'none'}`;
 
-  // Initialize all items as selected on cart load
+  // Initialize all items as selected on cart load and reset success message on new additions
   React.useEffect(() => {
     setSelectedItemKeys(cart.map(getItemKey));
+    if (cart.length > 0) {
+      setSuccess(false);
+    }
   }, [cart.length]);
 
   const toggleSelection = (key: string) => {
@@ -433,8 +436,8 @@ export default function CartPage({
     }
   };
 
-  // Success Confirmation Full Page State
-  if (success) {
+  // Success Confirmation Full Page State (only shown when cart is empty and order was just completed)
+  if (success && cart.length === 0) {
     return (
       <div className="max-w-4xl mx-auto px-4 py-12 sm:py-20 text-center animate-in zoom-in-95 duration-500">
         <motion.div
@@ -455,6 +458,7 @@ export default function CartPage({
         <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
           <button
             onClick={() => {
+              setSuccess(false);
               onClear();
               setActiveTab("orders");
             }}
@@ -466,6 +470,7 @@ export default function CartPage({
           </button>
           <button
             onClick={() => {
+              setSuccess(false);
               onClear();
               setActiveTab("market");
             }}

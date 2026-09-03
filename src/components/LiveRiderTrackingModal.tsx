@@ -255,15 +255,15 @@ export default function LiveRiderTrackingModal({ order, progress, onClose }: Liv
               <button
                 type="button"
                 onClick={() => {
-                  alert("Rider details matched! If you have dispatch questions, please raise a dispute or write to Support.");
+                  alert("If you have dispatch questions or concerns, please use the Escrow Support or Help Center.");
                 }}
                 className={cn(
                   "h-10 bg-slate-900 hover:bg-slate-800 dark:bg-amber-500 dark:hover:bg-amber-600 text-white dark:text-slate-950 font-bold text-[10px] uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-1.5 active:scale-95 cursor-pointer",
                   !order.sellerPhone && "col-span-1"
                 )}
               >
-                <MessageSquare className="w-3.5 h-3.5" />
-                Help / Chat
+                <Shield className="w-3.5 h-3.5" />
+                Support Center
               </button>
             </div>
           </div>

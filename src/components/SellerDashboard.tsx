@@ -2678,14 +2678,30 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                   )}
                 </>
               ) : order.deliveryType === "pickup" ? (
-                <button 
-                  type="button"
-                  onClick={() => onUpdate(order.id, "Ready For Pickup")}
-                  className="px-4 py-2 bg-emerald-600 text-white rounded-xl font-bold text-xs hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 dark:shadow-none flex items-center gap-2 cursor-pointer active:scale-95"
-                >
-                  <CheckCircle className="w-3.5 h-3.5" />
-                  Mark as Ready for Pickup
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button 
+                    type="button"
+                    onClick={() => onUpdate(order.id, "Ready For Pickup")}
+                    className="px-4 py-2 bg-emerald-600 text-white rounded-xl font-bold text-xs hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 dark:shadow-none flex items-center gap-2 cursor-pointer active:scale-95"
+                    title="You will hand over the product in person to the buyer or at the designated pickup station"
+                  >
+                    <CheckCircle className="w-3.5 h-3.5" />
+                    Self-Send / Ready for Pickup
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowCampusLogisticsModal(true);
+                      setDeliveryTab("registered");
+                    }}
+                    className="px-3.5 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs transition-all shadow-sm flex items-center gap-1.5 cursor-pointer active:scale-95"
+                    title="Send via a registered campus logistics courier"
+                  >
+                    <Truck className="w-3.5 h-3.5" />
+                    Send via Registered Logistics
+                  </button>
+                </div>
               ) : (
                 /* Physical Delivery order */
                 (() => {

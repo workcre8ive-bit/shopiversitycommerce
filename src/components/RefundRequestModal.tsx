@@ -11,7 +11,8 @@ import {
   Loader2, 
   CheckCircle,
   FileText,
-  DollarSign
+  DollarSign,
+  Clock
 } from "lucide-react";
 import { cn } from "../lib/utils";
 
@@ -55,6 +56,16 @@ export default function RefundRequestModal({
     ? orderTotal 
     : Math.min(orderTotal, Math.max(1, Number(customAmount) || 0));
 
+  // Payment & 72-hour policy validation
+  const isPaid = order.paymentStatus === "paid" || order.paymentMethod === "online";
+  const deliveryDate = order.deliveredAt || (
+    (order.status === "delivered" || order.status === "completed" || order.status === "Order Delivered" || order.status === "Order Picked Up") 
+      ? (order.updatedAt || order.createdAt) 
+      : null
+  );
+  const hoursSinceDelivery = deliveryDate ? (Date.now() - new Date(deliveryDate).getTime()) / (1000 * 60 * 60) : 0;
+  const isExpired = deliveryDate && hoursSinceDelivery > 72 && (!order.disputeStatus || order.disputeStatus === "none");
+
   // 1.5% fee calculation directly on the requested refund amount
   const feeRate = 0.015;
   const refundFee = Math.round(requestedAmount * feeRate * 100) / 100;
@@ -62,6 +73,14 @@ export default function RefundRequestModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isPaid) {
+      setErrorMessage("Refunds are only available after payment has been verified. For unpaid orders, you can cancel directly.");
+      return;
+    }
+    if (isExpired) {
+      setErrorMessage("Refund requests must be raised within 72 hours of delivery. The 72-hour dispute window for this order has expired.");
+      return;
+    }
     if (!reasonText.trim()) {
       setErrorMessage("Please describe the issue in detail.");
       return;
@@ -159,6 +178,17 @@ export default function RefundRequestModal({
                   ₦{orderTotal.toLocaleString()}
                 </p>
               </div>
+            </div>
+
+            {/* 72-Hour Refund & Dispute Policy Notice */}
+            <div className="p-3.5 bg-blue-50/70 dark:bg-blue-950/25 rounded-2xl border border-blue-200/70 dark:border-blue-900/40 text-[11px] text-blue-900 dark:text-blue-200 space-y-1">
+              <div className="flex items-center gap-1.5 font-bold text-blue-700 dark:text-blue-400">
+                <Clock className="w-3.5 h-3.5 shrink-0" />
+                <span>72-Hour Post-Delivery Escrow Protection Policy</span>
+              </div>
+              <p className="text-[10px] text-slate-600 dark:text-slate-400 leading-relaxed font-medium">
+                Refunds are eligible after payment has been verified and within <strong>72 hours</strong> of package delivery. If an escrow dispute was raised during this period, funds remain locked safely while your claim is reviewed.
+              </p>
             </div>
 
             {/* Refund Type Selection */}

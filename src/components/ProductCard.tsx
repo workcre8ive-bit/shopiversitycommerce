@@ -224,18 +224,6 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
 
                 {/* Quick link action capsules */}
                 <div className="flex items-center gap-1.5 shrink-0">
-                  {currentUser && currentUser.uid !== product.sellerId && (
-                    <button 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        window.dispatchEvent(new CustomEvent('open-chat', { detail: product.sellerId }));
-                      }}
-                      className="text-[9px] font-black px-2 py-0.5 rounded-full border border-slate-200 dark:border-zinc-700 bg-slate-50 hover:bg-slate-100 dark:bg-zinc-800 dark:hover:bg-zinc-750 text-slate-700 dark:text-zinc-300 transition-colors duration-300 cursor-pointer"
-                      title="Message Seller"
-                    >
-                      CHAT
-                    </button>
-                  )}
                   {product.sellerId && product.category !== "Logistics & Errands" && product.category !== "Logistics" && (
                     <button 
                       onClick={(e) => {

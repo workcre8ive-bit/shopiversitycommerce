@@ -106,6 +106,19 @@ export default function Footer({ setActiveTab, activeTab }: FooterProps) {
                   Terms & Conditions
                 </button>
               </li>
+              <li>
+                <button
+                  onClick={() => {
+                    setActiveTab("privacy");
+                    window.scrollTo({ top: 0, behavior: "smooth" });
+                  }}
+                  className={`hover:text-[#ff6b00] transition-colors bg-transparent border-none p-0 cursor-pointer text-left py-1 block ${
+                    activeTab === "privacy" ? "text-[#ff6b00]" : "text-slate-400"
+                  }`}
+                >
+                  Privacy Policy
+                </button>
+              </li>
             </ul>
           </div>
 

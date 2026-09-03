@@ -974,19 +974,6 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                            Visit Store
                          </button>
                        )}
-                       {currentUser && currentUser.uid !== product.sellerId && (
-                         <button 
-                           onClick={(e) => {
-                             e.stopPropagation();
-                             onClose();
-                             window.dispatchEvent(new CustomEvent('open-chat', { detail: product.sellerId }));
-                           }}
-                           className="flex items-center gap-1.5 px-3 py-1 bg-indigo-50 dark:bg-indigo-900/10 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-all font-black text-[10px] uppercase tracking-widest"
-                         >
-                           <MessageSquare className="w-3.5 h-3.5" />
-                           Chat
-                         </button>
-                       )}
                        <button 
                          onClick={(e) => {
                            e.stopPropagation();

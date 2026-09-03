@@ -2902,16 +2902,37 @@ const FALLBACK_BANKS = [
         }
       }
 
-      // Check OTP against stored DB record first, or expectedOtp fallback
-      const targetOtp = storedOtp || expectedOtp;
-      if (targetOtp) {
-        const isMatch = providedOtp.trim().toLowerCase() === targetOtp.trim().toLowerCase();
-        if (!isMatch) {
-          return res.status(400).json({
-            success: false,
-            error: "Invalid 6-digit Verification OTP / PIN. Please request the correct code from the recipient's tracking screen."
+      // Check verification code against Order ID, uniqueOrderId, Product ID, item IDs, or handover OTP
+      const cleanInput = providedOtp.trim().toLowerCase();
+      const validIdentifiers: string[] = [
+        orderId.toLowerCase(),
+        orderId.slice(0, 6).toLowerCase(),
+        orderId.slice(0, 8).toLowerCase()
+      ];
+
+      if (orderDocData) {
+        if (orderDocData.uniqueOrderId) validIdentifiers.push(orderDocData.uniqueOrderId.toLowerCase());
+        if (orderDocData.orderId) validIdentifiers.push(orderDocData.orderId.toLowerCase());
+        if (orderDocData.productId) validIdentifiers.push(orderDocData.productId.toLowerCase());
+        if (orderDocData.deliveryOtp) validIdentifiers.push(orderDocData.deliveryOtp.toLowerCase());
+        if (orderDocData.pickupOtp) validIdentifiers.push(orderDocData.pickupOtp.toLowerCase());
+        if (orderDocData.handoverCode) validIdentifiers.push(orderDocData.handoverCode.toLowerCase());
+        if (Array.isArray(orderDocData.items)) {
+          orderDocData.items.forEach((it: any) => {
+            if (it.productId) validIdentifiers.push(it.productId.toLowerCase());
           });
         }
+      }
+      if (expectedOtp) {
+        validIdentifiers.push(expectedOtp.trim().toLowerCase());
+      }
+
+      const isMatch = validIdentifiers.some(id => id === cleanInput || cleanInput.includes(id) || id.includes(cleanInput));
+      if (!isMatch && validIdentifiers.length > 0) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid Verification Code. Please ask the seller or logistics courier for the Order ID or Product ID to verify handover."
+        });
       }
 
       const isOrderPod = isPod ?? (orderDocData?.paymentMethod === "pod" && orderDocData?.paymentStatus !== "paid");

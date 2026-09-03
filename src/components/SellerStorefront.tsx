@@ -284,16 +284,6 @@ export default function SellerStorefront({ sellerId, currentUser, previewSetting
       </div>
 
       <div className="flex items-center gap-3">
-        {currentUser && currentUser.uid !== sellerId && (
-          <button 
-            onClick={() => window.dispatchEvent(new CustomEvent('open-chat', { detail: sellerId }))}
-            className="px-6 py-3 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:scale-105 active:scale-95 transition-all shadow-md flex items-center gap-2 border-none cursor-pointer"
-            style={{ backgroundColor: colors.primary }}
-          >
-            <MessageCircle className="w-4 h-4" />
-            Chat with Seller
-          </button>
-        )}
       </div>
     </div>
   );
