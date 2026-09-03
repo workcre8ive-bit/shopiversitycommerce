@@ -896,14 +896,23 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
   };
 
   const getEffectiveStatus = (order: Order) => {
-    const s = order.status;
+    const s = (order.status || "") as string;
     if (s === "payment_required" || s === "Payment Required") return "payment_required";
     if (s === "awaiting_payment") return "awaiting_payment";
     if (s === "pending" || s === "Pending Seller Acceptance") return "pending";
     if (s === "out_for_delivery" || s === "accepted") return "out_for_delivery";
-    if (s === "Out To Pickup Station" || s === "Out For Delivery" || s === "transit") return "transit";
+    if (
+      s === "Out To Pickup Station" || 
+      s === "Out For Delivery" || 
+      s === "transit" || 
+      s === "In Transit" || 
+      s === "picked_up" || 
+      s === "Package Picked Up from Merchant" || 
+      s === "Package Picked Up from Seller" ||
+      (order.deliveryType === "delivery" && s === "Order Picked Up")
+    ) return "transit";
     if (s === "Ready For Pickup" || s === "Ready For Delivery" || s === "ready_for_pickup") return "ready_for_pickup";
-    if (s === "delivered" || s === "acquired" || s === "Order Picked Up" || s === "Order Delivered") return "delivered";
+    if (s === "delivered" || s === "acquired" || s === "Order Delivered" || (order.deliveryType === "pickup" && s === "Order Picked Up")) return "delivered";
     if (s === "completed") return "completed";
     return s;
   };
@@ -1272,24 +1281,34 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                       )}
 
                       {/* Campus Dispatch & Courier Tracker */}
-                      {order.kwikRiderId && (order.status === "Out For Delivery" || order.status === "out_for_delivery") && !order.confirmOrderPressed && (
+                      {(order.kwikRiderId || order.logisticsId || order.logisticsName) && 
+                       (order.status === "Out For Delivery" || order.status === "out_for_delivery" || order.status === "transit" || order.status === "In Transit" || order.status === "accepted" || order.status === "Order Delivered" || order.status === "Order Picked Up") && 
+                       !order.confirmOrderPressed && (
                         <div className="mt-3 p-4 bg-orange-50/40 dark:bg-orange-950/20 rounded-2xl border border-orange-100 dark:border-orange-900/40 max-w-md space-y-2">
                           <p className="text-[10px] font-black text-orange-600 dark:text-orange-400 uppercase tracking-widest flex items-center gap-1.5">
                             <Truck className="w-3.5 h-3.5" />
-                            {order.kwikRiderId.startsWith("CAMPUS-") ? "Campus Logistics Tracker" : "Outsourced Courier Tracker"}
+                            {order.logisticsName || (order.kwikRiderId?.startsWith("CAMPUS-") ? "Campus Logistics Tracker" : "Outsourced Courier Tracker")}
                           </p>
                           <div className="space-y-1">
                             <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                              {order.kwikRiderId.startsWith("CAMPUS-") 
-                                ? `🏍️ ${order.kwikRiderId.replace("CAMPUS-", "").replace(/-/g, " ")} Dispatched`
-                                : order.kwikRiderId.startsWith("OUTSOURCED-") 
-                                  ? `🚚 External Courier: ${order.kwikRiderId.replace("OUTSOURCED-", "").replace(/-/g, " ")}`
-                                  : "🏍️ Dispatch Rider On the Way"
+                              {order.logisticsName 
+                                ? `🏍️ ${order.logisticsName} Assigned` 
+                                : order.kwikRiderId?.startsWith("CAMPUS-") 
+                                  ? `🏍️ ${order.kwikRiderId.replace("CAMPUS-", "").replace(/-/g, " ")} Dispatched`
+                                  : order.kwikRiderId?.startsWith("OUTSOURCED-") 
+                                    ? `🚚 External Courier: ${order.kwikRiderId.replace("OUTSOURCED-", "").replace(/-/g, " ")}`
+                                    : "🏍️ Dispatch Rider On the Way"
                               }
                             </p>
-                            <p className="text-[10px] text-slate-500 font-medium">
-                              Carrier Reference: <span className="font-mono font-bold text-slate-900 dark:text-slate-100 select-all">{order.kwikRiderId.startsWith("CAMPUS-") ? order.kwikRiderId.replace("CAMPUS-", "") : order.kwikRiderId.startsWith("OUTSOURCED-") ? order.kwikRiderId.replace("OUTSOURCED-", "") : order.kwikRiderId}</span>
-                            </p>
+                            {(order.logisticsPhone || order.kwikRiderId) && (
+                              <p className="text-[10px] text-slate-500 font-medium">
+                                {order.logisticsPhone ? (
+                                  <>Courier Contact: <span className="font-mono font-bold text-slate-900 dark:text-slate-100 select-all">{order.logisticsPhone}</span></>
+                                ) : (
+                                  <>Carrier Reference: <span className="font-mono font-bold text-slate-900 dark:text-slate-100 select-all">{order.kwikRiderId?.startsWith("CAMPUS-") ? order.kwikRiderId.replace("CAMPUS-", "") : order.kwikRiderId?.startsWith("OUTSOURCED-") ? order.kwikRiderId.replace("OUTSOURCED-", "") : order.kwikRiderId}</span></>
+                                )}
+                              </p>
+                            )}
                             {order.deliveredWorkNotes && (
                               <p className="text-[10px] text-slate-500 dark:text-slate-400 bg-white/40 dark:bg-slate-900/30 p-2 rounded-xl mt-1.5 italic">
                                 {order.deliveredWorkNotes}
@@ -1297,12 +1316,12 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                             )}
                           </div>
                           <div className="flex flex-wrap items-center gap-2 pt-1">
-                            {order.kwikTrackingUrl && order.kwikTrackingUrl !== "local_logistics" && order.kwikTrackingUrl !== "outsourced" && (
+                            {(order.kwikTrackingUrl || order.kwikRiderId || order.logisticsId || order.logisticsName) && (
                               <button
                                 type="button"
                                 onClick={() => {
                                   setTrackingRiderOrder(order);
-                                  setTrackingProgress(Math.floor(Math.random() * 20) + 15);
+                                  setTrackingProgress(Math.floor(Math.random() * 20) + 25);
                                 }}
                                 className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-[10px] font-bold shadow-md shadow-orange-500/10 cursor-pointer transition-all active:scale-[0.98]"
                               >

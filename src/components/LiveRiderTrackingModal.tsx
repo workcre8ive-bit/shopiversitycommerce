@@ -217,11 +217,11 @@ export default function LiveRiderTrackingModal({ order, progress, onClose }: Liv
               </div>
               <div className="flex-1 text-left">
                 <p className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">
-                  {order.kwikRiderId?.startsWith("CAMPUS-") 
+                  {order.logisticsName || (order.kwikRiderId?.startsWith("CAMPUS-") 
                     ? order.kwikRiderId.replace("CAMPUS-", "").replace(/-/g, " ") 
                     : order.kwikRiderId?.startsWith("OUTSOURCED-") 
                       ? order.kwikRiderId.replace("OUTSOURCED-", "").replace(/-/g, " ") 
-                      : "Campus Dispatch Rider"}
+                      : "Campus Dispatch Rider")}
                 </p>
                 <p className="text-[10px] text-slate-400 font-black tracking-widest font-mono uppercase mt-0.5">
                   STATUS: ON THE WAY • DISPATCH RIDER

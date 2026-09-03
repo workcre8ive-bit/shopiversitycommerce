@@ -1307,7 +1307,7 @@ export default function App() {
 
         {/* Right actions: Theme toggle and Cart / Sign Up */}
         <div className="flex items-center gap-2 sm:gap-3 md:gap-4 shrink-0">
-          {!currentUser ? (
+          {(!currentUser || !auth.currentUser) ? (
             <button 
               id="header-signup-btn"
               onClick={() => {
@@ -1321,7 +1321,7 @@ export default function App() {
               <span>Sign Up</span>
             </button>
           ) : (
-            /* Cart with count (only in buyer explore tab or when items in cart) */
+            /* Cart with count (only when user has logged in / signed up) */
             (activeRole === "buyer" || cart.length > 0) && (
               <button 
                 id="header-cart-btn"

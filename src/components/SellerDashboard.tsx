@@ -22,6 +22,7 @@ import ReferralDashboard from "./ReferralDashboard";
 import LiveRiderTrackingModal from "./LiveRiderTrackingModal";
 import SalesAnalytics from "./SalesAnalytics";
 import DashboardSlideshow from "./DashboardSlideshow";
+import { deduplicateLogisticsCompanies } from "../utils/logisticsDeduplication";
 import { 
   LayoutDashboard, 
   LayoutGrid,
@@ -2032,12 +2033,14 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
       qSnap.forEach((doc) => {
         partners.push({ id: doc.id, ...doc.data() });
       });
+      // Deduplicate to guarantee identical logistics services never show up twice
+      const deduped = deduplicateLogisticsCompanies(partners);
       // Filter partners that cover the campus of this order or seller
-      const campusFilter = order.pickupSchool || currentUser?.campus || "";
-      const filtered = partners.filter(p => 
-        !campusFilter || (p.coveredCampuses && p.coveredCampuses.includes(campusFilter))
+      const campusFilter = (order.pickupSchool || currentUser?.campus || "").trim().toLowerCase();
+      const filtered = deduped.filter(p => 
+        !campusFilter || (Array.isArray(p.coveredCampuses) && p.coveredCampuses.some((c: string) => c.trim().toLowerCase() === campusFilter))
       );
-      setLogisticsPartners(filtered.length > 0 ? filtered : partners); // fallback to all if none covers specifically
+      setLogisticsPartners(filtered.length > 0 ? filtered : deduped); // fallback to all deduped if none covers specifically
     } catch (err) {
       console.error("Error fetching logistics partners:", err);
     } finally {
@@ -3631,7 +3634,9 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
         qSnap.forEach((doc) => {
           list.push({ id: doc.id, ...doc.data() });
         });
-        setAllLogisticsCompanies(list);
+        // Deduplicate companies to avoid redundant entries in product setup
+        const deduped = deduplicateLogisticsCompanies(list);
+        setAllLogisticsCompanies(deduped);
       } catch (err) {
         console.error("Error fetching logistics companies for product form:", err);
       } finally {

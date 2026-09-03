@@ -947,9 +947,9 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
 
     if (currentStatus === "accepted") {
       nextStatus = "picked_up";
-      orderStatusLabel = "Order Picked Up";
+      orderStatusLabel = "In Transit";
       notifTitle = "Package Picked Up from Merchant 📦";
-      notifMsg = `${companyProfile.companyName} has picked up your package from the merchant.`;
+      notifMsg = `${companyProfile.companyName} has picked up your package from the merchant and is heading your way.`;
     } else if (currentStatus === "picked_up") {
       nextStatus = "in_transit";
       orderStatusLabel = "Out For Delivery";
