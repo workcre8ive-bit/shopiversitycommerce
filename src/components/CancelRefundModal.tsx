@@ -281,7 +281,7 @@ export default function CancelRefundModal({
                       Cancel Order & Refund
                     </h3>
                     <p className="text-xs text-slate-500 dark:text-zinc-400">
-                      Order #{order.id.slice(-6).toUpperCase()} • {order.productName}
+                      {order.productName} • ₦{order.totalPrice.toLocaleString()}
                     </p>
                   </div>
                 </div>

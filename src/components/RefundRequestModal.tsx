@@ -170,7 +170,7 @@ export default function RefundRequestModal({
               <div>
                 <p className="text-[10px] uppercase font-bold text-slate-400">Target Order</p>
                 <p className="text-xs font-bold text-slate-900 dark:text-white">{order.productName}</p>
-                <p className="text-[10px] text-slate-500 font-mono">#{order.id.slice(0, 10)}</p>
+                <p className="text-[10px] text-slate-500 font-medium">{order.sellerName ? `Merchant: ${order.sellerName}` : `Qty: ${order.quantity}`}</p>
               </div>
               <div className="text-right">
                 <p className="text-[10px] uppercase font-bold text-slate-400">Order Total</p>

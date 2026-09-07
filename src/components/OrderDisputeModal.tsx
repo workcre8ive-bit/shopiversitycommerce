@@ -147,7 +147,7 @@ export default function OrderDisputeModal({ order, isOpen, onClose, onSuccess }:
               </div>
               <h3 className="text-xl font-black text-slate-900 dark:text-white">Dispute Filed & Escrow Frozen</h3>
               <p className="text-xs text-slate-500 max-w-sm mx-auto leading-relaxed">
-                Your dispute has been logged. Settlement for order <span className="font-mono font-bold">#{order.id.slice(0, 8)}</span> is on hold. The SHOPIVERSITY Dispute Resolution Team will review all parties' evidence within 24 hours.
+                Your dispute has been logged. Settlement for <span className="font-bold">"{order.productName}"</span> is on hold. The SHOPIVERSITY Dispute Resolution Team will review all parties' evidence within 24 hours.
               </p>
             </div>
           ) : (
@@ -159,7 +159,7 @@ export default function OrderDisputeModal({ order, isOpen, onClose, onSuccess }:
                 <div>
                   <h3 className="text-lg font-black text-slate-900 dark:text-white">Report Problem / Raise Dispute</h3>
                   <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Order #{order.id.slice(0, 8)} • ₦{order.totalPrice.toLocaleString()}
+                    {order.productName} • ₦{order.totalPrice.toLocaleString()}
                   </p>
                 </div>
               </div>

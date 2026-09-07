@@ -26,7 +26,7 @@ import {
   Phone
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { cn } from "../lib/utils";
+import { cn, getOrderDeliveryPin } from "../lib/utils";
 import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
 import { usePaystackPayment } from "../hooks/usePaystackPayment";
 import ReceiptModal from "./ReceiptModal";
@@ -212,7 +212,14 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const ordersData = Array.from(new Map(snapshot.docs.map(doc => {
-        const d = { id: doc.id, ...doc.data() };
+        const d = { id: doc.id, ...doc.data() } as any;
+        const pin = getOrderDeliveryPin(d);
+        if (!d.deliveryOtp) {
+          d.deliveryOtp = pin;
+          if (d.status !== "completed" && d.status !== "cancelled") {
+            updateDoc(doc.ref, { deliveryOtp: pin }).catch(() => {});
+          }
+        }
         return [d.id, d];
       })).values())
         .filter((doc: any) => !doc.hiddenFromHistory)
@@ -372,98 +379,23 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
     return `${mins}m ${secs < 10 ? '0' : ''}${secs}s`;
   };
 
-  const handleVerifyProductIdAndConfirm = async (e?: React.FormEvent) => {
+  const handleConfirmDeliveryReceipt = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!verifyingOrder) return;
 
-    // Strict restriction: buyers can only confirm order when delivered
+    // Strict restriction: buyers can only confirm order when delivered or ready for pickup
     const effectiveStatus = getEffectiveStatus(verifyingOrder);
     if (verifyingOrder.deliveryType === "delivery" && effectiveStatus !== "delivered") {
-      setVerificationError("Order can only be confirmed once it has reached the Delivered stage.");
-      return;
-    }
-    if (!productIdInput.trim()) {
-      setVerificationError("Please enter the Order ID or Product ID provided by the seller or courier.");
+      setVerificationError("Order can only be confirmed once it has been delivered by the courier.");
       return;
     }
 
     setVerificationError(null);
     setConfirmingDelivery(true);
     try {
-      const isPickup = verifyingOrder.deliveryType === "pickup";
       const isPod = verifyingOrder.paymentMethod === "pod" && verifyingOrder.paymentStatus !== "paid";
-      const rawInput = productIdInput.trim();
-      const cleanInput = rawInput.toLowerCase();
-      const cleanAlpha = cleanInput.replace(/[^a-z0-9]/g, "");
-      const cleanCore = cleanAlpha.replace(/^(prd|ord)/, "");
-
-      // Check valid identifiers (Order ID, Product ID, uniqueProductId, uniqueOrderId, OTP, item IDs)
-      const validIdentifiers: string[] = [
-        verifyingOrder.id.toLowerCase(),
-        verifyingOrder.id.slice(0, 6).toLowerCase(),
-        verifyingOrder.id.slice(0, 8).toLowerCase(),
-        verifyingOrder.id.slice(-6).toLowerCase(),
-        verifyingOrder.id.slice(-8).toLowerCase()
-      ];
-      if (verifyingOrder.uniqueProductId) validIdentifiers.push(verifyingOrder.uniqueProductId.toLowerCase());
-      if (verifyingOrder.productId) validIdentifiers.push(verifyingOrder.productId.toLowerCase());
-      if (verifyingOrder.uniqueOrderId) validIdentifiers.push(verifyingOrder.uniqueOrderId.toLowerCase());
-      if (verifyingOrder.orderId) validIdentifiers.push(verifyingOrder.orderId.toLowerCase());
-      if (verifyingOrder.deliveryOtp) validIdentifiers.push(verifyingOrder.deliveryOtp.toLowerCase());
-      if (verifyingOrder.pickupOtp) validIdentifiers.push(verifyingOrder.pickupOtp.toLowerCase());
-      if (verifyingOrder.handoverCode) validIdentifiers.push(verifyingOrder.handoverCode.toLowerCase());
-      if (Array.isArray(verifyingOrder.items)) {
-        verifyingOrder.items.forEach((it: any) => {
-          if (it.productId) validIdentifiers.push(it.productId.toLowerCase());
-          if (it.uniqueProductId) validIdentifiers.push(it.uniqueProductId.toLowerCase());
-          if (it.id) validIdentifiers.push(it.id.toLowerCase());
-        });
-      }
-
-      const clientMatch = validIdentifiers.some(id => {
-        if (!id) return false;
-        const idAlpha = id.replace(/[^a-z0-9]/g, "");
-        const idCore = idAlpha.replace(/^(prd|ord)/, "");
-        return (
-          id === cleanInput ||
-          idAlpha === cleanAlpha ||
-          (cleanCore.length >= 3 && idCore === cleanCore) ||
-          (cleanInput.length >= 3 && (id.includes(cleanInput) || cleanInput.includes(id))) ||
-          (cleanAlpha.length >= 3 && (idAlpha.includes(cleanAlpha) || cleanAlpha.includes(idAlpha)))
-        );
-      });
-
-      // 1. Server-Side Verification against order document
-      let serverConfirmed = false;
-      try {
-        const res = await fetch("/api/orders/verify-delivery-otp", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            orderId: verifyingOrder.id,
-            providedOtp: productIdInput.trim(),
-            role: "buyer",
-            actorId: auth.currentUser?.uid,
-            isPickup,
-            isPod
-          })
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok && data.success !== false) {
-          serverConfirmed = true;
-        }
-      } catch (apiErr) {
-        console.warn("Backend verification endpoint unavailable, evaluating client match:", apiErr);
-      }
-
-      if (!clientMatch && !serverConfirmed) {
-        setVerificationError("Invalid Order ID or Product ID. Please ask your seller or logistics courier for the correct ID provided on your package handover receipt.");
-        setConfirmingDelivery(false);
-        return;
-      }
-
-      // 2. Advance the buyer to the next stage of order tracking & sync to Firestore
       const now = new Date().toISOString();
+
       if (isPod) {
         // Next stage: Pay on Delivery Settlement
         const updatePayload: any = {
@@ -510,8 +442,8 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
         setProductIdInput("");
       }
     } catch (err: any) {
-      console.error("Verification confirmation error:", err);
-      setVerificationError(err.message || "An error occurred during verification.");
+      console.error("Delivery confirmation error:", err);
+      setVerificationError(err.message || "An error occurred during delivery confirmation.");
     } finally {
       setConfirmingDelivery(false);
     }
@@ -1163,6 +1095,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
         {orders.map((order, oIdx) => {
           const effectiveStatus = getEffectiveStatus(order);
           const remainingTime = formatRemainingTime(order);
+          const deliveryPin = getOrderDeliveryPin(order);
           
           return (
             <motion.div
@@ -1178,7 +1111,9 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                       {getStatusIcon(effectiveStatus, order.deliveryType)}
                     </div>
                     <div>
-                      <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-1">Order ID: {order.id.slice(0, 8)}</p>
+                      <p className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-1">
+                        {order.sellerName ? `Merchant: ${order.sellerName}` : (order.deliveryType === "pickup" ? "Self Pickup Station" : "Campus Direct Delivery")}
+                      </p>
                       {(() => {
                         const heading = getStatusHeadingInfo(order, effectiveStatus);
                         return (
@@ -1522,23 +1457,58 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                     </div>
                   </div>
 
-                  {/* Verification Codes & OTP Display */}
-                  {(order.deliveryOtp || order.pickupOtp || order.handoverCode) && (
-                    <div className="p-4 bg-emerald-50/70 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-900/40 rounded-2xl flex flex-wrap items-center justify-between gap-3">
-                      <div className="flex items-center gap-2.5">
-                        <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                        <div>
-                          <p className="text-[10px] font-bold text-emerald-800 dark:text-emerald-300 uppercase tracking-wider">
-                            Secure Handover Verification Code
-                          </p>
-                          <p className="text-xs text-emerald-600 dark:text-emerald-400">
-                            Present this to dispatch rider or station agent upon delivery
-                          </p>
+                  {/* Buyer's 6-Digit Handover PIN Display */}
+                  {order.status !== "completed" && order.status !== "cancelled" && (
+                    <div className="p-4 sm:p-5 bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 dark:from-emerald-950/40 dark:via-teal-950/30 dark:to-emerald-950/40 border-2 border-emerald-300 dark:border-emerald-700/80 rounded-2xl shadow-xs space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-black shadow-sm shrink-0">
+                            <KeyRound className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h5 className="text-xs sm:text-sm font-black uppercase tracking-wider text-emerald-900 dark:text-emerald-200">
+                                Buyer's 6-Digit Delivery PIN
+                              </h5>
+                              <span className="px-2 py-0.5 bg-emerald-200/80 dark:bg-emerald-900/80 text-emerald-800 dark:text-emerald-300 rounded-full text-[10px] font-black uppercase tracking-wider">
+                                {order.deliveryType === "pickup" ? "Pickup Code" : "Handover PIN"}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-emerald-700 dark:text-emerald-400 font-medium">
+                              {order.deliveryType === "pickup" 
+                                ? "Present this 6-digit PIN at the pickup station to collect your package"
+                                : "Provide this 6-digit PIN to the logistics courier when they hand over your package"}
+                            </p>
+                          </div>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <span className="px-3.5 py-1.5 bg-white dark:bg-slate-900 border border-emerald-300 dark:border-emerald-700 rounded-xl font-mono text-sm font-black text-emerald-700 dark:text-emerald-300 tracking-widest shadow-sm">
-                          {order.deliveryOtp || order.pickupOtp || order.handoverCode}
+
+                      <div className="p-3.5 bg-white dark:bg-slate-900 rounded-xl border border-emerald-200 dark:border-emerald-800 flex items-center justify-between gap-3 shadow-inner">
+                        <div className="space-y-0.5">
+                          <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">
+                            Your 6-Digit Confirmation PIN
+                          </p>
+                          <p className="text-2xl sm:text-3xl font-black font-mono tracking-[0.2em] text-emerald-600 dark:text-emerald-400 select-all">
+                            {deliveryPin}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(deliveryPin);
+                            alert(`Delivery PIN ${deliveryPin} copied to clipboard!`);
+                          }}
+                          className="px-4 py-2 bg-emerald-100 hover:bg-emerald-200 dark:bg-emerald-900/50 dark:hover:bg-emerald-800/60 text-emerald-800 dark:text-emerald-200 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>Copy PIN</span>
+                        </button>
+                      </div>
+
+                      <div className="flex items-start gap-2 text-[11px] text-slate-600 dark:text-slate-400 bg-white/60 dark:bg-slate-900/60 p-2.5 rounded-xl border border-emerald-100 dark:border-emerald-900/40">
+                        <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                        <span>
+                          <strong>Delivery Handover Security:</strong> The logistics courier must enter this 6-digit PIN to confirm package handover to you. Only share this PIN after you receive and inspect your package in person.
                         </span>
                       </div>
                     </div>
@@ -2025,15 +1995,14 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                               <div>
                                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Your 6-Digit Delivery PIN</p>
                                 <p className="text-2xl font-black font-mono tracking-widest text-emerald-600 select-all">
-                                  {order.deliveryOtp || order.pickupOtp || order.handoverCode || order.id.slice(-6).toUpperCase()}
+                                  {deliveryPin}
                                 </p>
                               </div>
                               <button
                                 type="button"
                                 onClick={() => {
-                                  const pin = order.deliveryOtp || order.pickupOtp || order.handoverCode || order.id.slice(-6).toUpperCase();
-                                  navigator.clipboard.writeText(pin);
-                                  alert("Delivery PIN copied to clipboard!");
+                                  navigator.clipboard.writeText(deliveryPin);
+                                  alert(`Delivery PIN ${deliveryPin} copied to clipboard!`);
                                 }}
                                 className="px-3.5 py-2 bg-orange-100 hover:bg-orange-200 text-orange-800 dark:bg-orange-900/60 dark:text-orange-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
                               >
@@ -2041,7 +2010,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                               </button>
                             </div>
                             <p className="text-[11px] text-slate-500 dark:text-slate-400 italic">
-                              The rider will enter this PIN on their courier app to mark "Order Delivered". Once verified, you will inspect your items and confirm receipt below to release escrow.
+                              The rider will enter this 6-digit PIN on their courier app to mark "Order Delivered". Once verified, you will inspect your items and confirm receipt below to release escrow.
                             </p>
                           </div>
                           <div className="pt-1">
@@ -2064,7 +2033,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                               </span>
                             </div>
                             <p className="text-xs text-emerald-800 dark:text-emerald-300 leading-relaxed font-medium">
-                              Your package is ready for collection at {order.pickupStationName || order.location || "the store/station"}. Present your Pickup PIN: <strong className="font-mono text-emerald-700 dark:text-emerald-300">{order.deliveryOtp || order.pickupOtp || order.handoverCode || order.id.slice(-6).toUpperCase()}</strong>
+                              Your package is ready for collection at {order.pickupStationName || order.location || "the store/station"}. Present your Pickup PIN: <strong className="font-mono text-emerald-700 dark:text-emerald-300">{deliveryPin}</strong>
                             </p>
                           </div>
                           <button
@@ -2445,6 +2414,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
         )}
       </AnimatePresence>
 
+      {/* Delivery Receipt & Escrow Release Confirmation Modal */}
       <AnimatePresence>
         {showIdVerification && verifyingOrder && (
           <div 
@@ -2462,7 +2432,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
               initial={{ opacity: 0, scale: 0.95, y: 15 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 15 }}
-              className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-6 lg:p-8 max-w-sm w-full shadow-2xl border border-slate-100 dark:border-slate-800 relative"
+              className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-6 sm:p-8 max-w-md w-full shadow-2xl border border-slate-100 dark:border-slate-800 relative"
             >
               <button 
                 id="btn-close-verify-modal"
@@ -2482,120 +2452,87 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                 <X className="w-4 h-4" />
               </button>
 
-              <div className="w-16 h-16 bg-emerald-50 dark:bg-emerald-900/20 rounded-2xl flex items-center justify-center text-emerald-600 dark:text-emerald-400 mb-6">
-                <ShieldCheck className="w-8 h-8" />
+              <div className="w-14 h-14 bg-emerald-50 dark:bg-emerald-900/20 rounded-2xl flex items-center justify-center text-emerald-600 dark:text-emerald-400 mb-5">
+                <CheckCircle className="w-7 h-7" />
               </div>
 
-              <h3 className="text-xl font-black italic tracking-tight text-slate-900 dark:text-white mb-2">
-                Verify Handover ID
+              <h3 className="text-xl font-black tracking-tight text-slate-900 dark:text-white mb-1.5">
+                Confirm Package Delivery
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 mb-4 font-medium leading-relaxed">
-                To confirm physical receipt and advance your order, please enter the <strong>Order ID</strong> or <strong>Product ID</strong> provided at handover.
+                Have you inspected your package and verified that all items have been safely received?
               </p>
 
-              {verifyingOrder && (
-                <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-100 dark:border-slate-800 text-[11px] mb-4 space-y-1.5">
-                  <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
-                    <span className="text-[10px] uppercase font-bold tracking-wider">Reference ID:</span>
-                    <button
-                      id="btn-autofill-handover-id"
-                      type="button"
-                      onClick={() => {
-                        const candidate = verifyingOrder.uniqueProductId || verifyingOrder.productId || verifyingOrder.uniqueOrderId || verifyingOrder.orderId || verifyingOrder.id.slice(0, 8);
-                        if (candidate) {
-                          setProductIdInput(candidate);
-                          setVerificationError(null);
-                        }
-                      }}
-                      className="text-[10px] font-mono font-bold text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1 cursor-pointer"
-                      title="Tap to autofill"
-                    >
-                      <span>{verifyingOrder.uniqueProductId || verifyingOrder.productId || verifyingOrder.uniqueOrderId || verifyingOrder.id.slice(0, 8)}</span>
-                      <span className="text-[9px] bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 rounded font-sans font-bold">Autofill</span>
-                    </button>
+              <div className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-100 dark:border-slate-800 text-xs mb-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 dark:text-slate-400 font-medium">Item:</span>
+                  <span className="font-bold text-slate-900 dark:text-white truncate max-w-[200px]">{verifyingOrder.productName}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 dark:text-slate-400 font-medium">Quantity:</span>
+                  <span className="font-bold text-slate-900 dark:text-white">{verifyingOrder.quantity}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 dark:text-slate-400 font-medium">Total:</span>
+                  <span className="font-black text-emerald-600 dark:text-emerald-400">₦{verifyingOrder.totalPrice.toLocaleString()}</span>
+                </div>
+                {verifyingOrder.sellerName && (
+                  <div className="flex items-center justify-between border-t border-slate-200/60 dark:border-slate-700/60 pt-2 mt-1">
+                    <span className="text-slate-500 dark:text-slate-400 font-medium">Merchant:</span>
+                    <span className="font-bold text-indigo-600 dark:text-indigo-400">{verifyingOrder.sellerName}</span>
                   </div>
+                )}
+                {verifyingOrder.logisticsName && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500 dark:text-slate-400 font-medium">Courier:</span>
+                    <span className="font-bold text-purple-600 dark:text-purple-400">{verifyingOrder.logisticsName}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="p-3 bg-emerald-50/80 dark:bg-emerald-950/30 border border-emerald-200/70 dark:border-emerald-900/50 rounded-xl mb-4 flex items-start gap-2">
+                <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                <p className="text-[11px] text-emerald-800 dark:text-emerald-300 font-medium leading-relaxed">
+                  Confirming delivery finalizes your order and releases escrow payment to the merchant and courier.
+                </p>
+              </div>
+
+              {verificationError && (
+                <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 rounded-xl text-red-600 dark:text-red-400 text-xs font-semibold flex items-center gap-2 mb-4">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{verificationError}</span>
                 </div>
               )}
 
-              <form onSubmit={handleVerifyProductIdAndConfirm} className="space-y-4">
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1">
-                    Enter Order ID or Product ID
-                  </label>
-                  <div className="relative flex items-center">
-                    <input
-                      id="input-product-or-order-id"
-                      type="text"
-                      required
-                      value={productIdInput}
-                      onChange={(e) => {
-                        setProductIdInput(e.target.value);
-                        setVerificationError(null);
-                      }}
-                      placeholder="e.g. ORD-AB12CD or PRD-987"
-                      className="w-full h-12 pl-4 pr-11 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/70 outline-none focus:bg-white dark:focus:bg-slate-900 focus:ring-2 focus:ring-emerald-500 font-bold text-base text-slate-900 dark:text-white font-mono tracking-wider text-center uppercase"
-                    />
-                    {productIdInput ? (
-                      <button
-                        id="btn-clear-id-input"
-                        type="button"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setProductIdInput("");
-                          setVerificationError(null);
-                        }}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-300 flex items-center justify-center transition-all cursor-pointer z-10 shadow-xs"
-                        title="Cancel input"
-                        aria-label="Cancel input"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    ) : null}
-                  </div>
-                  {verificationError && (
-                    <motion.p 
-                      initial={{ opacity: 0, y: -5 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="text-[10px] font-bold text-red-600 dark:text-red-400 mt-1.5 pl-1 flex items-center gap-1"
-                    >
-                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                      {verificationError}
-                    </motion.p>
+              <div className="flex gap-3">
+                <button
+                  id="btn-cancel-delivery-confirm"
+                  type="button"
+                  onClick={() => {
+                    setShowIdVerification(false);
+                    setVerifyingOrder(null);
+                    setProductIdInput("");
+                    setVerificationError(null);
+                  }}
+                  className="flex-1 h-12 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl font-bold text-xs transition-all border border-slate-200 dark:border-slate-700 cursor-pointer"
+                >
+                  Inspect First
+                </button>
+                <button
+                  id="btn-confirm-delivery-receipt"
+                  type="button"
+                  onClick={handleConfirmDeliveryReceipt}
+                  disabled={confirmingDelivery}
+                  className="flex-1 h-12 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/20 active:scale-[0.98] border-none outline-none cursor-pointer"
+                >
+                  {confirmingDelivery ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <CheckCircle className="w-4 h-4" />
                   )}
-                </div>
-
-                <div className="flex gap-3 pt-2">
-                  <button
-                    id="btn-cancel-handover-verify"
-                    type="button"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setShowIdVerification(false);
-                      setVerifyingOrder(null);
-                      setProductIdInput("");
-                      setVerificationError(null);
-                    }}
-                    className="flex-1 h-12 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800/80 dark:hover:bg-slate-850 text-slate-500 dark:text-slate-400 rounded-xl font-bold text-xs transition-all border border-slate-100 dark:border-slate-700/40 cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    id="btn-confirm-handover-verify"
-                    type="submit"
-                    disabled={confirmingDelivery || !productIdInput.trim()}
-                    className="flex-1 h-12 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/10 active:scale-[0.98] border-none outline-none cursor-pointer"
-                  >
-                    {confirmingDelivery ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <CheckCircle className="w-4 h-4" />
-                    )}
-                    Verify & Confirm
-                  </button>
-                </div>
-              </form>
+                  Confirm Delivery
+                </button>
+              </div>
             </motion.div>
           </div>
         )}

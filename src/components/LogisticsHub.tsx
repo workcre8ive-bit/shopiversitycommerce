@@ -1,7 +1,7 @@
 import React from "react";
 import { auth, db, googleProvider } from "../firebase";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
-import { generateReferralCode, cn } from "../lib/utils";
+import { generateReferralCode, cn, getOrderDeliveryPin } from "../lib/utils";
 import Logo from "./Logo";
 import { 
   createUserWithEmailAndPassword, 
@@ -64,11 +64,22 @@ import {
   Smartphone,
   CreditCard,
   Plus,
-  KeyRound
+  KeyRound,
+  ChevronDown,
+  SlidersHorizontal,
+  ArrowUpDown,
+  Kanban,
+  ListFilter,
+  LayoutGrid,
+  List,
+  Filter
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { NIGERIAN_CAMPUSES } from "../constants/campuses";
 import DashboardSlideshow from "./DashboardSlideshow";
+import { AvailableJobsView } from "./logistics/AvailableJobsView";
+import { ActiveDeliveriesView } from "./logistics/ActiveDeliveriesView";
+import { DeliveryHistoryView } from "./logistics/DeliveryHistoryView";
 
 interface LogisticsCompany {
   id: string;
@@ -236,6 +247,41 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
   const [jobEtaInput, setJobEtaInput] = React.useState<string>("");
   const [scopeCampusFilter, setScopeCampusFilter] = React.useState<"all" | "covered">("all");
 
+  // Arrangement, search, view mode & sorting states for Available Jobs
+  const [availableSearchQuery, setAvailableSearchQuery] = React.useState("");
+  const [availableSortBy, setAvailableSortBy] = React.useState<"direct_first" | "newest" | "oldest" | "highest_fare">("direct_first");
+  const [availableTypeFilter, setAvailableTypeFilter] = React.useState<"all" | "direct" | "open">("all");
+
+  // Arrangement, search, view mode & sorting states for Active Deliveries
+  const [activeSearchQuery, setActiveSearchQuery] = React.useState("");
+  const [activeStageFilter, setActiveStageFilter] = React.useState<"all" | "accepted" | "picked_up" | "in_transit">("all");
+  const [activeSortBy, setActiveSortBy] = React.useState<"pipeline" | "urgent" | "newest" | "oldest" | "highest_fare">("pipeline");
+  const [activeViewMode, setActiveViewMode] = React.useState<"list" | "pipeline">("list");
+
+  // Arrangement, search & sorting states for History
+  const [historySearchQuery, setHistorySearchQuery] = React.useState("");
+  const [historyStatusFilter, setHistoryStatusFilter] = React.useState<"all" | "delivered" | "cancelled">("all");
+  const [historySortBy, setHistorySortBy] = React.useState<"newest" | "oldest" | "highest_fare">("newest");
+
+  // Helper for human relative time
+  const formatJobTime = (dateStr?: string) => {
+    if (!dateStr) return "";
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return "";
+      const now = new Date();
+      const diffMs = now.getTime() - d.getTime();
+      const diffMins = Math.floor(diffMs / 60000);
+      if (diffMins < 1) return "Just now";
+      if (diffMins < 60) return `${diffMins}m ago`;
+      const diffHours = Math.floor(diffMins / 60);
+      if (diffHours < 24) return `${diffHours}h ago`;
+      return d.toLocaleDateString("en-NG", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    } catch {
+      return "";
+    }
+  };
+
   // Courier Delivery OTP verification states
   const [otpModalJob, setOtpModalJob] = React.useState<DeliveryJob | null>(null);
   const [otpInput, setOtpInput] = React.useState("");
@@ -361,13 +407,13 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
 
         if (!deliveriesMap.has(jobId)) {
           let mappedStatus: DeliveryJob["status"] = "pending";
-          if (ord.status === "completed" || ord.status === "Order Delivered" || ord.status === "delivered") {
+          if (ord.status === "completed" || ord.status === "Order Delivered" || ord.status === "delivered" || ord.deliveryStatus === "delivered" || ord.logisticsStatus === "delivered") {
             mappedStatus = "delivered";
           } else if (ord.status === "cancelled") {
             mappedStatus = "cancelled";
-          } else if (ord.status === "out_for_delivery" || ord.status === "Out For Delivery" || ord.status === "transit") {
+          } else if (ord.status === "out_for_delivery" || ord.status === "Out For Delivery" || ord.deliveryStatus === "out_for_delivery" || ord.logisticsStatus === "out_for_delivery") {
             mappedStatus = "in_transit";
-          } else if (ord.status === "picked_up" || ord.status === "Order Picked Up") {
+          } else if (ord.status === "transit" || ord.status === "In Transit" || ord.status === "picked_up" || ord.status === "Order Picked Up" || ord.deliveryStatus === "transit" || ord.deliveryStatus === "picked_up" || ord.logisticsStatus === "transit" || ord.logisticsStatus === "picked_up") {
             mappedStatus = "picked_up";
           } else if (ord.logisticsOfferStatus === "accepted" || (ord.logisticsId === companyProfile.id && ord.status === "accepted")) {
             mappedStatus = "accepted";
@@ -398,12 +444,23 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
 
           deliveriesMap.set(jobId, synthesizedJob);
         } else {
-          // If already in map, update status if changed in orders
+          // If already in map, keep status synchronized with order transitions
           const existing = deliveriesMap.get(jobId)!;
-          if (ord.logisticsOfferStatus === "accepted" && existing.status === "pending") {
-            existing.status = "accepted";
-            deliveriesMap.set(jobId, existing);
+          let mappedStatus = existing.status;
+          if (ord.status === "completed" || ord.status === "Order Delivered" || ord.status === "delivered" || ord.deliveryStatus === "delivered" || ord.logisticsStatus === "delivered") {
+            mappedStatus = "delivered";
+          } else if (ord.status === "cancelled") {
+            mappedStatus = "cancelled";
+          } else if (ord.status === "out_for_delivery" || ord.status === "Out For Delivery" || ord.deliveryStatus === "out_for_delivery" || ord.logisticsStatus === "out_for_delivery") {
+            mappedStatus = "in_transit";
+          } else if (ord.status === "transit" || ord.status === "In Transit" || ord.status === "picked_up" || ord.status === "Order Picked Up" || ord.deliveryStatus === "transit" || ord.deliveryStatus === "picked_up" || ord.logisticsStatus === "transit" || ord.logisticsStatus === "picked_up") {
+            mappedStatus = "picked_up";
+          } else if (ord.logisticsOfferStatus === "accepted" || (ord.logisticsId === companyProfile.id && ord.status === "accepted")) {
+            mappedStatus = "accepted";
           }
+          existing.status = mappedStatus;
+          if (ord.updatedAt) existing.updatedAt = ord.updatedAt;
+          deliveriesMap.set(jobId, existing);
         }
       });
       setAllDeliveries(Array.from(deliveriesMap.values()));
@@ -470,6 +527,184 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
       ["delivered", "cancelled"].includes(job.status)
     );
   }, [allDeliveries, companyProfile]);
+
+  // Derived counts for tabs and filters
+  const directOffersCount = React.useMemo(() => {
+    return availableJobs.filter(job => 
+      job.logisticsId === companyProfile?.id || 
+      (!!job.logisticsName && !!companyProfile?.companyName && job.logisticsName.toLowerCase().trim() === companyProfile.companyName.toLowerCase().trim())
+    ).length;
+  }, [availableJobs, companyProfile]);
+
+  const openPoolCount = React.useMemo(() => {
+    return availableJobs.filter(job => 
+      job.logisticsId !== companyProfile?.id && 
+      !(!!job.logisticsName && !!companyProfile?.companyName && job.logisticsName.toLowerCase().trim() === companyProfile.companyName.toLowerCase().trim())
+    ).length;
+  }, [availableJobs, companyProfile]);
+
+  // Arranged, filtered, and sorted available jobs
+  const arrangedAvailableJobs = React.useMemo(() => {
+    let list = [...availableJobs];
+
+    if (availableTypeFilter === "direct") {
+      list = list.filter(job => 
+        job.logisticsId === companyProfile?.id || 
+        (!!job.logisticsName && !!companyProfile?.companyName && job.logisticsName.toLowerCase().trim() === companyProfile.companyName.toLowerCase().trim())
+      );
+    } else if (availableTypeFilter === "open") {
+      list = list.filter(job => 
+        job.logisticsId !== companyProfile?.id && 
+        !(!!job.logisticsName && !!companyProfile?.companyName && job.logisticsName.toLowerCase().trim() === companyProfile.companyName.toLowerCase().trim())
+      );
+    }
+
+    if (availableSearchQuery.trim()) {
+      const q = availableSearchQuery.toLowerCase().trim();
+      list = list.filter(job => 
+        job.orderId.toLowerCase().includes(q) ||
+        job.productName.toLowerCase().includes(q) ||
+        job.campus.toLowerCase().includes(q) ||
+        job.sellerName.toLowerCase().includes(q) ||
+        job.buyerName.toLowerCase().includes(q) ||
+        job.sellerAddress.toLowerCase().includes(q) ||
+        job.buyerAddress.toLowerCase().includes(q)
+      );
+    }
+
+    list.sort((a, b) => {
+      const isDirectA = a.logisticsId === companyProfile?.id || (!!a.logisticsName && !!companyProfile?.companyName && a.logisticsName.toLowerCase().trim() === companyProfile.companyName.toLowerCase().trim());
+      const isDirectB = b.logisticsId === companyProfile?.id || (!!b.logisticsName && !!companyProfile?.companyName && b.logisticsName.toLowerCase().trim() === companyProfile.companyName.toLowerCase().trim());
+
+      if (availableSortBy === "direct_first") {
+        if (isDirectA && !isDirectB) return -1;
+        if (!isDirectA && isDirectB) return 1;
+        return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+      }
+      if (availableSortBy === "newest") {
+        return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+      }
+      if (availableSortBy === "oldest") {
+        return new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime();
+      }
+      if (availableSortBy === "highest_fare") {
+        return (b.deliveryPrice || 0) - (a.deliveryPrice || 0);
+      }
+      return 0;
+    });
+
+    return list;
+  }, [availableJobs, availableTypeFilter, availableSearchQuery, availableSortBy, companyProfile]);
+
+  // Stage breakdown counts for active deliveries
+  const stageAcceptedCount = React.useMemo(() => activeDeliveries.filter(j => j.status === "accepted").length, [activeDeliveries]);
+  const stagePickedUpCount = React.useMemo(() => activeDeliveries.filter(j => j.status === "picked_up").length, [activeDeliveries]);
+  const stageInTransitCount = React.useMemo(() => activeDeliveries.filter(j => j.status === "in_transit").length, [activeDeliveries]);
+
+  // Arranged, filtered, and sorted active deliveries
+  const arrangedActiveDeliveries = React.useMemo(() => {
+    let list = [...activeDeliveries];
+
+    if (activeStageFilter !== "all") {
+      list = list.filter(job => job.status === activeStageFilter);
+    }
+
+    if (activeSearchQuery.trim()) {
+      const q = activeSearchQuery.toLowerCase().trim();
+      list = list.filter(job => 
+        job.orderId.toLowerCase().includes(q) ||
+        job.productName.toLowerCase().includes(q) ||
+        job.campus.toLowerCase().includes(q) ||
+        job.sellerName.toLowerCase().includes(q) ||
+        job.buyerName.toLowerCase().includes(q) ||
+        job.sellerAddress.toLowerCase().includes(q) ||
+        job.buyerAddress.toLowerCase().includes(q)
+      );
+    }
+
+    list.sort((a, b) => {
+      if (activeSortBy === "pipeline") {
+        // Sequential fulfillment sequence:
+        // 1. accepted (Awaiting pickup from seller)
+        // 2. picked_up (Package picked up, in transit)
+        // 3. in_transit (Out for delivery to buyer, needs 6-digit PIN)
+        const stageWeight: Record<string, number> = {
+          "accepted": 1,
+          "picked_up": 2,
+          "in_transit": 3
+        };
+        const weightA = stageWeight[a.status] || 99;
+        const weightB = stageWeight[b.status] || 99;
+        if (weightA !== weightB) return weightA - weightB;
+        return new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime();
+      }
+      if (activeSortBy === "urgent") {
+        // Urgent handover action needed first:
+        // 1. in_transit (Arrived at buyer, awaiting buyer's 6-digit PIN)
+        // 2. picked_up (In transit)
+        // 3. accepted (Awaiting seller pickup)
+        const stageWeight: Record<string, number> = {
+          "in_transit": 1,
+          "picked_up": 2,
+          "accepted": 3
+        };
+        const weightA = stageWeight[a.status] || 99;
+        const weightB = stageWeight[b.status] || 99;
+        if (weightA !== weightB) return weightA - weightB;
+        return new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime();
+      }
+      if (activeSortBy === "newest") {
+        return new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime();
+      }
+      if (activeSortBy === "oldest") {
+        return new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime();
+      }
+      if (activeSortBy === "highest_fare") {
+        return (b.deliveryPrice || 0) - (a.deliveryPrice || 0);
+      }
+      return 0;
+    });
+
+    return list;
+  }, [activeDeliveries, activeStageFilter, activeSearchQuery, activeSortBy]);
+
+  // History counts and arranged list
+  const historyDeliveredCount = React.useMemo(() => deliveryHistory.filter(j => j.status === "delivered").length, [deliveryHistory]);
+  const historyCancelledCount = React.useMemo(() => deliveryHistory.filter(j => j.status === "cancelled").length, [deliveryHistory]);
+
+  const arrangedDeliveryHistory = React.useMemo(() => {
+    let list = [...deliveryHistory];
+
+    if (historyStatusFilter !== "all") {
+      list = list.filter(job => job.status === historyStatusFilter);
+    }
+
+    if (historySearchQuery.trim()) {
+      const q = historySearchQuery.toLowerCase().trim();
+      list = list.filter(job => 
+        job.orderId.toLowerCase().includes(q) ||
+        job.productName.toLowerCase().includes(q) ||
+        job.campus.toLowerCase().includes(q) ||
+        job.sellerName.toLowerCase().includes(q) ||
+        job.buyerName.toLowerCase().includes(q)
+      );
+    }
+
+    list.sort((a, b) => {
+      if (historySortBy === "newest") {
+        return new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime();
+      }
+      if (historySortBy === "oldest") {
+        return new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime();
+      }
+      if (historySortBy === "highest_fare") {
+        return (b.deliveryPrice || 0) - (a.deliveryPrice || 0);
+      }
+      return 0;
+    });
+
+    return list;
+  }, [deliveryHistory, historyStatusFilter, historySearchQuery, historySortBy]);
 
   const processLogisticsGoogleUser = async (user: any) => {
     // Check if user is already registered as a Buyer/Seller account
@@ -1062,8 +1297,10 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
       
       if (orderSnap.exists()) {
         const orderData = orderSnap.data();
+        const derivedPin = getOrderDeliveryPin({ id: actualOrderId, deliveryOtp: orderData?.deliveryOtp });
         const validCodes = [
           orderData.deliveryOtp,
+          derivedPin,
           orderData.pickupOtp,
           orderData.handoverCode,
           actualOrderId.slice(-6).toUpperCase(),
@@ -1865,456 +2102,73 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
 
               {/* SUBVIEW 1: AVAILABLE DELIVERY JOBS */}
               {activeTab === "available-jobs" && (
-                <div className="space-y-5">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div>
-                      <h3 className="text-xl font-black text-slate-800 dark:text-zinc-100 flex items-center gap-2">
-                        <span>Pending Campus Deliveries</span>
-                        <span className="text-xs font-bold text-orange-600 bg-orange-50 dark:bg-orange-950/30 px-2.5 py-0.5 rounded-full border border-orange-200 dark:border-orange-900/50">
-                          {availableJobs.length} Available
-                        </span>
-                      </h3>
-                      <p className="text-xs text-slate-500">Unassigned shipments needing dispatch on your campus network</p>
-                    </div>
-
-                    {/* Scope toggle filter */}
-                    <div className="flex items-center gap-1.5 p-1 bg-slate-100 dark:bg-zinc-800/80 rounded-2xl">
-                      <button
-                        type="button"
-                        onClick={() => setScopeCampusFilter("all")}
-                        className={cn(
-                          "px-3 py-1.5 rounded-xl text-[11px] font-black transition-all cursor-pointer border-none",
-                          scopeCampusFilter === "all"
-                            ? "bg-white dark:bg-zinc-900 text-orange-600 shadow-xs"
-                            : "text-slate-500 hover:text-slate-700 dark:text-zinc-400"
-                        )}
-                      >
-                        All Campus Orders
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setScopeCampusFilter("covered")}
-                        className={cn(
-                          "px-3 py-1.5 rounded-xl text-[11px] font-black transition-all cursor-pointer border-none",
-                          scopeCampusFilter === "covered"
-                            ? "bg-white dark:bg-zinc-900 text-orange-600 shadow-xs"
-                            : "text-slate-500 hover:text-slate-700 dark:text-zinc-400"
-                        )}
-                      >
-                        My Covered Campuses
-                      </button>
-                    </div>
-                  </div>
-
-                  {availableJobs.length === 0 ? (
-                    <div className="bg-white dark:bg-zinc-900 border border-dashed border-slate-200 dark:border-zinc-800 rounded-[2.5rem] p-12 text-center space-y-3">
-                      <div className="w-16 h-16 rounded-3xl bg-orange-50 dark:bg-orange-950/20 text-orange-600 flex items-center justify-center mx-auto">
-                        <Package className="w-8 h-8" />
-                      </div>
-                      <h4 className="font-bold text-slate-700 dark:text-zinc-300">No unassigned orders right now</h4>
-                      <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                        {scopeCampusFilter === "covered"
-                          ? "No pending orders found on your selected covered campuses. Try switching to 'All Campus Orders' or updating your covered campuses in your profile."
-                          : "New orders will appear here automatically when sellers request campus delivery."}
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {availableJobs.map((job, jIdx) => (
-                        <div key={`avail-job-${job.id || jIdx}-${jIdx}`} className="bg-white dark:bg-zinc-900 border border-slate-200/70 dark:border-zinc-800/70 p-5 sm:p-6 rounded-[2rem] shadow-xs hover:shadow-md transition-all flex flex-col justify-between space-y-4">
-                          <div className="space-y-3">
-                            <div className="flex items-start justify-between gap-3 border-b border-slate-100 dark:border-zinc-850 pb-3">
-                              <div className="space-y-1">
-                                {job.logisticsId === companyProfile.id ? (
-                                  <span className="inline-flex items-center gap-1 text-[9px] font-black text-emerald-600 dark:text-emerald-400 uppercase tracking-wider bg-emerald-50 dark:bg-emerald-950/30 px-2.5 py-0.5 rounded-full">
-                                    ⭐ Direct Offer to Your Company
-                                  </span>
-                                ) : (
-                                  <span className="inline-flex items-center gap-1 text-[9px] font-black text-orange-600 uppercase tracking-wider bg-orange-50 dark:bg-orange-950/30 px-2.5 py-0.5 rounded-full">
-                                    🌐 Campus Order
-                                  </span>
-                                )}
-                                <h4 className="font-black text-slate-800 dark:text-zinc-100 text-sm sm:text-base line-clamp-1">{job.productName} (x{job.quantity || 1})</h4>
-                                <p className="text-[10px] font-bold text-slate-400">Order Ref: #{job.orderId.slice(-6).toUpperCase()} • Campus: {job.campus}</p>
-                              </div>
-                              <div className="text-right shrink-0">
-                                <span className="text-[10px] font-bold text-slate-400 block uppercase">Fare Paid</span>
-                                <span className="font-black text-orange-600 text-base">₦{job.deliveryPrice.toLocaleString()}</span>
-                              </div>
-                            </div>
-
-                            {/* Journey details */}
-                            <div className="space-y-2.5 text-xs">
-                              <div className="flex gap-2.5 items-start p-2.5 rounded-xl bg-slate-50 dark:bg-zinc-850/50">
-                                <div className="w-5 h-5 rounded-full bg-slate-200 dark:bg-zinc-700 text-slate-700 dark:text-zinc-200 flex items-center justify-center text-[10px] font-black shrink-0 mt-0.5">A</div>
-                                <div className="space-y-0.5 min-w-0 flex-1">
-                                  <div className="flex items-center justify-between">
-                                    <p className="font-bold text-slate-500 uppercase tracking-wider text-[9px]">Pickup Location (Merchant)</p>
-                                    {job.sellerPhone && (
-                                      <a
-                                        href={`tel:${job.sellerPhone}`}
-                                        className="inline-flex items-center gap-1 text-[10px] font-bold text-orange-600 dark:text-orange-400 hover:underline"
-                                      >
-                                        <Phone className="w-2.5 h-2.5" /> Call Seller ({job.sellerPhone})
-                                      </a>
-                                    )}
-                                  </div>
-                                  <p className="font-bold text-slate-800 dark:text-zinc-200 truncate">{job.sellerName} {job.sellerPhone ? `• ${job.sellerPhone}` : ""}</p>
-                                  <p className="text-slate-400 text-[11px] truncate">{job.sellerAddress}</p>
-                                </div>
-                              </div>
-
-                              <div className="flex gap-2.5 items-start p-2.5 rounded-xl bg-orange-50/50 dark:bg-orange-950/10 border border-orange-100/50 dark:border-orange-900/20">
-                                <div className="w-5 h-5 rounded-full bg-orange-600 text-white flex items-center justify-center text-[10px] font-black shrink-0 mt-0.5">B</div>
-                                <div className="space-y-0.5 min-w-0 flex-1">
-                                  <div className="flex items-center justify-between">
-                                    <p className="font-bold text-orange-600 uppercase tracking-wider text-[9px]">Dropoff Destination (Buyer)</p>
-                                    {job.buyerPhone && (
-                                      <a
-                                        href={`tel:${job.buyerPhone}`}
-                                        className="inline-flex items-center gap-1 text-[10px] font-bold text-orange-600 hover:underline"
-                                      >
-                                        <Phone className="w-2.5 h-2.5" /> Call Buyer ({job.buyerPhone})
-                                      </a>
-                                    )}
-                                  </div>
-                                  <p className="font-bold text-slate-800 dark:text-zinc-200 truncate">{job.buyerName} {job.buyerPhone ? `• ${job.buyerPhone}` : ""}</p>
-                                  <p className="text-slate-400 text-[11px] truncate">{job.buyerAddress}</p>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Quick ETA & Acceptance Section */}
-                          <div className="pt-3 border-t border-slate-100 dark:border-zinc-850 space-y-2">
-                            {jobAcceptingId === job.id ? (
-                              <div className="space-y-2 bg-orange-50/80 dark:bg-orange-950/20 p-3 rounded-xl border border-orange-200 dark:border-orange-900">
-                                <div className="flex items-center justify-between">
-                                  <span className="text-[10px] font-bold text-orange-600 uppercase tracking-wider">Estimated Delivery Turnaround:</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => setJobAcceptingId(null)}
-                                    className="text-[10px] font-bold text-slate-400 hover:text-slate-600 cursor-pointer bg-transparent border-none"
-                                  >
-                                    Cancel
-                                  </button>
-                                </div>
-                                <div className="grid grid-cols-3 gap-1.5">
-                                  {["30-45 Mins", "1-2 Hours", "Today by 5pm"].map((preset, pIdx) => (
-                                    <button
-                                      key={`eta-preset-${preset}-${pIdx}`}
-                                      type="button"
-                                      onClick={() => setJobEtaInput(preset)}
-                                      className={cn(
-                                        "py-1 px-1.5 rounded-lg text-[10px] font-bold transition-all border cursor-pointer",
-                                        jobEtaInput === preset
-                                          ? "bg-orange-600 text-white border-orange-600"
-                                          : "bg-white dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 border-slate-200 dark:border-zinc-700"
-                                      )}
-                                    >
-                                      {preset}
-                                    </button>
-                                  ))}
-                                </div>
-                                <input
-                                  type="text"
-                                  placeholder="Or enter custom ETA (e.g. 1 hour)"
-                                  value={jobEtaInput}
-                                  onChange={(e) => setJobEtaInput(e.target.value)}
-                                  className="w-full h-8 px-2.5 text-xs bg-white dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded-lg outline-none focus:border-orange-500"
-                                />
-                                <button
-                                  type="button"
-                                  disabled={loading}
-                                  onClick={() => handleAcceptJob(job.id, jobEtaInput || companyProfile.estimatedTurnaround)}
-                                  className="w-full h-10 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
-                                >
-                                  {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Check className="w-4 h-4" /> Confirm & Accept Delivery</>}
-                                </button>
-                              </div>
-                            ) : job.logisticsId === companyProfile.id ? (
-                              <div className="flex gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setJobAcceptingId(job.id);
-                                    setJobEtaInput(companyProfile.estimatedTurnaround || "1-3 Hours on Campus");
-                                  }}
-                                  className="flex-1 h-11 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
-                                >
-                                  <Check className="w-4 h-4" />
-                                  Accept Offer
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={loading}
-                                  onClick={() => handleDeclineJob(job.id)}
-                                  className="flex-1 h-11 bg-red-100 dark:bg-red-950/30 hover:bg-red-200 text-red-700 dark:text-red-400 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer border-none"
-                                >
-                                  <X className="w-4 h-4" />
-                                  Decline Offer
-                                </button>
-                              </div>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setJobAcceptingId(job.id);
-                                  setJobEtaInput(companyProfile.estimatedTurnaround || "1-3 Hours on Campus");
-                                }}
-                                className="w-full h-11 bg-slate-900 dark:bg-zinc-800 hover:bg-orange-600 hover:dark:bg-orange-600 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs border-none"
-                              >
-                                <Truck className="w-4 h-4" />
-                                Accept Delivery Contract
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <AvailableJobsView
+                  companyProfile={companyProfile}
+                  arrangedAvailableJobs={arrangedAvailableJobs}
+                  availableJobsTotalCount={availableJobs.length}
+                  directOffersCount={directOffersCount}
+                  openPoolCount={openPoolCount}
+                  scopeCampusFilter={scopeCampusFilter}
+                  setScopeCampusFilter={setScopeCampusFilter}
+                  availableSearchQuery={availableSearchQuery}
+                  setAvailableSearchQuery={setAvailableSearchQuery}
+                  availableTypeFilter={availableTypeFilter}
+                  setAvailableTypeFilter={setAvailableTypeFilter}
+                  availableSortBy={availableSortBy}
+                  setAvailableSortBy={setAvailableSortBy}
+                  jobAcceptingId={jobAcceptingId}
+                  setJobAcceptingId={setJobAcceptingId}
+                  jobEtaInput={jobEtaInput}
+                  setJobEtaInput={setJobEtaInput}
+                  handleAcceptJob={handleAcceptJob}
+                  handleDeclineJob={handleDeclineJob}
+                  loading={loading}
+                  formatJobTime={formatJobTime}
+                />
               )}
 
               {/* SUBVIEW 2: ACTIVE DELIVERIES */}
               {activeTab === "active-deliveries" && (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="text-xl font-black text-slate-800 dark:text-zinc-100 flex items-center gap-2">
-                        <span>Live Delivery Shipments</span>
-                        <span className="text-xs font-bold text-orange-600 bg-orange-50 dark:bg-orange-950/30 px-2.5 py-0.5 rounded-full border border-orange-200 dark:border-orange-900/50">
-                          {activeDeliveries.length} In Progress
-                        </span>
-                      </h3>
-                      <p className="text-xs text-slate-500">Track accepted orders and update current delivery status</p>
-                    </div>
-                  </div>
-
-                  {activeDeliveries.length === 0 ? (
-                    <div className="bg-white dark:bg-zinc-900 border border-dashed border-slate-200 dark:border-zinc-800 rounded-[2.5rem] p-12 text-center space-y-3">
-                      <Truck className="w-16 h-16 text-slate-300 mx-auto animate-pulse" />
-                      <h4 className="font-bold text-slate-700 dark:text-zinc-300">No active deliveries</h4>
-                      <p className="text-xs text-slate-400 max-w-sm mx-auto">Accept unassigned contracts from the 'Available Jobs' tab to manage live deliveries.</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {activeDeliveries.map((job, aIdx) => (
-                        <div key={`active-job-${job.id || aIdx}-${aIdx}`} className="bg-white dark:bg-zinc-900 border border-slate-200/60 dark:border-zinc-800/60 p-6 rounded-[2.5rem] shadow-xs space-y-5">
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-zinc-850 pb-4">
-                            <div>
-                              <span className={cn(
-                                "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider mb-2",
-                                job.status === "accepted" ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20" :
-                                job.status === "picked_up" ? "bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20" :
-                                job.status === "in_transit" ? "bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/20" :
-                                "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
-                              )}>
-                                {job.status === "accepted" ? <Clock className="w-3.5 h-3.5" /> :
-                                 job.status === "picked_up" ? <Truck className="w-3.5 h-3.5" /> :
-                                 job.status === "in_transit" ? <MapPin className="w-3.5 h-3.5" /> :
-                                 <CheckCircle className="w-3.5 h-3.5" />}
-                                {job.status === "accepted" ? "Awaiting Handover from Seller" :
-                                 job.status === "picked_up" ? "In Transit" :
-                                 job.status === "in_transit" ? "Out for Delivery" : "Delivered"}
-                              </span>
-                              <h4 className="text-base font-black text-slate-800 dark:text-zinc-100">{job.productName} (x{job.quantity || 1})</h4>
-                              <p className="text-xs font-medium text-slate-400">Order Ref: #{job.orderId.slice(-6).toUpperCase()}</p>
-                            </div>
-                            <div className="text-right">
-                              <p className="text-xs text-slate-400 font-bold">Delivery Fare Paid</p>
-                              <strong className="text-xl font-black text-slate-900 dark:text-zinc-100">₦{job.deliveryPrice.toLocaleString()}</strong>
-                            </div>
-                          </div>
-
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <div className="space-y-2 p-3.5 rounded-2xl bg-slate-50 dark:bg-zinc-850/50">
-                              <div className="flex items-center justify-between">
-                                <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Pickup Location (Seller)</span>
-                                {job.sellerPhone && (
-                                  <a
-                                    href={`tel:${job.sellerPhone}`}
-                                    className="inline-flex items-center gap-1 text-[10px] font-bold text-orange-600 dark:text-orange-400 hover:underline"
-                                  >
-                                    <Phone className="w-3 h-3" /> Call Seller
-                                  </a>
-                                )}
-                              </div>
-                              <p className="text-xs font-bold text-slate-800 dark:text-zinc-200">
-                                {job.sellerName} ({job.campus}) {job.sellerPhone ? `• ${job.sellerPhone}` : ""}
-                              </p>
-                              <p className="text-xs text-slate-500 leading-relaxed">{job.sellerAddress}</p>
-                            </div>
-
-                            <div className="space-y-2 p-3.5 rounded-2xl bg-orange-50/50 dark:bg-orange-950/10 border border-orange-100/50 dark:border-orange-900/20">
-                              <div className="flex items-center justify-between">
-                                <span className="text-[10px] font-black text-orange-600 uppercase tracking-wider">Destination (Buyer)</span>
-                                {job.buyerPhone && (
-                                  <a
-                                    href={`tel:${job.buyerPhone}`}
-                                    className="inline-flex items-center gap-1 text-[10px] font-bold text-orange-600 hover:underline"
-                                  >
-                                    <Phone className="w-3 h-3" /> Call Buyer
-                                  </a>
-                                )}
-                              </div>
-                              <p className="text-xs font-bold text-slate-800 dark:text-zinc-200">
-                                {job.buyerName} {job.buyerPhone ? `(${job.buyerPhone})` : ""}
-                              </p>
-                              <p className="text-xs text-slate-500 leading-relaxed">{job.buyerAddress}</p>
-                            </div>
-                          </div>
-
-                          {/* Status Stepper Progression Button */}
-                          <div className="pt-3 border-t border-slate-100 dark:border-zinc-850 flex items-center justify-between flex-wrap gap-4">
-                            <div className="flex gap-2 items-center text-xs font-semibold text-slate-500 dark:text-slate-400">
-                              <span className={cn("px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1", job.status === "accepted" ? "bg-amber-100 text-amber-900 dark:bg-amber-950/60 dark:text-amber-300 ring-2 ring-amber-400/40" : "bg-emerald-100 text-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-300")}>
-                                1. Accepted
-                              </span>
-                              <ArrowRight className="w-3 h-3 text-slate-400" />
-                              <span className={cn("px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1", job.status === "picked_up" ? "bg-purple-100 text-purple-900 dark:bg-purple-950/60 dark:text-purple-300 ring-2 ring-purple-400/40" : (job.status === "in_transit" || job.status === "delivered") ? "bg-emerald-100 text-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-300" : "bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500")}>
-                                2. In Transit
-                              </span>
-                              <ArrowRight className="w-3 h-3 text-slate-400" />
-                              <span className={cn("px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1", job.status === "in_transit" ? "bg-orange-100 text-orange-900 dark:bg-orange-950/60 dark:text-orange-300 ring-2 ring-orange-400/40" : job.status === "delivered" ? "bg-emerald-100 text-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-300" : "bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500")}>
-                                3. Out for Delivery
-                              </span>
-                            </div>
-
-                            <button
-                              type="button"
-                              disabled={loading}
-                              onClick={() => {
-                                if (job.status === "in_transit") {
-                                  setOtpModalJob(job);
-                                  setOtpInput("");
-                                  setOtpError(null);
-                                } else {
-                                  handleUpdateStatus(job.id, job.status);
-                                }
-                              }}
-                              className={cn(
-                                "h-11 px-5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 shadow-md cursor-pointer border-none text-white active:scale-95",
-                                job.status === "accepted" ? "bg-purple-600 hover:bg-purple-700 shadow-purple-600/20" :
-                                job.status === "picked_up" ? "bg-orange-600 hover:bg-orange-700 shadow-orange-500/20" :
-                                "bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20"
-                              )}
-                            >
-                              {loading ? (
-                                <Loader2 className="w-4 h-4 animate-spin" />
-                              ) : (
-                                <>
-                                  {job.status === "accepted" && (
-                                    <>
-                                      <Truck className="w-4 h-4" />
-                                      Product Handed Over by Seller (Move to Transit)
-                                    </>
-                                  )}
-                                  {job.status === "picked_up" && (
-                                    <>
-                                      <MapPin className="w-4 h-4" />
-                                      Out for Delivery
-                                    </>
-                                  )}
-                                  {job.status === "in_transit" && (
-                                    <>
-                                      <ShieldCheck className="w-4 h-4" />
-                                      Verify Delivery PIN & Deliver to Buyer
-                                    </>
-                                  )}
-                                </>
-                              )}
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <ActiveDeliveriesView
+                  companyProfile={companyProfile}
+                  activeDeliveries={activeDeliveries}
+                  arrangedActiveDeliveries={arrangedActiveDeliveries}
+                  activeStageFilter={activeStageFilter}
+                  setActiveStageFilter={setActiveStageFilter}
+                  activeSortBy={activeSortBy}
+                  setActiveSortBy={setActiveSortBy}
+                  activeSearchQuery={activeSearchQuery}
+                  setActiveSearchQuery={setActiveSearchQuery}
+                  activeViewMode={activeViewMode}
+                  setActiveViewMode={setActiveViewMode}
+                  stageAcceptedCount={stageAcceptedCount}
+                  stagePickedUpCount={stagePickedUpCount}
+                  stageInTransitCount={stageInTransitCount}
+                  handleUpdateStatus={handleUpdateStatus}
+                  setOtpModalJob={setOtpModalJob}
+                  setOtpInput={setOtpInput}
+                  setOtpError={setOtpError}
+                  loading={loading}
+                  formatJobTime={formatJobTime}
+                />
               )}
 
               {/* SUBVIEW 3: DELIVERY HISTORY & EARNINGS */}
               {activeTab === "history" && (
-                <div className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="bg-white dark:bg-zinc-900 p-6 rounded-[2rem] border border-slate-200/60 dark:border-zinc-800/60 shadow-xs">
-                      <p className="text-xs text-slate-400 font-bold uppercase">Total Settled Earnings</p>
-                      <strong className="text-2xl font-black text-slate-800 dark:text-zinc-100 mt-1 block">
-                        ₦{deliveryHistory
-                          .filter(j => j.status === "delivered")
-                          .reduce((sum, j) => sum + j.deliveryPrice, 0)
-                          .toLocaleString()
-                        }
-                      </strong>
-                    </div>
-
-                    <div className="bg-white dark:bg-zinc-900 p-6 rounded-[2rem] border border-slate-200/60 dark:border-zinc-800/60 shadow-xs">
-                      <p className="text-xs text-slate-400 font-bold uppercase">Completed Shipments</p>
-                      <strong className="text-2xl font-black text-slate-800 dark:text-zinc-100 mt-1 block">
-                        {deliveryHistory.filter(j => j.status === "delivered").length} deliveries
-                      </strong>
-                    </div>
-
-                    <div className="bg-white dark:bg-zinc-900 p-6 rounded-[2rem] border border-slate-200/60 dark:border-zinc-800/60 shadow-xs">
-                      <p className="text-xs text-slate-400 font-bold uppercase">Cancelled Shipments</p>
-                      <strong className="text-2xl font-black text-slate-800 dark:text-zinc-100 mt-1 block">
-                        {deliveryHistory.filter(j => j.status === "cancelled").length} jobs
-                      </strong>
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    <h3 className="text-lg font-black text-slate-800 dark:text-zinc-100">Delivery Shipment History</h3>
-                    
-                    {deliveryHistory.length === 0 ? (
-                      <div className="bg-white dark:bg-zinc-900 border border-slate-200/60 dark:border-zinc-800/60 rounded-[2rem] p-8 text-center text-slate-400 text-xs">
-                        No previous delivery logs recorded.
-                      </div>
-                    ) : (
-                      <div className="bg-white dark:bg-zinc-900 border border-slate-200/60 dark:border-zinc-800/60 rounded-[2.5rem] overflow-hidden">
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-left border-collapse">
-                            <thead>
-                              <tr className="bg-slate-50 dark:bg-zinc-850 text-[10px] font-black text-slate-400 uppercase border-b border-slate-100 dark:border-zinc-800">
-                                <th className="px-6 py-4">Item Details</th>
-                                <th className="px-6 py-4">Pickup / Buyer</th>
-                                <th className="px-6 py-4">Fare Paid</th>
-                                <th className="px-6 py-4">Status</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-50 dark:divide-zinc-850">
-                              {deliveryHistory.map((job, hIdx) => (
-                                <tr key={`hist-job-${job.id || hIdx}-${hIdx}`} className="text-xs hover:bg-slate-50/50 dark:hover:bg-zinc-850/30 transition-colors">
-                                  <td className="px-6 py-4">
-                                    <p className="font-bold text-slate-800 dark:text-zinc-100">{job.productName}</p>
-                                    <p className="text-[10px] text-slate-400 font-medium">Order: #{job.orderId.slice(-6).toUpperCase()}</p>
-                                  </td>
-                                  <td className="px-6 py-4">
-                                    <p className="font-bold text-slate-700 dark:text-zinc-300">Pickup: {job.sellerName}</p>
-                                    <p className="text-[10px] text-slate-400 font-medium">Buyer: {job.buyerName}</p>
-                                  </td>
-                                  <td className="px-6 py-4 font-black text-slate-800 dark:text-zinc-100">
-                                    ₦{job.deliveryPrice.toLocaleString()}
-                                  </td>
-                                  <td className="px-6 py-4">
-                                    <span className={cn(
-                                      "px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider",
-                                      job.status === "delivered" 
-                                        ? "bg-emerald-500/10 text-emerald-500" 
-                                        : "bg-red-500/10 text-red-500"
-                                    )}>
-                                      {job.status}
-                                    </span>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
+                <DeliveryHistoryView
+                  companyProfile={companyProfile}
+                  deliveryHistory={deliveryHistory}
+                  arrangedDeliveryHistory={arrangedDeliveryHistory}
+                  historyStatusFilter={historyStatusFilter}
+                  setHistoryStatusFilter={setHistoryStatusFilter}
+                  historySortBy={historySortBy}
+                  setHistorySortBy={setHistorySortBy}
+                  historySearchQuery={historySearchQuery}
+                  setHistorySearchQuery={setHistorySearchQuery}
+                  historyDeliveredCount={historyDeliveredCount}
+                  historyCancelledCount={historyCancelledCount}
+                  formatJobTime={formatJobTime}
+                />
               )}
 
               {/* SUBVIEW 4: COMPANY PROFILE & PROFILE EDITOR */}
