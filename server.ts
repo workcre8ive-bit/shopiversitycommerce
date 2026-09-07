@@ -2902,17 +2902,23 @@ const FALLBACK_BANKS = [
         }
       }
 
-      // Check verification code against Order ID, uniqueOrderId, Product ID, item IDs, or handover OTP
+      // Check verification code against Order ID, uniqueOrderId, Product ID, uniqueProductId, item IDs, or handover OTP
       const cleanInput = providedOtp.trim().toLowerCase();
+      const cleanAlpha = cleanInput.replace(/[^a-z0-9]/g, "");
+      const cleanCore = cleanAlpha.replace(/^(prd|ord)/, "");
+
       const validIdentifiers: string[] = [
         orderId.toLowerCase(),
         orderId.slice(0, 6).toLowerCase(),
-        orderId.slice(0, 8).toLowerCase()
+        orderId.slice(0, 8).toLowerCase(),
+        orderId.slice(-6).toLowerCase(),
+        orderId.slice(-8).toLowerCase()
       ];
 
       if (orderDocData) {
         if (orderDocData.uniqueOrderId) validIdentifiers.push(orderDocData.uniqueOrderId.toLowerCase());
         if (orderDocData.orderId) validIdentifiers.push(orderDocData.orderId.toLowerCase());
+        if (orderDocData.uniqueProductId) validIdentifiers.push(orderDocData.uniqueProductId.toLowerCase());
         if (orderDocData.productId) validIdentifiers.push(orderDocData.productId.toLowerCase());
         if (orderDocData.deliveryOtp) validIdentifiers.push(orderDocData.deliveryOtp.toLowerCase());
         if (orderDocData.pickupOtp) validIdentifiers.push(orderDocData.pickupOtp.toLowerCase());
@@ -2920,6 +2926,8 @@ const FALLBACK_BANKS = [
         if (Array.isArray(orderDocData.items)) {
           orderDocData.items.forEach((it: any) => {
             if (it.productId) validIdentifiers.push(it.productId.toLowerCase());
+            if (it.uniqueProductId) validIdentifiers.push(it.uniqueProductId.toLowerCase());
+            if (it.id) validIdentifiers.push(it.id.toLowerCase());
           });
         }
       }
@@ -2927,11 +2935,22 @@ const FALLBACK_BANKS = [
         validIdentifiers.push(expectedOtp.trim().toLowerCase());
       }
 
-      const isMatch = validIdentifiers.some(id => id === cleanInput || cleanInput.includes(id) || id.includes(cleanInput));
+      const isMatch = validIdentifiers.some(id => {
+        if (!id) return false;
+        const idAlpha = id.replace(/[^a-z0-9]/g, "");
+        const idCore = idAlpha.replace(/^(prd|ord)/, "");
+        return (
+          id === cleanInput ||
+          idAlpha === cleanAlpha ||
+          (cleanCore.length >= 3 && idCore === cleanCore) ||
+          (cleanInput.length >= 3 && (id.includes(cleanInput) || cleanInput.includes(id))) ||
+          (cleanAlpha.length >= 3 && (idAlpha.includes(cleanAlpha) || cleanAlpha.includes(idAlpha)))
+        );
+      });
       if (!isMatch && validIdentifiers.length > 0) {
         return res.status(400).json({
           success: false,
-          error: "Invalid Verification Code. Please ask the seller or logistics courier for the Order ID or Product ID to verify handover."
+          error: "Invalid Verification Code. Please enter the Order ID or Product ID to verify handover."
         });
       }
 

@@ -30,7 +30,6 @@ import { cn } from "../lib/utils";
 import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
 import { usePaystackPayment } from "../hooks/usePaystackPayment";
 import ReceiptModal from "./ReceiptModal";
-import LiveRiderTrackingModal from "./LiveRiderTrackingModal";
 import ReviewSuccessModal from "./ReviewSuccessModal";
 import RefundRequestModal from "./RefundRequestModal";
 import CancelRefundModal from "./CancelRefundModal";
@@ -67,12 +66,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
   const [verifyingOrder, setVerifyingOrder] = React.useState<Order | null>(null);
   const [verificationError, setVerificationError] = React.useState<string | null>(null);
   const [confirmingDelivery, setConfirmingDelivery] = React.useState(false);
-  const [confirmingOrderMap, setConfirmingOrderMap] = React.useState<Record<string, boolean>>({});
   const [isVerifyingPayment, setIsVerifyingPayment] = React.useState(false);
-
-  // New states for live in-app rider tracking
-  const [trackingRiderOrder, setTrackingRiderOrder] = React.useState<Order | null>(null);
-  const [trackingProgress, setTrackingProgress] = React.useState(20);
 
   // New states for Refund, Cancellation, Dispute, and Audit Trail
   const [refundModalOrder, setRefundModalOrder] = React.useState<Order | null>(null);
@@ -200,41 +194,6 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
     return () => clearInterval(timer);
   }, []);
 
-  // Update animated GPS tracking progress of dispatch rider
-  React.useEffect(() => {
-    if (!trackingRiderOrder) return;
-    const interval = setInterval(() => {
-      setTrackingProgress((prev) => {
-        if (prev >= 100) return 100;
-        // Keep moving between 5 to 9 percentage points every second for interactive feedback
-        const r = Math.floor(Math.random() * 5) + 5;
-        return Math.min(prev + r, 100);
-      });
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [trackingRiderOrder]);
-
-  // Handle transition when rider arrives at destination
-  React.useEffect(() => {
-    if (trackingRiderOrder && trackingProgress >= 100) {
-      const nextStatus = trackingRiderOrder.deliveryType === "pickup" ? "Ready For Pickup" : "Ready For Delivery";
-      const updateOrderArrival = async () => {
-        try {
-          await updateDoc(doc(db, "orders", trackingRiderOrder.id), {
-            status: nextStatus,
-            updatedAt: new Date().toISOString()
-          });
-          setTimeout(() => {
-            setTrackingRiderOrder(null);
-          }, 3000);
-        } catch (err) {
-          console.error("Failed to update status to arrived:", err);
-        }
-      };
-      updateOrderArrival();
-    }
-  }, [trackingProgress, trackingRiderOrder]);
-
   const isCountdownFinished = (order: Order) => {
     if (!order.acceptedAt) return true;
     const acceptedTime = new Date(order.acceptedAt).getTime();
@@ -327,6 +286,13 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
   const handleMarkAsDelivered = async (order: Order, bypassCountdown = false) => {
     if (!auth.currentUser) return;
     
+    // Strict restriction: buyers can only confirm order when delivered
+    const effectiveStatus = getEffectiveStatus(order);
+    if (order.deliveryType === "delivery" && effectiveStatus !== "delivered") {
+      alert("Order can only be confirmed once it has reached the Delivered stage.");
+      return;
+    }
+    
     // Check if delivery countdown has elapsed
     if (!bypassCountdown && order.status === "Out For Delivery" && order.acceptedAt) {
       const acceptedTime = new Date(order.acceptedAt).getTime();
@@ -409,6 +375,13 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
   const handleVerifyProductIdAndConfirm = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!verifyingOrder) return;
+
+    // Strict restriction: buyers can only confirm order when delivered
+    const effectiveStatus = getEffectiveStatus(verifyingOrder);
+    if (verifyingOrder.deliveryType === "delivery" && effectiveStatus !== "delivered") {
+      setVerificationError("Order can only be confirmed once it has reached the Delivered stage.");
+      return;
+    }
     if (!productIdInput.trim()) {
       setVerificationError("Please enter the Order ID or Product ID provided by the seller or courier.");
       return;
@@ -419,27 +392,46 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
     try {
       const isPickup = verifyingOrder.deliveryType === "pickup";
       const isPod = verifyingOrder.paymentMethod === "pod" && verifyingOrder.paymentStatus !== "paid";
-      const cleanInput = productIdInput.trim().toLowerCase();
+      const rawInput = productIdInput.trim();
+      const cleanInput = rawInput.toLowerCase();
+      const cleanAlpha = cleanInput.replace(/[^a-z0-9]/g, "");
+      const cleanCore = cleanAlpha.replace(/^(prd|ord)/, "");
 
-      // Check valid identifiers (Order ID, Product ID, uniqueOrderId, OTP)
+      // Check valid identifiers (Order ID, Product ID, uniqueProductId, uniqueOrderId, OTP, item IDs)
       const validIdentifiers: string[] = [
         verifyingOrder.id.toLowerCase(),
         verifyingOrder.id.slice(0, 6).toLowerCase(),
         verifyingOrder.id.slice(0, 8).toLowerCase(),
+        verifyingOrder.id.slice(-6).toLowerCase(),
+        verifyingOrder.id.slice(-8).toLowerCase()
       ];
+      if (verifyingOrder.uniqueProductId) validIdentifiers.push(verifyingOrder.uniqueProductId.toLowerCase());
+      if (verifyingOrder.productId) validIdentifiers.push(verifyingOrder.productId.toLowerCase());
       if (verifyingOrder.uniqueOrderId) validIdentifiers.push(verifyingOrder.uniqueOrderId.toLowerCase());
       if (verifyingOrder.orderId) validIdentifiers.push(verifyingOrder.orderId.toLowerCase());
-      if (verifyingOrder.productId) validIdentifiers.push(verifyingOrder.productId.toLowerCase());
       if (verifyingOrder.deliveryOtp) validIdentifiers.push(verifyingOrder.deliveryOtp.toLowerCase());
       if (verifyingOrder.pickupOtp) validIdentifiers.push(verifyingOrder.pickupOtp.toLowerCase());
       if (verifyingOrder.handoverCode) validIdentifiers.push(verifyingOrder.handoverCode.toLowerCase());
       if (Array.isArray(verifyingOrder.items)) {
         verifyingOrder.items.forEach((it: any) => {
           if (it.productId) validIdentifiers.push(it.productId.toLowerCase());
+          if (it.uniqueProductId) validIdentifiers.push(it.uniqueProductId.toLowerCase());
+          if (it.id) validIdentifiers.push(it.id.toLowerCase());
         });
       }
 
-      const clientMatch = validIdentifiers.some(id => id === cleanInput || cleanInput.includes(id) || id.includes(cleanInput));
+      const clientMatch = validIdentifiers.some(id => {
+        if (!id) return false;
+        const idAlpha = id.replace(/[^a-z0-9]/g, "");
+        const idCore = idAlpha.replace(/^(prd|ord)/, "");
+        return (
+          id === cleanInput ||
+          idAlpha === cleanAlpha ||
+          (cleanCore.length >= 3 && idCore === cleanCore) ||
+          (cleanInput.length >= 3 && (id.includes(cleanInput) || cleanInput.includes(id))) ||
+          (cleanAlpha.length >= 3 && (idAlpha.includes(cleanAlpha) || cleanAlpha.includes(idAlpha)))
+        );
+      });
 
       // 1. Server-Side Verification against order document
       let serverConfirmed = false;
@@ -470,28 +462,48 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
         return;
       }
 
-      // 2. Sync to client state & Firestore
+      // 2. Advance the buyer to the next stage of order tracking & sync to Firestore
       const now = new Date().toISOString();
       if (isPod) {
-        await updateDoc(doc(db, "orders", verifyingOrder.id), {
+        // Next stage: Pay on Delivery Settlement
+        const updatePayload: any = {
           status: "payment_required",
           buyerDeliveryConfirmed: true,
           buyerDeliveryConfirmedAt: now,
+          deliveredAt: now,
           deliveryAttemptStatus: "success",
           updatedAt: now
-        });
+        };
+        try {
+          await updateDoc(doc(db, "orders", verifyingOrder.id), updatePayload);
+        } catch (dbErr) {
+          console.warn("Direct Firestore update fallback error:", dbErr);
+        }
+        setOrders(prev => prev.map(o => o.id === verifyingOrder.id ? { ...o, ...updatePayload } : o));
         setShowIdVerification(false);
+        const orderToTrigger = verifyingOrder;
         setVerifyingOrder(null);
         setProductIdInput("");
-        triggerPaystackPayment(verifyingOrder);
+        triggerPaystackPayment(orderToTrigger);
       } else {
-        await updateDoc(doc(db, "orders", verifyingOrder.id), {
-          status: isPickup ? "Order Picked Up" : "Order Delivered",
+        // Next stage: Order Completed (Escrow Funds Released to Vendor)
+        const updatePayload: any = {
+          status: "completed",
           buyerDeliveryConfirmed: true,
           buyerDeliveryConfirmedAt: now,
+          deliveredAt: now,
+          completedAt: now,
+          escrowStatus: "released",
+          paymentStatus: "paid",
           deliveryAttemptStatus: "success",
           updatedAt: now
-        });
+        };
+        try {
+          await updateDoc(doc(db, "orders", verifyingOrder.id), updatePayload);
+        } catch (dbErr) {
+          console.warn("Direct Firestore update fallback error:", dbErr);
+        }
+        setOrders(prev => prev.map(o => o.id === verifyingOrder.id ? { ...o, ...updatePayload } : o));
         await processDeliveryConfirmation(verifyingOrder);
         setShowIdVerification(false);
         setVerifyingOrder(null);
@@ -735,6 +747,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
       case "payment_required": return <CreditCard className="w-5 h-5 text-amber-500 animate-pulse" />;
       case "out_for_delivery": return <MapPin className="w-5 h-5 text-orange-500 animate-bounce" />;
       case "transit": return <Truck className="w-5 h-5 text-purple-500 animate-pulse" />;
+      case "logistics_pending": return <Clock className="w-5 h-5 text-amber-500 animate-pulse" />;
       case "logistics_booked": return <Truck className="w-5 h-5 text-indigo-500" />;
       case "ready_for_pickup": return <Package className="w-5 h-5 text-emerald-500" />;
       case "accepted": return <CheckCircle className="w-5 h-5 text-blue-500" />;
@@ -753,6 +766,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
       case "payment_required": return "bg-amber-50 text-amber-600 font-bold border border-amber-200 animate-pulse";
       case "out_for_delivery": return "bg-orange-50 text-orange-600 font-bold border border-orange-200";
       case "transit": return "bg-purple-50 text-purple-600 font-bold border border-purple-200";
+      case "logistics_pending": return "bg-amber-50 text-amber-600 font-bold border border-amber-200";
       case "logistics_booked": return "bg-indigo-50 text-indigo-600 font-bold border border-indigo-200";
       case "ready_for_pickup": return "bg-emerald-50 text-emerald-600 font-black animate-pulse border border-emerald-200/55";
       case "accepted": return "bg-blue-50 text-blue-600 border border-blue-200";
@@ -954,6 +968,9 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
         (order.kwikRiderId && order.kwikRiderId.length > 0)
       )
     ) {
+      if (order.logisticsOfferStatus === "pending" || order.status === "logistics_pending") {
+        return "logistics_pending";
+      }
       return "logistics_booked";
     }
 
@@ -982,6 +999,13 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
         return {
           title: "Seller Accepted Order",
           subtitle: "Merchant accepted your order and is packaging the items."
+        };
+      case "logistics_pending":
+        return {
+          title: "Awaiting Logistics Acceptance",
+          subtitle: order.logisticsName 
+            ? `Booking request sent to ${order.logisticsName}. Awaiting courier acceptance.`
+            : "Seller has sent a booking request to campus courier. Awaiting acceptance."
         };
       case "logistics_booked":
         return {
@@ -1413,8 +1437,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
 
                       {/* Campus Dispatch & Courier Tracker */}
                       {(order.kwikRiderId || order.logisticsId || order.logisticsName) && 
-                       (order.status === "Out For Delivery" || order.status === "out_for_delivery" || order.status === "transit" || order.status === "In Transit" || order.status === "accepted" || order.status === "Order Delivered" || order.status === "Order Picked Up") && 
-                       !order.confirmOrderPressed && (
+                       (order.status === "Out For Delivery" || order.status === "out_for_delivery" || order.status === "transit" || order.status === "In Transit" || order.status === "accepted" || order.status === "Order Delivered" || order.status === "Order Picked Up") && (
                         <div className="mt-3 p-4 bg-orange-50/40 dark:bg-orange-950/20 rounded-2xl border border-orange-100 dark:border-orange-900/40 max-w-md space-y-2">
                           <p className="text-[10px] font-black text-orange-600 dark:text-orange-400 uppercase tracking-widest flex items-center gap-1.5">
                             <Truck className="w-3.5 h-3.5" />
@@ -1434,7 +1457,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                             {(order.logisticsPhone || order.kwikRiderId) && (
                               <p className="text-[10px] text-slate-500 font-medium">
                                 {order.logisticsPhone ? (
-                                  <>Courier Contact: <span className="font-mono font-bold text-slate-900 dark:text-slate-100 select-all">{order.logisticsPhone}</span></>
+                                  <>Courier Contact: <a href={`tel:${order.logisticsPhone}`} className="font-mono font-bold text-slate-900 dark:text-slate-100 hover:underline select-all">{order.logisticsPhone}</a></>
                                 ) : (
                                   <>Carrier Reference: <span className="font-mono font-bold text-slate-900 dark:text-slate-100 select-all">{order.kwikRiderId?.startsWith("CAMPUS-") ? order.kwikRiderId.replace("CAMPUS-", "") : order.kwikRiderId?.startsWith("OUTSOURCED-") ? order.kwikRiderId.replace("OUTSOURCED-", "") : order.kwikRiderId}</span></>
                                 )}
@@ -1445,46 +1468,6 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                                 {order.deliveredWorkNotes}
                               </p>
                             )}
-                          </div>
-                          <div className="flex flex-wrap items-center gap-2 pt-1">
-                            {(order.kwikTrackingUrl || order.kwikRiderId || order.logisticsId || order.logisticsName) && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setTrackingRiderOrder(order);
-                                  setTrackingProgress(Math.floor(Math.random() * 20) + 25);
-                                }}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-[10px] font-bold shadow-md shadow-orange-500/10 cursor-pointer transition-all active:scale-[0.98]"
-                              >
-                                Track Dispatch Rider Live <ExternalLink className="w-3 h-3" />
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              disabled={confirmingOrderMap[order.id]}
-                              onClick={async () => {
-                                setConfirmingOrderMap(prev => ({ ...prev, [order.id]: true }));
-                                try {
-                                  await updateDoc(doc(db, "orders", order.id), {
-                                    confirmOrderPressed: true,
-                                    updatedAt: new Date().toISOString()
-                                  });
-                                } catch (err) {
-                                  console.error("Failed to update confirmOrderPressed:", err);
-                                  alert("Error occurred while confirming order.");
-                                } finally {
-                                  setConfirmingOrderMap(prev => ({ ...prev, [order.id]: false }));
-                                }
-                              }}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-[10px] font-bold shadow-md shadow-indigo-500/10 cursor-pointer transition-all active:scale-[0.98] disabled:opacity-55"
-                            >
-                              {confirmingOrderMap[order.id] ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              ) : (
-                                <CheckCircle className="w-3.5 h-3.5" />
-                              )}
-                              Confirm Order
-                            </button>
                           </div>
                         </div>
                       )}
@@ -1697,10 +1680,19 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                           ];
                         } else {
                           // Home / Campus Delivery Flow (Full Courier Logistics Handshake)
+                          const isLogisticsPending = effectiveStatus === "logistics_pending";
                           stepList = [
                             { key: "pending", label: "Order Placed", desc: "Order sent to seller", actor: "Buyer", icon: Clock },
                             { key: "accepted", label: "Seller Accepted", desc: "Merchant accepted & packaging items", actor: "Seller", icon: CheckCircle },
-                            { key: "logistics_booked", label: "Logistics Courier Booked", desc: order.logisticsName ? `${order.logisticsName} assigned` : "Logistics courier assigned", actor: "Seller ➔ Courier", icon: Truck },
+                            { 
+                              key: "logistics_booked", 
+                              label: isLogisticsPending ? "Awaiting Courier Acceptance" : "Logistics Courier Booked", 
+                              desc: isLogisticsPending 
+                                ? (order.logisticsName ? `Offer sent to ${order.logisticsName}` : "Booking sent to logistics partner")
+                                : (order.logisticsName ? `${order.logisticsName} assigned` : "Logistics courier assigned"), 
+                              actor: "Seller ➔ Courier", 
+                              icon: Truck 
+                            },
                             { key: "transit", label: "In Transit", desc: "Rider collected box from merchant", actor: "Courier", icon: Truck },
                             { key: "out_for_delivery", label: "Out For Delivery", desc: "Rider arrived at campus doorstep", actor: "Courier", icon: MapPin },
                             { key: "delivered", label: "Order Delivered", desc: "Delivery PIN verified by courier", actor: "Courier ➔ Buyer", icon: Package },
@@ -1711,7 +1703,8 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
 
                         return stepList.map((step, index, array) => {
                           const statuses = array.map(s => s.key);
-                          const currentIndex = statuses.indexOf(effectiveStatus);
+                          const normalizedStatus = effectiveStatus === "logistics_pending" ? "logistics_booked" : effectiveStatus;
+                          const currentIndex = statuses.indexOf(normalizedStatus);
                           const isCompleted = index <= currentIndex && order.status !== "cancelled";
                           const isCurrent = index === currentIndex;
                           
@@ -1911,6 +1904,34 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                             Seller Packaging Items...
                           </button>
                         </div>
+                      ) : effectiveStatus === "logistics_pending" ? (
+                        <div className="space-y-3">
+                          <div className="p-4 bg-amber-50 dark:bg-amber-950/25 border border-amber-200 dark:border-amber-900/40 rounded-2xl space-y-2">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <Truck className="w-4 h-4 text-amber-600" />
+                                <span className="text-xs font-bold text-amber-900 dark:text-amber-200">
+                                  {order.logisticsName 
+                                    ? `Booking Sent: Awaiting ${order.logisticsName} Acceptance` 
+                                    : "Awaiting Logistics Courier Acceptance"}
+                                </span>
+                              </div>
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300">
+                                Step 3: Courier Assignment
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed font-medium">
+                              The merchant has sent a delivery booking request to a registered campus courier. Orders cannot be confirmed until your package is delivered.
+                            </p>
+                          </div>
+                          <button
+                            disabled={true}
+                            className="w-full py-3.5 bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 rounded-2xl font-bold text-xs flex items-center justify-center gap-2 cursor-not-allowed border border-slate-200/50 dark:border-slate-800"
+                          >
+                            <Clock className="w-4 h-4 text-amber-500 animate-spin" />
+                            Awaiting Logistics Partner Acceptance...
+                          </button>
+                        </div>
                       ) : effectiveStatus === "logistics_booked" ? (
                         <div className="space-y-3">
                           <div className="p-4 bg-indigo-50 dark:bg-indigo-950/25 border border-indigo-200 dark:border-indigo-900/40 rounded-2xl space-y-2">
@@ -1961,14 +1982,11 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                             </p>
                           </div>
                           <button
-                            type="button"
-                            onClick={() => {
-                              setTrackingRiderOrder(order);
-                              setTrackingProgress(Math.floor(Math.random() * 20) + 35);
-                            }}
-                            className="w-full py-4 bg-purple-600 hover:bg-purple-700 text-white rounded-2xl font-bold text-sm tracking-wide transition-all duration-300 flex items-center justify-center gap-2 shadow-lg shadow-purple-600/20 active:scale-[0.98] cursor-pointer"
+                            disabled={true}
+                            className="w-full py-3.5 bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 rounded-2xl font-bold text-xs flex items-center justify-center gap-2 cursor-not-allowed border border-slate-200/50 dark:border-slate-800"
                           >
-                            <Truck className="w-4 h-4" /> Track Dispatch Rider Live
+                            <Truck className="w-4 h-4 text-purple-500 animate-pulse" />
+                            Package In Transit to Your Destination...
                           </button>
                         </div>
                       ) : effectiveStatus === "out_for_delivery" ? (
@@ -2008,8 +2026,17 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                               </button>
                             </div>
                             <p className="text-[11px] text-slate-500 dark:text-slate-400 italic">
-                              The rider will enter this PIN on their courier app to mark "Order Delivered". Once verified, you will confirm satisfaction below to release escrow.
+                              The rider will enter this PIN on their courier app to mark "Order Delivered". Once verified, you will inspect your items and confirm receipt below to release escrow.
                             </p>
+                          </div>
+                          <div className="pt-1">
+                            <button
+                              disabled={true}
+                              className="w-full py-3.5 bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 rounded-2xl font-bold text-xs flex items-center justify-center gap-2 cursor-not-allowed border border-slate-200/50 dark:border-slate-800"
+                            >
+                              <Clock className="w-4 h-4 text-orange-500 animate-spin" />
+                              Awaiting Courier to Verify Handover PIN...
+                            </button>
                           </div>
                         </div>
                       ) : effectiveStatus === "ready_for_pickup" ? (
@@ -2405,7 +2432,17 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
 
       <AnimatePresence>
         {showIdVerification && verifyingOrder && (
-          <div className="fixed inset-0 z-[250] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md">
+          <div 
+            className="fixed inset-0 z-[250] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                setShowIdVerification(false);
+                setVerifyingOrder(null);
+                setProductIdInput("");
+                setVerificationError(null);
+              }
+            }}
+          >
             <motion.div 
               initial={{ opacity: 0, scale: 0.95, y: 15 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -2413,14 +2450,19 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
               className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-6 lg:p-8 max-w-sm w-full shadow-2xl border border-slate-100 dark:border-slate-800 relative"
             >
               <button 
+                id="btn-close-verify-modal"
                 type="button"
-                onClick={() => {
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
                   setShowIdVerification(false);
                   setVerifyingOrder(null);
                   setProductIdInput("");
                   setVerificationError(null);
                 }}
-                className="absolute top-6 right-6 w-9 h-9 rounded-full bg-slate-50 dark:bg-slate-800/80 flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-all border border-slate-100 dark:border-slate-700/50 cursor-pointer"
+                className="absolute top-6 right-6 w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800/80 dark:hover:bg-slate-700 flex items-center justify-center text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 transition-all border border-slate-200 dark:border-slate-700/50 cursor-pointer z-30"
+                title="Cancel & close"
+                aria-label="Cancel & close"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -2433,25 +2475,69 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                 Verify Handover ID
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 mb-4 font-medium leading-relaxed">
-                To confirm physical receipt and protect escrow settlement, please enter the <strong>Order ID</strong> or <strong>Product ID</strong> given to you by the seller or courier at handover.
+                To confirm physical receipt and advance your order, please enter the <strong>Order ID</strong> or <strong>Product ID</strong> provided at handover.
               </p>
+
+              {verifyingOrder && (
+                <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-100 dark:border-slate-800 text-[11px] mb-4 space-y-1.5">
+                  <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
+                    <span className="text-[10px] uppercase font-bold tracking-wider">Reference ID:</span>
+                    <button
+                      id="btn-autofill-handover-id"
+                      type="button"
+                      onClick={() => {
+                        const candidate = verifyingOrder.uniqueProductId || verifyingOrder.productId || verifyingOrder.uniqueOrderId || verifyingOrder.orderId || verifyingOrder.id.slice(0, 8);
+                        if (candidate) {
+                          setProductIdInput(candidate);
+                          setVerificationError(null);
+                        }
+                      }}
+                      className="text-[10px] font-mono font-bold text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1 cursor-pointer"
+                      title="Tap to autofill"
+                    >
+                      <span>{verifyingOrder.uniqueProductId || verifyingOrder.productId || verifyingOrder.uniqueOrderId || verifyingOrder.id.slice(0, 8)}</span>
+                      <span className="text-[9px] bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 rounded font-sans font-bold">Autofill</span>
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <form onSubmit={handleVerifyProductIdAndConfirm} className="space-y-4">
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1">
                     Enter Order ID or Product ID
                   </label>
-                  <input
-                    type="text"
-                    required
-                    value={productIdInput}
-                    onChange={(e) => {
-                      setProductIdInput(e.target.value);
-                      setVerificationError(null);
-                    }}
-                    placeholder="e.g. ORD-AB12CD or PRD-987"
-                    className="w-full h-12 px-4 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/70 outline-none focus:bg-white dark:focus:bg-slate-900 focus:ring-2 focus:ring-emerald-500 font-bold text-base text-slate-900 dark:text-white font-mono tracking-wider text-center uppercase"
-                  />
+                  <div className="relative flex items-center">
+                    <input
+                      id="input-product-or-order-id"
+                      type="text"
+                      required
+                      value={productIdInput}
+                      onChange={(e) => {
+                        setProductIdInput(e.target.value);
+                        setVerificationError(null);
+                      }}
+                      placeholder="e.g. ORD-AB12CD or PRD-987"
+                      className="w-full h-12 pl-4 pr-11 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/70 outline-none focus:bg-white dark:focus:bg-slate-900 focus:ring-2 focus:ring-emerald-500 font-bold text-base text-slate-900 dark:text-white font-mono tracking-wider text-center uppercase"
+                    />
+                    {productIdInput ? (
+                      <button
+                        id="btn-clear-id-input"
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setProductIdInput("");
+                          setVerificationError(null);
+                        }}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-300 flex items-center justify-center transition-all cursor-pointer z-10 shadow-xs"
+                        title="Cancel input"
+                        aria-label="Cancel input"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    ) : null}
+                  </div>
                   {verificationError && (
                     <motion.p 
                       initial={{ opacity: 0, y: -5 }}
@@ -2466,21 +2552,25 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
 
                 <div className="flex gap-3 pt-2">
                   <button
+                    id="btn-cancel-handover-verify"
                     type="button"
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
                       setShowIdVerification(false);
                       setVerifyingOrder(null);
                       setProductIdInput("");
                       setVerificationError(null);
                     }}
-                    className="flex-1 h-12 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800/80 dark:hover:bg-slate-850 text-slate-500 dark:text-slate-400 rounded-xl font-bold text-xs transition-all border border-slate-100 dark:border-slate-700/40"
+                    className="flex-1 h-12 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800/80 dark:hover:bg-slate-850 text-slate-500 dark:text-slate-400 rounded-xl font-bold text-xs transition-all border border-slate-100 dark:border-slate-700/40 cursor-pointer"
                   >
                     Cancel
                   </button>
                   <button
+                    id="btn-confirm-handover-verify"
                     type="submit"
                     disabled={confirmingDelivery || !productIdInput.trim()}
-                    className="flex-1 h-12 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/10 active:scale-[0.98] border-none outline-none"
+                    className="flex-1 h-12 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/10 active:scale-[0.98] border-none outline-none cursor-pointer"
                   >
                     {confirmingDelivery ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
@@ -2495,12 +2585,6 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
           </div>
         )}
       </AnimatePresence>
-
-      <LiveRiderTrackingModal
-        order={trackingRiderOrder}
-        progress={trackingProgress}
-        onClose={() => setTrackingRiderOrder(null)}
-      />
 
       <ReviewSuccessModal
         isOpen={isReviewSuccessOpen}

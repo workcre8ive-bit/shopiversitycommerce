@@ -260,7 +260,9 @@ service cloud.firestore {
         'refundApprovedAt', 'refundCompletedAt', 'refundDecisionNotes', 'settlementOnHold',
         // Pay on Delivery & verification completion
         'buyerDeliveryConfirmed', 'buyerDeliveryConfirmedAt', 'paymentVerifiedAt', 'handoverCode', 
-        'deliveryOtp', 'pickupOtp', 'handoverVerified', 'handoverVerifiedAt', 'paymentReceipt'
+        'deliveryOtp', 'pickupOtp', 'handoverVerified', 'handoverVerifiedAt', 'paymentReceipt',
+        'completedAt', 'payoutStatus', 'deliveryAttemptStatus', 'courierHandedOver', 'courierHandedOverAt',
+        'productHandedOver', 'productHandedOverAt'
       ]) &&
              data.buyerId is string &&
              (!('buyerName' in data) || data.buyerName is string) &&
