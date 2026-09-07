@@ -239,6 +239,16 @@ export interface Order {
   handoverVerified?: boolean;
   handoverVerifiedAt?: string;
   paymentReceipt?: OrderPaymentReceipt;
+  deliveryStatus?: "transit" | "out_for_delivery" | "delivered" | "picked_up" | "in_transit" | string;
+  logisticsStatus?: "transit" | "out_for_delivery" | "delivered" | "picked_up" | "in_transit" | string;
+  pickedUpAt?: string;
+  outForDeliveryAt?: string;
+  handedOverAt?: string;
+  handedOverBySellerAt?: string;
+  courierHandedOver?: boolean;
+  courierHandedOverAt?: string;
+  productHandedOver?: boolean;
+  productHandedOverAt?: string;
 }
 
 export interface RefundRequest {

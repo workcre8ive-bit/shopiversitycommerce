@@ -179,7 +179,7 @@
         "paymentStatus": { "type": "string", "enum": ["pending", "paid", "failed"] },
         "escrowStatus": { "type": "string", "enum": ["held", "released", "refunded"] },
         "disputeStatus": { "type": "string", "enum": ["none", "active", "resolved", "rejected"] },
-        "status": { "type": "string", "enum": ["pending", "accepted", "out_for_delivery", "delivered", "cancelled"] },
+        "status": { "type": "string", "enum": ["pending", "accepted", "out_for_delivery", "delivered", "cancelled", "transit", "In Transit", "Out For Delivery", "Order Delivered", "logistics_pending", "logistics_booked"] },
         "createdAt": { "type": "string", "format": "date-time" },
         "acceptedAt": { "type": "string", "format": "date-time" },
         "deliveredAt": { "type": "string", "format": "date-time" },

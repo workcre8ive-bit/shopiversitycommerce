@@ -949,18 +949,18 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
     if (currentStatus === "accepted") {
       nextStatus = "picked_up";
       orderStatusLabel = "In Transit";
-      notifTitle = "Package Picked Up from Merchant 📦";
-      notifMsg = `${companyProfile.companyName} has picked up your package from the merchant and is heading your way.`;
+      notifTitle = "Package Handed Over & In Transit 📦";
+      notifMsg = `${companyProfile.companyName} has received the product handed over by the merchant and is now in transit to your location.`;
     } else if (currentStatus === "picked_up") {
       nextStatus = "in_transit";
       orderStatusLabel = "Out For Delivery";
       notifTitle = "Rider Out For Delivery 🚀";
-      notifMsg = `${companyProfile.companyName} is heading to your delivery location. Please have your delivery PIN ready!`;
+      notifMsg = `${companyProfile.companyName} is heading to your delivery location. Please have your 6-digit delivery PIN ready!`;
     } else if (currentStatus === "in_transit") {
       nextStatus = "delivered";
       orderStatusLabel = "Order Delivered";
       notifTitle = "Package Delivered 🎉";
-      notifMsg = `${companyProfile.companyName} has marked your package as delivered. Please confirm receipt and enter your OTP PIN.`;
+      notifMsg = `${companyProfile.companyName} has marked your package as delivered. Please inspect items and confirm order receipt to release escrow.`;
     }
 
     setLoading(true);
@@ -975,26 +975,30 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
         updatedAt: new Date().toISOString()
       }, { merge: true });
 
-      // Also update standard order
+      // Also update standard order with precise status mapping
       const orderRef = doc(db, "orders", actualOrderId);
       const orderSnap = await getDoc(orderRef);
       if (orderSnap.exists()) {
         const orderData = orderSnap.data();
+        const mappedDeliveryStatus = nextStatus === "picked_up" ? "transit" : nextStatus === "in_transit" ? "out_for_delivery" : "delivered";
         const updateData: any = {
           status: orderStatusLabel as any,
-          deliveryStatus: nextStatus,
-          logisticsStatus: nextStatus,
+          deliveryStatus: mappedDeliveryStatus,
+          logisticsStatus: mappedDeliveryStatus,
           updatedAt: new Date().toISOString()
         };
         if (nextStatus === "picked_up") {
           updateData.pickedUpAt = new Date().toISOString();
+          updateData.handedOverBySellerAt = new Date().toISOString();
+          updateData.productHandedOver = true;
+          updateData.productHandedOverAt = new Date().toISOString();
         } else if (nextStatus === "in_transit") {
           updateData.outForDeliveryAt = new Date().toISOString();
         } else if (nextStatus === "delivered") {
           updateData.deliveredAt = new Date().toISOString();
           updateData.handedOverAt = new Date().toISOString();
           updateData.courierHandedOver = true;
-          updateData.productHandedOver = true;
+          updateData.courierHandedOverAt = new Date().toISOString();
         }
         await updateDoc(orderRef, updateData);
 
@@ -1015,14 +1019,14 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
           let sellerNotifTitle = "Delivery Update 📦";
           let sellerNotifMsg = `${companyProfile.companyName} updated delivery status for "${orderData.productName || 'Order'}".`;
           if (nextStatus === "picked_up") {
-            sellerNotifTitle = "Package Picked Up by Courier 🚚";
-            sellerNotifMsg = `${companyProfile.companyName} picked up "${orderData.productName || 'package'}" from your store/location and is now in transit.`;
+            sellerNotifTitle = "Product Handed Over to Logistics 🚚";
+            sellerNotifMsg = `${companyProfile.companyName} confirmed receipt of "${orderData.productName || 'product'}" from you. It is now in transit to the buyer.`;
           } else if (nextStatus === "in_transit") {
             sellerNotifTitle = "Courier Out For Doorstep Delivery 🚀";
-            sellerNotifMsg = `${companyProfile.companyName} is arriving at the buyer's destination for "${orderData.productName || 'package'}".`;
+            sellerNotifMsg = `${companyProfile.companyName} is arriving at the buyer's destination for "${orderData.productName || 'product'}".`;
           } else if (nextStatus === "delivered") {
             sellerNotifTitle = "Product Handed Over to Buyer! 🎉";
-            sellerNotifMsg = `${companyProfile.companyName} confirmed that "${orderData.productName || 'package'}" was physically handed over to the buyer. Escrow funds will disburse upon receipt confirmation.`;
+            sellerNotifMsg = `${companyProfile.companyName} verified the delivery PIN and delivered "${orderData.productName || 'product'}" to the buyer. Escrow funds will disburse upon buyer confirmation.`;
           }
           await addDoc(collection(db, "notifications"), {
             userId: orderData.sellerId,
@@ -2099,9 +2103,20 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                         <div key={`active-job-${job.id || aIdx}-${aIdx}`} className="bg-white dark:bg-zinc-900 border border-slate-200/60 dark:border-zinc-800/60 p-6 rounded-[2.5rem] shadow-xs space-y-5">
                           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-zinc-850 pb-4">
                             <div>
-                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-500/10 text-amber-500 rounded-full text-[10px] font-black uppercase tracking-wider mb-2">
-                                <Clock className="w-3.5 h-3.5" />
-                                {job.status.toUpperCase().replace("_", " ")}
+                              <span className={cn(
+                                "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider mb-2",
+                                job.status === "accepted" ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20" :
+                                job.status === "picked_up" ? "bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20" :
+                                job.status === "in_transit" ? "bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/20" :
+                                "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
+                              )}>
+                                {job.status === "accepted" ? <Clock className="w-3.5 h-3.5" /> :
+                                 job.status === "picked_up" ? <Truck className="w-3.5 h-3.5" /> :
+                                 job.status === "in_transit" ? <MapPin className="w-3.5 h-3.5" /> :
+                                 <CheckCircle className="w-3.5 h-3.5" />}
+                                {job.status === "accepted" ? "Awaiting Handover from Seller" :
+                                 job.status === "picked_up" ? "In Transit" :
+                                 job.status === "in_transit" ? "Out for Delivery" : "Delivered"}
                               </span>
                               <h4 className="text-base font-black text-slate-800 dark:text-zinc-100">{job.productName} (x{job.quantity || 1})</h4>
                               <p className="text-xs font-medium text-slate-400">Order Ref: #{job.orderId.slice(-6).toUpperCase()}</p>
@@ -2152,12 +2167,18 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
 
                           {/* Status Stepper Progression Button */}
                           <div className="pt-3 border-t border-slate-100 dark:border-zinc-850 flex items-center justify-between flex-wrap gap-4">
-                            <div className="flex gap-2 items-center">
-                              <div className={cn("w-3 h-3 rounded-full transition-all", job.status === "accepted" ? "bg-amber-400 ring-4 ring-amber-400/20" : "bg-emerald-500")} />
-                              <ArrowRight className="w-3 h-3 text-slate-300" />
-                              <div className={cn("w-3 h-3 rounded-full transition-all", job.status === "picked_up" ? "bg-orange-500 ring-4 ring-orange-500/20" : job.status === "in_transit" || job.status === "delivered" ? "bg-emerald-500" : "bg-slate-300")} />
-                              <ArrowRight className="w-3 h-3 text-slate-300" />
-                              <div className={cn("w-3 h-3 rounded-full transition-all", job.status === "in_transit" ? "bg-blue-500 ring-4 ring-blue-500/20" : job.status === "delivered" ? "bg-emerald-500" : "bg-slate-300")} />
+                            <div className="flex gap-2 items-center text-xs font-semibold text-slate-500 dark:text-slate-400">
+                              <span className={cn("px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1", job.status === "accepted" ? "bg-amber-100 text-amber-900 dark:bg-amber-950/60 dark:text-amber-300 ring-2 ring-amber-400/40" : "bg-emerald-100 text-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-300")}>
+                                1. Accepted
+                              </span>
+                              <ArrowRight className="w-3 h-3 text-slate-400" />
+                              <span className={cn("px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1", job.status === "picked_up" ? "bg-purple-100 text-purple-900 dark:bg-purple-950/60 dark:text-purple-300 ring-2 ring-purple-400/40" : (job.status === "in_transit" || job.status === "delivered") ? "bg-emerald-100 text-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-300" : "bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500")}>
+                                2. In Transit
+                              </span>
+                              <ArrowRight className="w-3 h-3 text-slate-400" />
+                              <span className={cn("px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1", job.status === "in_transit" ? "bg-orange-100 text-orange-900 dark:bg-orange-950/60 dark:text-orange-300 ring-2 ring-orange-400/40" : job.status === "delivered" ? "bg-emerald-100 text-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-300" : "bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500")}>
+                                3. Out for Delivery
+                              </span>
                             </div>
 
                             <button
@@ -2172,15 +2193,35 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                                   handleUpdateStatus(job.id, job.status);
                                 }
                               }}
-                              className="h-11 px-6 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-1.5 shadow-md shadow-orange-500/10 cursor-pointer border-none"
+                              className={cn(
+                                "h-11 px-5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 shadow-md cursor-pointer border-none text-white active:scale-95",
+                                job.status === "accepted" ? "bg-purple-600 hover:bg-purple-700 shadow-purple-600/20" :
+                                job.status === "picked_up" ? "bg-orange-600 hover:bg-orange-700 shadow-orange-500/20" :
+                                "bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20"
+                              )}
                             >
                               {loading ? (
                                 <Loader2 className="w-4 h-4 animate-spin" />
                               ) : (
                                 <>
-                                  {job.status === "accepted" && "Confirm Package Picked Up"}
-                                  {job.status === "picked_up" && "Mark Out for Delivery"}
-                                  {job.status === "in_transit" && "Confirm Product Handed Over"}
+                                  {job.status === "accepted" && (
+                                    <>
+                                      <Truck className="w-4 h-4" />
+                                      Product Handed Over by Seller (Move to Transit)
+                                    </>
+                                  )}
+                                  {job.status === "picked_up" && (
+                                    <>
+                                      <MapPin className="w-4 h-4" />
+                                      Out for Delivery
+                                    </>
+                                  )}
+                                  {job.status === "in_transit" && (
+                                    <>
+                                      <ShieldCheck className="w-4 h-4" />
+                                      Verify Delivery PIN & Deliver to Buyer
+                                    </>
+                                  )}
                                 </>
                               )}
                             </button>

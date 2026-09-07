@@ -925,13 +925,21 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
       s === "delivered" ||
       s === "acquired" ||
       s === "Order Delivered" ||
+      order.courierHandedOver ||
+      order.deliveryStatus === "delivered" ||
+      order.logisticsStatus === "delivered" ||
       (order.deliveryType === "pickup" && s === "Order Picked Up")
     ) {
       return "delivered";
     }
 
-    // 5. Out For Delivery stage (Rider arrived at buyer's doorstep)
-    if (s === "Out For Delivery" || s === "out_for_delivery") {
+    // 5. Out For Delivery stage (Rider on the way / arrived at buyer's doorstep)
+    if (
+      s === "Out For Delivery" ||
+      s === "out_for_delivery" ||
+      order.deliveryStatus === "out_for_delivery" ||
+      order.logisticsStatus === "out_for_delivery"
+    ) {
       return "out_for_delivery";
     }
 
@@ -939,10 +947,17 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
     if (
       s === "In Transit" ||
       s === "transit" ||
+      s === "in_transit" ||
       s === "picked_up" ||
       s === "Package Picked Up from Merchant" ||
       s === "Package Picked Up from Seller" ||
-      (order.deliveryType === "delivery" && s === "Order Picked Up")
+      s === "Handed Over to Logistics" ||
+      s === "handed_over" ||
+      order.deliveryStatus === "transit" ||
+      order.deliveryStatus === "picked_up" ||
+      order.logisticsStatus === "transit" ||
+      order.logisticsStatus === "picked_up" ||
+      (order.deliveryType === "delivery" && (s === "Order Picked Up" || s === "picked_up"))
     ) {
       return "transit";
     }
