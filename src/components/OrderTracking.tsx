@@ -22,7 +22,8 @@ import {
   ExternalLink,
   Info,
   Building,
-  ShieldAlert
+  ShieldAlert,
+  Phone
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/utils";
@@ -728,16 +729,16 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
     switch (status) {
       case "awaiting_payment": return <Clock className="w-5 h-5 text-amber-500 animate-pulse" />;
       case "completed": return <CheckCircle className="w-5 h-5 text-emerald-500" />;
-      case "delivered": return <CheckCircle className="w-5 h-5 text-emerald-500" />;
+      case "delivered": return <Package className="w-5 h-5 text-emerald-500" />;
       case "acquired": return <CheckCircle className="w-5 h-5 text-emerald-600" />;
-      case "cancelled": return <Clock className="w-5 h-5 text-red-500" />;
+      case "cancelled": return <X className="w-5 h-5 text-red-500" />;
+      case "payment_required": return <CreditCard className="w-5 h-5 text-amber-500 animate-pulse" />;
+      case "out_for_delivery": return <MapPin className="w-5 h-5 text-orange-500 animate-bounce" />;
       case "transit": return <Truck className="w-5 h-5 text-purple-500 animate-pulse" />;
+      case "logistics_booked": return <Truck className="w-5 h-5 text-indigo-500" />;
       case "ready_for_pickup": return <Package className="w-5 h-5 text-emerald-500" />;
-      case "out_for_delivery": 
-        return deliveryType === "pickup" 
-          ? <Package className="w-5 h-5 text-blue-500" /> 
-          : <Truck className="w-5 h-5 text-blue-500" />;
-      case "accepted": return <Loader2 className="w-5 h-5 text-emerald-500 animate-spin" />;
+      case "accepted": return <CheckCircle className="w-5 h-5 text-blue-500" />;
+      case "pending": return <Clock className="w-5 h-5 text-indigo-500 animate-pulse" />;
       default: return <Package className="w-5 h-5 text-indigo-500" />;
     }
   };
@@ -745,14 +746,17 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
   const getStatusColor = (status: string) => {
     switch (status) {
       case "awaiting_payment": return "bg-amber-50 text-amber-600 animate-pulse border border-amber-200/50";
-      case "completed": return "bg-emerald-50 text-emerald-600";
-      case "delivered": return "bg-emerald-50 text-emerald-600 animate-pulse font-bold";
+      case "completed": return "bg-emerald-50 text-emerald-600 border border-emerald-200/60";
+      case "delivered": return "bg-emerald-50 text-emerald-600 font-bold border border-emerald-200";
       case "acquired": return "bg-emerald-100 text-emerald-700 font-bold";
-      case "cancelled": return "bg-red-50 text-red-600";
-      case "transit": return "bg-purple-50 text-purple-600 font-bold";
+      case "cancelled": return "bg-red-50 text-red-600 border border-red-200";
+      case "payment_required": return "bg-amber-50 text-amber-600 font-bold border border-amber-200 animate-pulse";
+      case "out_for_delivery": return "bg-orange-50 text-orange-600 font-bold border border-orange-200";
+      case "transit": return "bg-purple-50 text-purple-600 font-bold border border-purple-200";
+      case "logistics_booked": return "bg-indigo-50 text-indigo-600 font-bold border border-indigo-200";
       case "ready_for_pickup": return "bg-emerald-50 text-emerald-600 font-black animate-pulse border border-emerald-200/55";
-      case "out_for_delivery": return "bg-blue-50 text-blue-600";
-      case "accepted": return "bg-emerald-50 text-emerald-600";
+      case "accepted": return "bg-blue-50 text-blue-600 border border-blue-200";
+      case "pending": return "bg-indigo-50 text-indigo-600 border border-indigo-200";
       default: return "bg-indigo-50 text-indigo-600";
     }
   };
@@ -897,24 +901,147 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
 
   const getEffectiveStatus = (order: Order) => {
     const s = (order.status || "") as string;
+    if (s === "cancelled") return "cancelled";
+    if (s === "completed") return "completed";
     if (s === "payment_required" || s === "Payment Required") return "payment_required";
     if (s === "awaiting_payment") return "awaiting_payment";
-    if (s === "pending" || s === "Pending Seller Acceptance") return "pending";
-    if (s === "out_for_delivery" || s === "accepted") return "out_for_delivery";
+
+    // 6. Delivered stage (Courier verified PIN and marked delivered)
     if (
-      s === "Out To Pickup Station" || 
-      s === "Out For Delivery" || 
-      s === "transit" || 
-      s === "In Transit" || 
-      s === "picked_up" || 
-      s === "Package Picked Up from Merchant" || 
+      s === "delivered" ||
+      s === "acquired" ||
+      s === "Order Delivered" ||
+      (order.deliveryType === "pickup" && s === "Order Picked Up")
+    ) {
+      return "delivered";
+    }
+
+    // 5. Out For Delivery stage (Rider arrived at buyer's doorstep)
+    if (s === "Out For Delivery" || s === "out_for_delivery") {
+      return "out_for_delivery";
+    }
+
+    // 4. In Transit stage (Rider collected box from seller, en route to buyer)
+    if (
+      s === "In Transit" ||
+      s === "transit" ||
+      s === "picked_up" ||
+      s === "Package Picked Up from Merchant" ||
       s === "Package Picked Up from Seller" ||
       (order.deliveryType === "delivery" && s === "Order Picked Up")
-    ) return "transit";
-    if (s === "Ready For Pickup" || s === "Ready For Delivery" || s === "ready_for_pickup") return "ready_for_pickup";
-    if (s === "delivered" || s === "acquired" || s === "Order Delivered" || (order.deliveryType === "pickup" && s === "Order Picked Up")) return "delivered";
-    if (s === "completed") return "completed";
+    ) {
+      return "transit";
+    }
+
+    // Pickup station / store ready stage (ONLY FOR PICKUP ORDERS)
+    if (
+      order.deliveryType === "pickup" &&
+      (s === "Ready For Pickup" || s === "Ready For Delivery" || s === "ready_for_pickup" || s === "Out To Pickup Station")
+    ) {
+      return "ready_for_pickup";
+    }
+
+    // 3. Logistics booked / pending courier pickup
+    if (
+      order.deliveryType === "delivery" &&
+      (
+        order.logisticsOfferStatus === "accepted" ||
+        order.logisticsOfferStatus === "pending" ||
+        order.status === "logistics_pending" ||
+        order.status === "logistics_booked" ||
+        order.logisticsId ||
+        order.logisticsName ||
+        (order.kwikRiderId && order.kwikRiderId.length > 0)
+      )
+    ) {
+      return "logistics_booked";
+    }
+
+    // 2. Seller accepted & packaging
+    if (s === "accepted" || (order.deliveryType === "delivery" && (s === "Ready For Pickup" || s === "Ready For Delivery" || s === "ready_for_pickup"))) {
+      return "accepted";
+    }
+
+    // 1. Pending seller acceptance
+    if (s === "pending" || s === "Pending Seller Acceptance") {
+      return "pending";
+    }
+
     return s;
+  };
+
+  const getStatusHeadingInfo = (order: Order, effectiveStatus: string) => {
+    const isPickup = order.deliveryType === "pickup";
+    switch (effectiveStatus) {
+      case "pending":
+        return {
+          title: "Order Placed",
+          subtitle: "Order submitted to seller. Awaiting seller acceptance."
+        };
+      case "accepted":
+        return {
+          title: "Seller Accepted Order",
+          subtitle: "Merchant accepted your order and is packaging the items."
+        };
+      case "logistics_booked":
+        return {
+          title: "Campus Courier Booked",
+          subtitle: order.logisticsName 
+            ? `${order.logisticsName} assigned. Courier preparing for pickup from merchant.`
+            : "Campus logistics partner booked. Awaiting dispatch pickup."
+        };
+      case "transit":
+        return {
+          title: isPickup ? "En Route to Station" : "In Transit",
+          subtitle: isPickup 
+            ? "Package is en route to your designated campus pickup station." 
+            : "Rider collected box from merchant and is en route to your campus location."
+        };
+      case "ready_for_pickup":
+        return {
+          title: "Ready for Pickup",
+          subtitle: "Package has arrived at the pickup station. Ready for your collection."
+        };
+      case "out_for_delivery":
+        return {
+          title: isPickup ? "Ready at Station" : "Out For Delivery",
+          subtitle: isPickup 
+            ? "Package ready at designated pickup point."
+            : "Rider has arrived at your doorstep! Share your 6-digit Delivery PIN with the courier."
+        };
+      case "delivered":
+        return {
+          title: isPickup ? "Package Collected" : "Order Delivered",
+          subtitle: isPickup 
+            ? "Handover confirmed. Please inspect your package and complete order."
+            : "Handover verified by courier! Please confirm delivery to release escrow funds."
+        };
+      case "payment_required":
+        return {
+          title: "POD Payment Required",
+          subtitle: "Package received! Please complete your Paystack payment to finalize escrow settlement."
+        };
+      case "awaiting_payment":
+        return {
+          title: "Awaiting Payment",
+          subtitle: "Please complete payment to finalize your order."
+        };
+      case "completed":
+        return {
+          title: "Order Completed",
+          subtitle: "Delivery confirmed and escrow funds released to merchant and courier."
+        };
+      case "cancelled":
+        return {
+          title: "Order Cancelled",
+          subtitle: "This order was cancelled."
+        };
+      default:
+        return {
+          title: effectiveStatus.replace(/_/g, " "),
+          subtitle: "Order progress update."
+        };
+    }
   };
 
   const formatRemainingTime = (order: Order) => {
@@ -1013,20 +1140,24 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                     </div>
                     <div>
                       <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-1">Order ID: {order.id.slice(0, 8)}</p>
-                      <h4 className="text-lg font-bold text-slate-900 dark:text-white capitalize flex flex-col">
-                        {effectiveStatus === "transit" 
-                          ? (order.deliveryType === "pickup" ? "En Route to Station" : "Out For Delivery")
-                          : effectiveStatus === "ready_for_pickup" 
-                          ? (order.deliveryType === "pickup" ? "Ready for Pickup" : "Arrived at Destination") 
-                          : effectiveStatus === "out_for_delivery" 
-                          ? "Accepted & Preparing" 
-                          : effectiveStatus.replace(/_/g, ' ')}
-                        {effectiveStatus === "out_for_delivery" && (order.deliveryType === "pickup" || order.logisticsOfferStatus === "accepted") && order.deliveryTime && (
-                          <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 lowercase">
-                            (Estimated {order.deliveryTime} {Number(order.deliveryTime) === 1 ? (order.deliveryTimeUnit?.toLowerCase().startsWith('hour') ? 'hour' : order.deliveryTimeUnit?.toLowerCase().startsWith('week') ? 'week' : 'day') : (order.deliveryTimeUnit || 'days')} {order.deliveryType === "pickup" ? "pickup" : "delivery"})
-                          </span>
-                        )}
-                      </h4>
+                      {(() => {
+                        const heading = getStatusHeadingInfo(order, effectiveStatus);
+                        return (
+                          <div className="flex flex-col">
+                            <h4 className="text-lg font-black text-slate-900 dark:text-white flex items-center gap-2 flex-wrap">
+                              <span>{heading.title}</span>
+                              {order.deliveryTime && (
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 lowercase">
+                                  est: {order.deliveryTime} {Number(order.deliveryTime) === 1 ? (order.deliveryTimeUnit?.toLowerCase().startsWith('hour') ? 'hour' : 'day') : (order.deliveryTimeUnit || 'days')}
+                                </span>
+                              )}
+                            </h4>
+                            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-medium leading-relaxed">
+                              {heading.subtitle}
+                            </p>
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -1549,31 +1680,32 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                     <div className="absolute left-4 top-0 bottom-0 w-0.5 bg-slate-100 dark:bg-slate-800" />
                     <div className="space-y-6 relative">
                       {(() => {
-                        // Dynamic 4-Permutation Step Flow Matrix
                         const isPickup = order.deliveryType === "pickup";
                         const isPod = order.paymentMethod === "pod";
 
-                        let stepList: { key: string; label: string; icon: any }[] = [];
+                        let stepList: { key: string; label: string; desc: string; actor: string; icon: any }[] = [];
 
                         if (isPickup) {
-                          // Pickup Flow (No Logistics steps)
+                          // Pickup Flow
                           stepList = [
-                            { key: "pending", label: "Order Placed", icon: Clock },
-                            { key: "out_for_delivery", label: "Seller Accepted & Packaging", icon: CheckCircle },
-                            { key: "ready_for_pickup", label: "Ready at Pickup Station/Store", icon: Package },
-                            { key: "delivered", label: "Package Handover Verified", icon: Package },
-                            ...(isPod ? [{ key: "payment_required", label: "Pay on Delivery Settlement", icon: CreditCard }] : []),
-                            { key: "completed", label: "Order Completed", icon: CheckCircle }
+                            { key: "pending", label: "Order Placed", desc: "Order submitted to merchant", actor: "Buyer", icon: Clock },
+                            { key: "accepted", label: "Seller Accepted", desc: "Merchant accepted & packaging item", actor: "Seller", icon: CheckCircle },
+                            { key: "ready_for_pickup", label: "Ready at Store / Station", desc: "Awaiting your physical collection", actor: "Station", icon: Package },
+                            { key: "delivered", label: "Package Handover Verified", desc: "PIN verified at store/station", actor: "Buyer", icon: Package },
+                            ...(isPod ? [{ key: "payment_required", label: "Pay on Delivery Settlement", desc: "Paystack electronic payment", actor: "Buyer", icon: CreditCard }] : []),
+                            { key: "completed", label: "Order Completed", desc: "Escrow funds released to vendor", actor: "Escrow", icon: CheckCircle }
                           ];
                         } else {
-                          // Home Delivery Flow (Full Courier Logistics Handshake)
+                          // Home / Campus Delivery Flow (Full Courier Logistics Handshake)
                           stepList = [
-                            { key: "pending", label: "Order Placed", icon: Clock },
-                            { key: "out_for_delivery", label: "Seller Accepted & Packaging", icon: CheckCircle },
-                            { key: "transit", label: "Out for Delivery (Courier In Transit)", icon: Truck },
-                            { key: "delivered", label: "Delivery Verified & Handed Over", icon: Package },
-                            ...(isPod ? [{ key: "payment_required", label: "Pay on Delivery Settlement", icon: CreditCard }] : []),
-                            { key: "completed", label: "Order Completed", icon: CheckCircle }
+                            { key: "pending", label: "Order Placed", desc: "Order sent to seller", actor: "Buyer", icon: Clock },
+                            { key: "accepted", label: "Seller Accepted", desc: "Merchant accepted & packaging items", actor: "Seller", icon: CheckCircle },
+                            { key: "logistics_booked", label: "Logistics Courier Booked", desc: order.logisticsName ? `${order.logisticsName} assigned` : "Logistics courier assigned", actor: "Seller ➔ Courier", icon: Truck },
+                            { key: "transit", label: "In Transit", desc: "Rider collected box from merchant", actor: "Courier", icon: Truck },
+                            { key: "out_for_delivery", label: "Out For Delivery", desc: "Rider arrived at campus doorstep", actor: "Courier", icon: MapPin },
+                            { key: "delivered", label: "Order Delivered", desc: "Delivery PIN verified by courier", actor: "Courier ➔ Buyer", icon: Package },
+                            ...(isPod ? [{ key: "payment_required", label: "Pay on Delivery Settlement", desc: "Paystack electronic escrow settlement", actor: "Buyer", icon: CreditCard }] : []),
+                            { key: "completed", label: "Order Completed", desc: "Escrow funds released to vendor & courier", actor: "Escrow", icon: CheckCircle }
                           ];
                         }
 
@@ -1583,36 +1715,46 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                           const isCompleted = index <= currentIndex && order.status !== "cancelled";
                           const isCurrent = index === currentIndex;
                           
-                          let stepColor = "bg-slate-100 dark:bg-slate-800";
+                          let stepColor = "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500";
                           if (isCompleted) {
-                            if (step.key === "pending") stepColor = "bg-indigo-600";
-                            else if (step.key === "payment_required") stepColor = "bg-amber-600";
-                            else stepColor = "bg-emerald-600";
+                            if (step.key === "pending") stepColor = "bg-indigo-600 text-white shadow-md shadow-indigo-600/20";
+                            else if (step.key === "accepted") stepColor = "bg-blue-600 text-white shadow-md shadow-blue-600/20";
+                            else if (step.key === "logistics_booked") stepColor = "bg-indigo-500 text-white shadow-md shadow-indigo-500/20";
+                            else if (step.key === "transit") stepColor = "bg-purple-600 text-white shadow-md shadow-purple-600/20";
+                            else if (step.key === "out_for_delivery") stepColor = "bg-orange-600 text-white shadow-md shadow-orange-600/20";
+                            else if (step.key === "payment_required") stepColor = "bg-amber-600 text-white shadow-md shadow-amber-600/20";
+                            else stepColor = "bg-emerald-600 text-white shadow-md shadow-emerald-600/20";
                           }
                           
                           return (
-                            <div key={`order-step-${step.key}-${index}`} className="flex items-center gap-4">
+                            <div key={`order-step-${step.key}-${index}`} className="flex items-start gap-4">
                               <div className={cn(
-                                "w-8 h-8 rounded-full flex items-center justify-center z-10 transition-all duration-500",
+                                "w-8 h-8 rounded-full flex items-center justify-center z-10 shrink-0 transition-all duration-300",
                                 stepColor,
-                                isCompleted ? "text-white shadow-lg" : "text-slate-400 dark:text-slate-500",
-                                isCurrent && "ring-4 ring-indigo-100 dark:ring-indigo-900/30"
+                                isCurrent && "ring-4 ring-indigo-100 dark:ring-indigo-900/40 scale-110"
                               )}>
-                                <step.icon className={cn("w-4 h-4", isCurrent && step.key === "transit" && "animate-spin")} />
+                                <step.icon className={cn("w-4 h-4", isCurrent && (step.key === "transit" || step.key === "pending") && "animate-pulse")} />
                               </div>
-                              <div className="flex flex-col">
-                                <span className={cn(
-                                  "text-xs font-bold transition-colors",
-                                  isCompleted ? "text-slate-900 dark:text-white" : "text-slate-400 dark:text-slate-500"
-                                )}>
-                                  {step.label}
-                                  {isCurrent && step.key === "transit" && remainingTime && (
-                                    <span className="ml-2 font-mono text-[10px] text-emerald-600">{remainingTime}</span>
+                              <div className="flex flex-col min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className={cn(
+                                    "text-xs font-bold transition-colors",
+                                    isCompleted ? "text-slate-900 dark:text-white" : "text-slate-400 dark:text-slate-500"
+                                  )}>
+                                    {step.label}
+                                  </span>
+                                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                                    {step.actor}
+                                  </span>
+                                  {isCurrent && (
+                                    <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 flex items-center gap-1">
+                                      ● Active Stage
+                                    </span>
                                   )}
-                                </span>
-                                {isCurrent && (
-                                  <p className="text-[10px] font-medium text-indigo-600 animate-pulse">Current Status</p>
-                                )}
+                                </div>
+                                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                                  {step.desc}
+                                </p>
                               </div>
                             </div>
                           );
@@ -1702,43 +1844,8 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                         </div>
                       )}
 
-                      {order.status === "out_for_delivery" && (
-                        <div className="p-3 bg-amber-50 dark:bg-amber-900/10 border border-amber-100 dark:border-amber-900/30 rounded-xl mb-1">
-                          <p className="text-[10px] font-black uppercase tracking-widest text-[#d97706] dark:text-amber-500">Merchant Preparing Dispatch</p>
-                          <p className="text-xs font-semibold text-slate-600 dark:text-slate-400 mt-1">
-                            The merchant has accepted your order and is preparing or booking campus dispatch/courier. Please wait.
-                          </p>
-                        </div>
-                      )}
-
-                      {order.status === "Pending Seller Acceptance" ? (
-                        <button
-                          disabled={true}
-                          className="w-full py-4 bg-slate-100 dark:bg-slate-800 text-slate-500 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 cursor-not-allowed"
-                        >
-                          <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
-                          Awaiting Seller Acceptance...
-                        </button>
-                      ) : order.status === "payment_required" ? (
-                        <div className="space-y-2 animate-in fade-in duration-300">
-                          <div className="p-3 bg-amber-50 dark:bg-amber-900/25 border border-amber-200 dark:border-amber-900/40 rounded-xl text-xs font-medium text-amber-900 dark:text-amber-300">
-                            <strong>📦 Package Handover Confirmed!</strong><br />
-                            Pay on Delivery security policy requires electronic payment verification to complete escrow settlement.
-                          </div>
-                          <button
-                            onClick={() => triggerPaystackPayment(order)}
-                            disabled={isVerifyingPayment}
-                            className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-bold text-sm tracking-wide transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer shadow-lg active:scale-95"
-                          >
-                            {isVerifyingPayment ? (
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                            ) : (
-                              <CreditCard className="w-4 h-4" />
-                            )}
-                            Pay via Paystack (₦{order.totalPrice.toLocaleString()})
-                          </button>
-                        </div>
-                      ) : (order.type === "service" && order.paymentMethod === "physical") ? (
+                      {/* Action buttons mapped cleanly by effectiveStatus lifecycle */}
+                      {order.status === "completed" ? null : (order.type === "service" && order.paymentMethod === "physical") ? (
                         <div className="space-y-2 animate-in fade-in duration-300">
                           {order.location && (
                             <div className="p-3 bg-zinc-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-2">
@@ -1759,7 +1866,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                             Service Done
                           </button>
                         </div>
-                      ) : order.status === "awaiting_payment" ? (
+                      ) : effectiveStatus === "awaiting_payment" ? (
                         <div className="space-y-2 animate-in fade-in duration-305">
                           <div className="p-3 bg-amber-50 dark:bg-amber-900/25 border border-amber-100 dark:border-amber-900/40 rounded-xl text-xs font-medium text-amber-800 dark:text-amber-400">
                             Service completed by vendor! Please finalize your secure online escrow payment on the app now.
@@ -1777,74 +1884,226 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                             Pay For Service via Paystack (₦{order.totalPrice.toLocaleString()})
                           </button>
                         </div>
-                      ) : (order.status === "Order Picked Up" || order.status === "Order Delivered") && order.paymentStatus !== "paid" ? (
+                      ) : effectiveStatus === "pending" ? (
+                        <button
+                          disabled={true}
+                          className="w-full py-4 bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 cursor-not-allowed border border-slate-200/50 dark:border-slate-800"
+                        >
+                          <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
+                          Awaiting Seller Acceptance...
+                        </button>
+                      ) : effectiveStatus === "accepted" ? (
                         <div className="space-y-2">
-                          <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-900/30 rounded-xl text-xs font-medium text-amber-800 dark:text-amber-400">
-                            Order picked up! Please finalize your real payment via Paystack to secure escrow and complete this order.
+                          <div className="p-4 bg-blue-50/80 dark:bg-blue-950/25 border border-blue-200/80 dark:border-blue-900/40 rounded-2xl flex items-start gap-3">
+                            <CheckCircle className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+                            <div>
+                              <p className="text-xs font-bold text-blue-900 dark:text-blue-200">Seller Accepted Your Order</p>
+                              <p className="text-[11px] text-blue-700 dark:text-blue-300 mt-0.5 leading-relaxed font-medium">
+                                The merchant has accepted your order and is currently packaging your items. {order.deliveryType === "pickup" ? "You will receive an update once it is ready at the store/station." : "A campus logistics courier will be assigned shortly for dispatch."}
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            disabled={true}
+                            className="w-full py-3.5 bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 rounded-2xl font-bold text-xs flex items-center justify-center gap-2 cursor-not-allowed"
+                          >
+                            <Clock className="w-4 h-4 text-slate-400" />
+                            Seller Packaging Items...
+                          </button>
+                        </div>
+                      ) : effectiveStatus === "logistics_booked" ? (
+                        <div className="space-y-3">
+                          <div className="p-4 bg-indigo-50 dark:bg-indigo-950/25 border border-indigo-200 dark:border-indigo-900/40 rounded-2xl space-y-2">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <Truck className="w-4 h-4 text-indigo-600" />
+                                <span className="text-xs font-bold text-indigo-900 dark:text-indigo-200">
+                                  Campus Courier Booked: {order.logisticsName || "Logistics Partner"}
+                                </span>
+                              </div>
+                              {order.logisticsPhone && (
+                                <a
+                                  href={`tel:${order.logisticsPhone}`}
+                                  className="text-[11px] font-bold text-indigo-600 hover:underline flex items-center gap-1"
+                                >
+                                  <Phone className="w-3 h-3" /> {order.logisticsPhone}
+                                </a>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-indigo-700 dark:text-indigo-300 leading-relaxed font-medium">
+                              The dispatch rider has been assigned and is heading to the merchant's location to collect your package.
+                            </p>
+                          </div>
+                          <button
+                            disabled={true}
+                            className="w-full py-3.5 bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 rounded-2xl font-bold text-xs flex items-center justify-center gap-2 cursor-not-allowed"
+                          >
+                            <Clock className="w-4 h-4 text-slate-400" />
+                            Awaiting Courier Pickup from Merchant...
+                          </button>
+                        </div>
+                      ) : effectiveStatus === "transit" ? (
+                        <div className="space-y-3">
+                          <div className="p-4 bg-purple-50 dark:bg-purple-950/25 border border-purple-200 dark:border-purple-900/40 rounded-2xl space-y-2">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <Truck className="w-4 h-4 text-purple-600 animate-pulse" />
+                                <span className="text-xs font-bold text-purple-900 dark:text-purple-200">
+                                  Package In Transit
+                                </span>
+                              </div>
+                              <span className="text-[10px] font-bold px-2.5 py-0.5 bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 rounded-full">
+                                Heading to Campus Drop-off
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-purple-700 dark:text-purple-300 leading-relaxed font-medium">
+                              The dispatch rider has collected your package from the merchant and is heading to your delivery location.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setTrackingRiderOrder(order);
+                              setTrackingProgress(Math.floor(Math.random() * 20) + 35);
+                            }}
+                            className="w-full py-4 bg-purple-600 hover:bg-purple-700 text-white rounded-2xl font-bold text-sm tracking-wide transition-all duration-300 flex items-center justify-center gap-2 shadow-lg shadow-purple-600/20 active:scale-[0.98] cursor-pointer"
+                          >
+                            <Truck className="w-4 h-4" /> Track Dispatch Rider Live
+                          </button>
+                        </div>
+                      ) : effectiveStatus === "out_for_delivery" ? (
+                        <div className="space-y-3 animate-in fade-in">
+                          <div className="p-5 bg-gradient-to-r from-orange-50 to-amber-50 dark:from-orange-950/30 dark:to-amber-950/30 border-2 border-orange-300 dark:border-orange-800/80 rounded-2xl space-y-3">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <MapPin className="w-5 h-5 text-orange-600 animate-bounce" />
+                                <span className="text-xs font-black text-orange-900 dark:text-orange-200 uppercase tracking-wide">
+                                  Rider Arrived at Your Location!
+                                </span>
+                              </div>
+                              <span className="text-[10px] font-bold px-2.5 py-0.5 bg-orange-200 dark:bg-orange-800 text-orange-900 dark:text-orange-100 rounded-full">
+                                Step 5: Doorstep Handover
+                              </span>
+                            </div>
+                            <p className="text-xs text-orange-800 dark:text-orange-300 leading-relaxed font-medium">
+                              The courier is at your doorstep or campus pickup point. Please share your <strong>Delivery PIN</strong> with the rider to verify package handover:
+                            </p>
+                            <div className="p-3.5 bg-white dark:bg-slate-900 rounded-xl border border-orange-200 dark:border-orange-900/50 flex items-center justify-between">
+                              <div>
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Your 6-Digit Delivery PIN</p>
+                                <p className="text-2xl font-black font-mono tracking-widest text-emerald-600 select-all">
+                                  {order.deliveryOtp || order.pickupOtp || order.handoverCode || order.id.slice(-6).toUpperCase()}
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const pin = order.deliveryOtp || order.pickupOtp || order.handoverCode || order.id.slice(-6).toUpperCase();
+                                  navigator.clipboard.writeText(pin);
+                                  alert("Delivery PIN copied to clipboard!");
+                                }}
+                                className="px-3.5 py-2 bg-orange-100 hover:bg-orange-200 text-orange-800 dark:bg-orange-900/60 dark:text-orange-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                              >
+                                <Copy className="w-3.5 h-3.5" /> Copy PIN
+                              </button>
+                            </div>
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 italic">
+                              The rider will enter this PIN on their courier app to mark "Order Delivered". Once verified, you will confirm satisfaction below to release escrow.
+                            </p>
+                          </div>
+                        </div>
+                      ) : effectiveStatus === "ready_for_pickup" ? (
+                        <div className="space-y-3 animate-in fade-in">
+                          <div className="p-4 bg-emerald-50 dark:bg-emerald-950/25 border-2 border-emerald-300 dark:border-emerald-800 rounded-2xl space-y-2">
+                            <div className="flex items-center gap-2">
+                              <Package className="w-5 h-5 text-emerald-600" />
+                              <span className="text-xs font-black text-emerald-900 dark:text-emerald-200 uppercase tracking-wide">
+                                Ready at Pickup Station!
+                              </span>
+                            </div>
+                            <p className="text-xs text-emerald-800 dark:text-emerald-300 leading-relaxed font-medium">
+                              Your package is ready for collection at {order.pickupStationName || order.location || "the store/station"}. Present your Pickup PIN: <strong className="font-mono text-emerald-700 dark:text-emerald-300">{order.deliveryOtp || order.pickupOtp || order.handoverCode || order.id.slice(-6).toUpperCase()}</strong>
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => {
+                              setVerifyingOrder(order);
+                              setProductIdInput("");
+                              setVerificationError(null);
+                              setShowIdVerification(true);
+                            }}
+                            disabled={markingId === order.id || order.disputeStatus === "active"}
+                            className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-bold text-sm transition-all active:scale-95 flex items-center justify-center gap-2 shadow-lg cursor-pointer"
+                          >
+                            {markingId === order.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
+                            Confirm Package Collected
+                          </button>
+                        </div>
+                      ) : effectiveStatus === "payment_required" ? (
+                        <div className="space-y-2 animate-in fade-in duration-300">
+                          <div className="p-3 bg-amber-50 dark:bg-amber-900/25 border border-amber-200 dark:border-amber-900/40 rounded-xl text-xs font-medium text-amber-900 dark:text-amber-300">
+                            <strong>📦 Package Handover Confirmed!</strong><br />
+                            Pay on Delivery security policy requires electronic payment verification to complete escrow settlement.
                           </div>
                           <button
                             onClick={() => triggerPaystackPayment(order)}
-                            disabled={isVerifyingPayment || markingId === order.id}
-                            className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-bold text-sm tracking-wide transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer shadow-lg"
+                            disabled={isVerifyingPayment}
+                            className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-bold text-sm tracking-wide transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer shadow-lg active:scale-95"
                           >
                             {isVerifyingPayment ? (
                               <Loader2 className="w-4 h-4 animate-spin" />
                             ) : (
                               <CreditCard className="w-4 h-4" />
                             )}
-                            Pay For Order via Paystack (₦{order.totalPrice.toLocaleString()})
+                            Pay via Paystack (₦{order.totalPrice.toLocaleString()})
                           </button>
                         </div>
-                      ) : order.deliveryType === "pickup" ? (
-                        <button
-                          onClick={() => {
-                            setVerifyingOrder(order);
-                            setProductIdInput("");
-                            setVerificationError(null);
-                            setShowIdVerification(true);
-                          }}
-                          disabled={
-                            markingId === order.id || 
-                            order.disputeStatus === "active" || 
-                            order.status === "Out To Pickup Station" ||
-                            order.status === "out_for_delivery"
-                          }
-                          className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-bold text-sm hover:bg-emerald-700 transition-all active:scale-95 flex items-center justify-center gap-2 shadow-lg disabled:opacity-50 disabled:bg-slate-200 dark:disabled:bg-slate-800"
-                        >
-                          {markingId === order.id ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : effectiveStatus === "delivered" ? (
+                        <div className="space-y-3 animate-in fade-in">
+                          <div className="p-4 bg-emerald-50 dark:bg-emerald-950/25 border-2 border-emerald-300 dark:border-emerald-800 rounded-2xl space-y-2">
+                            <div className="flex items-center gap-2">
+                              <CheckCircle className="w-5 h-5 text-emerald-600" />
+                              <span className="text-xs font-black text-emerald-900 dark:text-emerald-200 uppercase tracking-wide">
+                                Package Handover Verified by Courier!
+                              </span>
+                            </div>
+                            <p className="text-xs text-emerald-800 dark:text-emerald-300 leading-relaxed font-medium">
+                              {order.paymentMethod === "pod" && order.paymentStatus !== "paid"
+                                ? "Package received! Please complete your Paystack payment to finalize settlement and release vendor balance."
+                                : "The courier has verified delivery and handed over your package. Please inspect your items and click below to confirm receipt and release escrow funds to the seller and courier."}
+                            </p>
+                          </div>
+
+                          {order.paymentMethod === "pod" && order.paymentStatus !== "paid" ? (
+                            <button
+                              onClick={() => triggerPaystackPayment(order)}
+                              disabled={isVerifyingPayment || markingId === order.id}
+                              className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-sm tracking-wide transition-all flex items-center justify-center gap-2 shadow-lg cursor-pointer active:scale-95"
+                            >
+                              {isVerifyingPayment ? <Loader2 className="w-4 h-4 animate-spin" /> : <CreditCard className="w-4 h-4" />}
+                              Pay via Paystack (₦{order.totalPrice.toLocaleString()})
+                            </button>
                           ) : (
-                            <CheckCircle className="w-4 h-4" />
+                            <button
+                              onClick={() => {
+                                setVerifyingOrder(order);
+                                setProductIdInput("");
+                                setVerificationError(null);
+                                setShowIdVerification(true);
+                              }}
+                              disabled={markingId === order.id || order.disputeStatus === "active"}
+                              className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-sm tracking-wide transition-all active:scale-[0.98] flex items-center justify-center gap-2 shadow-xl shadow-emerald-600/25 cursor-pointer disabled:opacity-50"
+                            >
+                              {markingId === order.id ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <CheckCircle className="w-4 h-4" />
+                              )}
+                              Confirm Delivery & Release Escrow
+                            </button>
                           )}
-                          Order Picked Up
-                          {order.status === "Out To Pickup Station" && (
-                            <span className="block text-[10px] font-medium opacity-70">
-                              (Wait for Countdown)
-                            </span>
-                          )}
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => {
-                            setVerifyingOrder(order);
-                            setProductIdInput("");
-                            setVerificationError(null);
-                            setShowIdVerification(true);
-                          }}
-                          disabled={
-                            markingId === order.id || 
-                            order.disputeStatus === "active"
-                          }
-                          className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-bold text-sm hover:bg-emerald-700 transition-all active:scale-95 flex items-center justify-center gap-2 shadow-lg disabled:opacity-50 disabled:bg-slate-200 dark:disabled:bg-slate-800"
-                        >
-                          {markingId === order.id ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                          ) : (
-                            <CheckCircle className="w-4 h-4" />
-                          )}
-                          Confirm Delivery
-                        </button>
-                      )}
+                        </div>
+                      ) : null}
 
                       {/* Refund & Dispute Action Buttons - ONLY shown after payment is made */}
                       {(() => {

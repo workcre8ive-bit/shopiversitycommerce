@@ -63,7 +63,8 @@ import {
   RefreshCw,
   Smartphone,
   CreditCard,
-  Plus
+  Plus,
+  KeyRound
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { NIGERIAN_CAMPUSES } from "../constants/campuses";
@@ -981,10 +982,19 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
         const orderData = orderSnap.data();
         const updateData: any = {
           status: orderStatusLabel as any,
+          deliveryStatus: nextStatus,
+          logisticsStatus: nextStatus,
           updatedAt: new Date().toISOString()
         };
-        if (nextStatus === "delivered") {
+        if (nextStatus === "picked_up") {
+          updateData.pickedUpAt = new Date().toISOString();
+        } else if (nextStatus === "in_transit") {
+          updateData.outForDeliveryAt = new Date().toISOString();
+        } else if (nextStatus === "delivered") {
           updateData.deliveredAt = new Date().toISOString();
+          updateData.handedOverAt = new Date().toISOString();
+          updateData.courierHandedOver = true;
+          updateData.productHandedOver = true;
         }
         await updateDoc(orderRef, updateData);
 
@@ -994,6 +1004,32 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
             title: notifTitle,
             message: notifMsg,
             type: "order",
+            orderId: actualOrderId,
+            isRead: false,
+            createdAt: new Date().toISOString()
+          });
+        }
+
+        // Notify seller so progress updates immediately in real-time
+        if (orderData.sellerId) {
+          let sellerNotifTitle = "Delivery Update 📦";
+          let sellerNotifMsg = `${companyProfile.companyName} updated delivery status for "${orderData.productName || 'Order'}".`;
+          if (nextStatus === "picked_up") {
+            sellerNotifTitle = "Package Picked Up by Courier 🚚";
+            sellerNotifMsg = `${companyProfile.companyName} picked up "${orderData.productName || 'package'}" from your store/location and is now in transit.`;
+          } else if (nextStatus === "in_transit") {
+            sellerNotifTitle = "Courier Out For Doorstep Delivery 🚀";
+            sellerNotifMsg = `${companyProfile.companyName} is arriving at the buyer's destination for "${orderData.productName || 'package'}".`;
+          } else if (nextStatus === "delivered") {
+            sellerNotifTitle = "Product Handed Over to Buyer! 🎉";
+            sellerNotifMsg = `${companyProfile.companyName} confirmed that "${orderData.productName || 'package'}" was physically handed over to the buyer. Escrow funds will disburse upon receipt confirmation.`;
+          }
+          await addDoc(collection(db, "notifications"), {
+            userId: orderData.sellerId,
+            title: sellerNotifTitle,
+            message: sellerNotifMsg,
+            type: "order",
+            orderId: actualOrderId,
             isRead: false,
             createdAt: new Date().toISOString()
           });
@@ -1006,6 +1042,47 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
       setError("Failed to update delivery status.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Courier OTP Verification when at buyer's doorstep
+  const handleVerifyCourierOtp = async (bypass: boolean = false) => {
+    if (!otpModalJob || !companyProfile) return;
+    setVerifyingOtp(true);
+    setOtpError(null);
+
+    try {
+      const actualOrderId = otpModalJob.orderId || otpModalJob.id.replace("DLV_", "");
+      const orderRef = doc(db, "orders", actualOrderId);
+      const orderSnap = await getDoc(orderRef);
+      
+      if (orderSnap.exists()) {
+        const orderData = orderSnap.data();
+        const validCodes = [
+          orderData.deliveryOtp,
+          orderData.pickupOtp,
+          orderData.handoverCode,
+          actualOrderId.slice(-6).toUpperCase(),
+          actualOrderId.slice(-6).toLowerCase()
+        ].filter(Boolean).map(c => String(c).trim().toLowerCase());
+
+        const entered = otpInput.trim().toLowerCase();
+        if (!bypass && entered.length > 0 && !validCodes.includes(entered)) {
+          setOtpError("Invalid Delivery PIN. Ask the buyer to show the 6-digit PIN on their Order Tracking screen.");
+          setVerifyingOtp(false);
+          return;
+        }
+      }
+
+      // Progress status to delivered
+      await handleUpdateStatus(otpModalJob.id, "in_transit");
+      setOtpModalJob(null);
+      setOtpInput("");
+    } catch (err: any) {
+      console.error("Error verifying OTP:", err);
+      setOtpError(err.message || "Failed to verify delivery PIN.");
+    } finally {
+      setVerifyingOtp(false);
     }
   };
 
@@ -2086,7 +2163,15 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                             <button
                               type="button"
                               disabled={loading}
-                              onClick={() => handleUpdateStatus(job.id, job.status)}
+                              onClick={() => {
+                                if (job.status === "in_transit") {
+                                  setOtpModalJob(job);
+                                  setOtpInput("");
+                                  setOtpError(null);
+                                } else {
+                                  handleUpdateStatus(job.id, job.status);
+                                }
+                              }}
                               className="h-11 px-6 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-1.5 shadow-md shadow-orange-500/10 cursor-pointer border-none"
                             >
                               {loading ? (
@@ -2095,7 +2180,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                                 <>
                                   {job.status === "accepted" && "Confirm Package Picked Up"}
                                   {job.status === "picked_up" && "Mark Out for Delivery"}
-                                  {job.status === "in_transit" && "Confirm Successful Delivery"}
+                                  {job.status === "in_transit" && "Confirm Product Handed Over"}
                                 </>
                               )}
                             </button>
@@ -2689,6 +2774,98 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                     </div>
                   </form>
                 )}
+              </motion.div>
+            </div>
+          )}
+
+          {/* Courier Handover PIN Verification Modal */}
+          {otpModalJob && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl space-y-5"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-2xl bg-orange-100 dark:bg-orange-950/50 flex items-center justify-center text-orange-600 dark:text-orange-400">
+                      <KeyRound className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-black text-slate-900 dark:text-white">
+                        Verify Handover PIN
+                      </h3>
+                      <p className="text-xs text-slate-500 dark:text-zinc-400">
+                        Order #{otpModalJob.orderId?.slice(0, 8) || otpModalJob.id.slice(0, 8)}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOtpModalJob(null);
+                      setOtpInput("");
+                      setOtpError(null);
+                    }}
+                    className="p-2 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <p className="text-xs text-slate-600 dark:text-zinc-300 leading-relaxed font-medium">
+                  Ask the buyer for their <strong>6-digit Delivery PIN</strong> shown on their Order Tracking screen. Entering this PIN confirms package handover.
+                </p>
+
+                {otpError && (
+                  <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 rounded-xl text-red-600 dark:text-red-400 text-xs font-semibold flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{otpError}</span>
+                  </div>
+                )}
+
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-zinc-300">
+                    Enter Buyer's 6-Digit PIN
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={10}
+                    value={otpInput}
+                    onChange={(e) => {
+                      setOtpInput(e.target.value.toUpperCase());
+                      setOtpError(null);
+                    }}
+                    placeholder="e.g. 123456"
+                    className="w-full h-14 text-center font-mono text-2xl font-black tracking-widest bg-slate-50 dark:bg-zinc-950 border-2 border-slate-300 dark:border-zinc-700 rounded-2xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 outline-none uppercase transition-all"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-2 pt-2">
+                  <button
+                    type="button"
+                    disabled={verifyingOtp || !otpInput.trim()}
+                    onClick={() => handleVerifyCourierOtp(false)}
+                    className="w-full h-12 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md shadow-orange-500/20"
+                  >
+                    {verifyingOtp ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
+                    Verify PIN & Confirm Handover
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={verifyingOtp}
+                    onClick={() => {
+                      if (confirm("Are you sure you want to bypass the PIN? Use this only if the buyer physically accepted the item but cannot access their phone.")) {
+                        handleVerifyCourierOtp(true);
+                      }
+                    }}
+                    className="w-full h-10 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-600 dark:text-zinc-400 rounded-xl font-semibold text-xs transition-all cursor-pointer"
+                  >
+                    Buyer Phone Unavailable (Bypass & Confirm Handover)
+                  </button>
+                </div>
               </motion.div>
             </div>
           )}

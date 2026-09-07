@@ -411,26 +411,6 @@ export default function SellerDashboard({
     return () => clearInterval(timer);
   }, []);
 
-  React.useEffect(() => {
-    orders.forEach(async (order) => {
-      if ((order.status === "Out To Pickup Station" || order.status === "Out For Delivery" || order.status === "accepted") && order.acceptedAt) {
-        const acceptedTime = new Date(order.acceptedAt).getTime();
-        const duration = (order.countdownDuration || 120) * 1000;
-        const remainingMs = (acceptedTime + duration) - currentTime;
-        if (remainingMs <= 0) {
-          try {
-            await updateDoc(doc(db, "orders", order.id), {
-              status: "Ready For Pickup",
-              updatedAt: new Date().toISOString()
-            });
-          } catch (err) {
-            console.error("Auto transition to Ready For Pickup failed:", err);
-          }
-        }
-      }
-    });
-  }, [orders, currentTime]);
-
   const updateOrderStatus = async (orderId: string, status: string, order: Order) => {
     try {
       let finalStatus = status;
@@ -442,7 +422,11 @@ export default function SellerDashboard({
         updateData.status = "accepted";
         updateData.acceptedAt = new Date().toISOString();
       } else if (status === "start_dispatch" || status === "out_for_delivery") {
-        updateData.status = order.deliveryType === "pickup" ? "Out To Pickup Station" : "Out For Delivery";
+        if (order.deliveryType === "delivery") {
+          // Delivery orders are dispatched and marked out for delivery exclusively by the logistics courier!
+          return;
+        }
+        updateData.status = "Out To Pickup Station";
         updateData.acceptedAt = order.acceptedAt || new Date().toISOString();
         updateData.countdownDuration = 120; // 120 seconds countdown
       }
@@ -2157,7 +2141,85 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
   }, [trackingRiderOrder]);
 
   const getEffectiveStatus = (order: any) => {
-    return order.status;
+    const s = (order.status || "") as string;
+    if (s === "cancelled") return "cancelled";
+    if (s === "completed") return "completed";
+    if (s === "payment_required" || s === "Payment Required") return "payment_required";
+    if (s === "awaiting_payment") return "awaiting_payment";
+
+    // 6. Delivered stage (Courier verified PIN / marked delivered / handed over product)
+    if (
+      s === "delivered" ||
+      s === "acquired" ||
+      s === "Order Delivered" ||
+      order.courierHandedOver ||
+      order.productHandedOver ||
+      order.deliveryStatus === "delivered" ||
+      order.logisticsStatus === "delivered" ||
+      (order.deliveryType === "pickup" && s === "Order Picked Up")
+    ) {
+      return "delivered";
+    }
+
+    // 5. Out For Delivery (Doorstep courier arrived)
+    if (
+      s === "Out For Delivery" ||
+      s === "out_for_delivery" ||
+      order.deliveryStatus === "in_transit" ||
+      order.logisticsStatus === "in_transit"
+    ) {
+      return "out_for_delivery";
+    }
+
+    // 4. In Transit (Courier moving)
+    if (
+      s === "In Transit" ||
+      s === "transit" ||
+      s === "picked_up" ||
+      s === "Package Picked Up from Merchant" ||
+      s === "Package Picked Up from Seller" ||
+      order.deliveryStatus === "picked_up" ||
+      order.logisticsStatus === "picked_up" ||
+      (order.deliveryType === "delivery" && s === "Order Picked Up")
+    ) {
+      return "transit";
+    }
+
+    // 3. Ready at Station / Store (STRICTLY ONLY FOR PICKUP ORDERS!)
+    if (
+      order.deliveryType === "pickup" &&
+      (s === "Ready For Pickup" || s === "ready_for_pickup" || s === "Out To Pickup Station")
+    ) {
+      return "ready_for_pickup";
+    }
+
+    // 2. Logistics booked (delivery orders)
+    if (
+      order.deliveryType === "delivery" &&
+      (
+        order.logisticsOfferStatus === "accepted" ||
+        order.logisticsOfferStatus === "pending" ||
+        s === "logistics_pending" ||
+        s === "logistics_booked" ||
+        order.logisticsId ||
+        order.logisticsName ||
+        (order.kwikRiderId && order.kwikRiderId.length > 0)
+      )
+    ) {
+      return "logistics_booked";
+    }
+
+    // 1. Accepted (if deliveryType === "delivery" and status was erroneously set to "Ready For Pickup", normalize it to accepted)
+    if (s === "accepted" || (order.deliveryType === "delivery" && (s === "Ready For Pickup" || s === "ready_for_pickup"))) {
+      return "accepted";
+    }
+
+    // 0. Pending
+    if (s === "pending" || s === "Pending Seller Acceptance") {
+      return "pending";
+    }
+
+    return s;
   };
 
   const handleOutsourceLogistics = async () => {
@@ -2178,7 +2240,10 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
       await updateDoc(doc(db, "orders", order.id), {
         kwikRiderId: riderId,
         kwikTrackingUrl: trackingUrl,
-        status: "out_for_delivery",
+        logisticsOfferStatus: "accepted",
+        logisticsName: outsourceCourierName.trim(),
+        logisticsPhone: outsourceRiderPhone?.trim() || undefined,
+        status: "In Transit",
         deliveryFee: feeNum,
         deliveryPrice: feeNum,
         logisticsDeliveryPrice: feeNum,
@@ -2247,12 +2312,12 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
   };
 
   const formatRemainingTime = (order: any) => {
-    if ((order.status === "Out To Pickup Station" || order.status === "Out For Delivery" || order.status === "accepted") && order.acceptedAt) {
+    if ((order.status === "Out To Pickup Station" || order.status === "Out For Delivery") && order.acceptedAt) {
       const acceptedTime = new Date(order.acceptedAt).getTime();
       const duration = (order.countdownDuration || 120) * 1000;
       const remainingMs = (acceptedTime + duration) - currentTime;
 
-      if (remainingMs <= 0) return "Ready to Confirm";
+      if (remainingMs <= 0) return null;
       
       const totalSeconds = Math.floor(remainingMs / 1000);
       const minutes = Math.floor(totalSeconds / 60);
@@ -2281,10 +2346,46 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <p className="text-sm font-bold text-slate-900 dark:text-white break-words">{order.productName}</p>
-              {order.status === "accepted" && (
+              {effectiveStatus === "accepted" && (
+                <span className="flex items-center gap-1 text-[10px] bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 border border-blue-200/60 dark:border-blue-800/50 px-2 py-0.5 rounded-full font-bold">
+                  <CheckCircle className="w-3 h-3" />
+                  Accepted • Packaging
+                </span>
+              )}
+              {effectiveStatus === "logistics_booked" && (
+                <span className="flex items-center gap-1 text-[10px] bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/50 px-2.5 py-0.5 rounded-full font-bold">
+                  <Truck className="w-3 h-3 text-blue-600" />
+                  Courier Assigned: {order.logisticsName || "Logistics"}
+                </span>
+              )}
+              {effectiveStatus === "transit" && (
+                <span className="flex items-center gap-1 text-[10px] bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/50 px-2.5 py-0.5 rounded-full font-bold">
+                  <Truck className="w-3 h-3 text-indigo-600 animate-pulse" />
+                  In Transit with {order.logisticsName || "Courier"}
+                </span>
+              )}
+              {effectiveStatus === "out_for_delivery" && (
+                <span className="flex items-center gap-1 text-[10px] bg-orange-50 dark:bg-orange-950/60 text-orange-700 dark:text-orange-300 border border-orange-200/60 dark:border-orange-800/50 px-2.5 py-0.5 rounded-full font-bold">
+                  <MapPin className="w-3 h-3 text-orange-600 animate-bounce" />
+                  Out For Delivery (Courier en route)
+                </span>
+              )}
+              {effectiveStatus === "delivered" && (
+                <span className="flex items-center gap-1 text-[10px] bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-300/80 dark:border-emerald-800/60 px-2.5 py-0.5 rounded-full font-bold">
+                  <CheckCircle className="w-3 h-3 text-emerald-600 animate-pulse" />
+                  Product Handed Over • Courier Verified
+                </span>
+              )}
+              {effectiveStatus === "completed" && (
+                <span className="flex items-center gap-1 text-[10px] bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/50 px-2.5 py-0.5 rounded-full font-bold">
+                  <CheckCircle className="w-3 h-3 text-emerald-600" />
+                  Order Completed • Escrow Released
+                </span>
+              )}
+              {effectiveStatus === "ready_for_pickup" && order.deliveryType === "pickup" && (
                 <span className="flex items-center gap-1 text-[10px] bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/50 px-2 py-0.5 rounded-full font-bold">
-                  <Clock className="w-3 h-3" />
-                  {formatRemainingTime(order)}
+                  <CheckCircle className="w-3 h-3" />
+                  Ready For Pickup
                 </span>
               )}
             </div>
@@ -2521,73 +2622,194 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                       </button>
                     </div>
                   </div>
-                ) : order.logisticsOfferStatus === "accepted" ? (
-                  <div className="space-y-2 text-[11px] text-slate-600 dark:text-slate-400">
-                    <div className="p-3 bg-emerald-50/70 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/60 rounded-xl text-emerald-900 dark:text-emerald-200 space-y-1">
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold flex items-center gap-1.5 text-emerald-700 dark:text-emerald-300">
-                          <CheckCircle className="w-3.5 h-3.5 text-emerald-600" /> Courier Accepted & Confirmed
-                        </span>
-                        <span className="text-[10px] font-black text-emerald-800 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-900/40 px-2 py-0.5 rounded-full">
-                          Ready for Handover
-                        </span>
+                ) : (order.logisticsOfferStatus === "accepted" || order.kwikRiderId || order.logisticsId || effectiveStatus === "transit" || effectiveStatus === "out_for_delivery" || effectiveStatus === "delivered" || effectiveStatus === "completed") ? (
+                  <div className="space-y-2.5 text-[11px] text-slate-600 dark:text-slate-400">
+                    <div className="p-3.5 bg-slate-50/80 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-3">
+                      {/* Courier Details Header */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/70 dark:border-slate-800/80 pb-2.5">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-xl bg-orange-100 dark:bg-orange-950/50 text-orange-600 flex items-center justify-center shrink-0">
+                            <Truck className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <p className="text-xs font-black text-slate-900 dark:text-white flex items-center gap-1.5">
+                              {order.logisticsName || (order.kwikRiderId?.startsWith("CAMPUS-") ? order.kwikRiderId.replace("CAMPUS-", "").replace(/-/g, " ") : "Courier Assigned")}
+                              {order.logisticsEstimatedDeliveryTimeline && (
+                                <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400">
+                                  ({order.logisticsEstimatedDeliveryTimeline})
+                                </span>
+                              )}
+                            </p>
+                            <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                              Live courier delivery monitor to buyer • Managed by courier
+                            </p>
+                          </div>
+                        </div>
+                        {order.logisticsPhone && (
+                          <a 
+                            href={`tel:${order.logisticsPhone}`} 
+                            className="text-[11px] font-bold text-orange-600 hover:text-orange-700 flex items-center gap-1 bg-orange-50 dark:bg-orange-950/40 px-2.5 py-1 rounded-lg border border-orange-200 dark:border-orange-900/40"
+                          >
+                            📞 Call Courier: {order.logisticsPhone}
+                          </a>
+                        )}
                       </div>
-                      <p className="text-xs font-black text-slate-900 dark:text-white">
-                        🚚 {order.logisticsName || order.kwikRiderId?.replace("CAMPUS-", "").replace(/-/g, " ")}
-                      </p>
-                      <p className="text-[10px] text-slate-600 dark:text-slate-400">
-                        ⏱️ Est. Timeline: <span className="font-bold text-slate-900 dark:text-white">{order.logisticsEstimatedDeliveryTimeline || "1-3 Hours on Campus"}</span>
-                        {order.logisticsPhone ? ` • 📞 ${order.logisticsPhone}` : ""}
-                      </p>
-                    </div>
-                    {order.deliveredWorkNotes && (
-                      <div className="p-2 bg-white/50 dark:bg-slate-900/50 rounded-xl border border-slate-100 dark:border-slate-800 text-[10px] text-slate-500 italic">
-                        {order.deliveredWorkNotes}
-                      </div>
-                    )}
-                  </div>
-                ) : order.kwikRiderId ? (
-                  <div className="space-y-1.5 text-[11px] text-slate-600 dark:text-slate-400">
-                    <p className="font-medium">
-                      <span className="font-bold text-slate-800 dark:text-slate-200">
-                        {order.kwikRiderId.startsWith("CAMPUS-") ? "Registered Campus Partner:" : "Outsourced Courier:"}
-                      </span>{" "}
-                      <span className="font-semibold text-slate-900 dark:text-white">
-                        {order.kwikRiderId.startsWith("CAMPUS-") 
-                          ? order.kwikRiderId.replace("CAMPUS-", "").replace(/-/g, " ") 
-                          : order.kwikRiderId.startsWith("OUTSOURCED-") 
-                            ? order.kwikRiderId.replace("OUTSOURCED-", "").replace(/-/g, " ") 
-                            : order.kwikRiderId
-                        }
-                      </span>
-                    </p>
-                    
-                    {order.deliveredWorkNotes && (
-                      <div className="p-2.5 bg-white/50 dark:bg-slate-900/50 rounded-xl border border-slate-100 dark:border-slate-800 text-[10px] text-slate-500 italic">
-                        {order.deliveredWorkNotes}
-                      </div>
-                    )}
 
-                    {order.kwikTrackingUrl === "local_logistics" ? (
-                      <p className="text-[10px] text-orange-600 font-bold mt-1">
-                        🚚 Handled via Local Campus Dispatcher. Keep track of progress!
-                      </p>
-                    ) : order.kwikTrackingUrl === "outsourced" ? (
-                      <p className="text-[10px] text-orange-600 font-bold mt-1">
-                        📦 Package outsourced to third-party courier. Please coordinate externally if needed!
-                      </p>
-                    ) : order.kwikTrackingUrl && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setTrackingRiderOrder(order);
-                          setTrackingProgress(Math.floor(Math.random() * 20) + 15);
-                        }}
-                        className="inline-flex items-center gap-1 text-xs text-orange-500 hover:text-orange-600 font-bold transition-all pt-1 cursor-pointer"
-                      >
-                        Track Shipment Live <ExternalLink className="w-3" />
-                      </button>
-                    )}
+                      {/* 4-Step Visual Progress Stepper */}
+                      <div className="space-y-1.5 pt-1">
+                        <div className="grid grid-cols-4 gap-1 text-center">
+                          {/* Step 1: Courier Assigned */}
+                          <div className="flex flex-col items-center gap-1">
+                            <div className={cn(
+                              "w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black transition-all",
+                              (effectiveStatus === "transit" || effectiveStatus === "out_for_delivery" || effectiveStatus === "delivered" || effectiveStatus === "completed" || order.courierHandedOver || order.productHandedOver)
+                                ? "bg-emerald-500 text-white shadow-xs"
+                                : "bg-orange-500 text-white animate-pulse shadow-sm"
+                            )}>
+                              {(effectiveStatus === "transit" || effectiveStatus === "out_for_delivery" || effectiveStatus === "delivered" || effectiveStatus === "completed" || order.courierHandedOver || order.productHandedOver) ? (
+                                <Check className="w-3.5 h-3.5" />
+                              ) : (
+                                "1"
+                              )}
+                            </div>
+                            <span className="text-[9px] font-bold text-slate-700 dark:text-slate-300 leading-tight">Courier Assigned</span>
+                          </div>
+
+                          {/* Step 2: In Transit */}
+                          <div className="flex flex-col items-center gap-1">
+                            <div className={cn(
+                              "w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black transition-all",
+                              (effectiveStatus === "out_for_delivery" || effectiveStatus === "delivered" || effectiveStatus === "completed" || order.courierHandedOver || order.productHandedOver)
+                                ? "bg-emerald-500 text-white shadow-xs"
+                                : effectiveStatus === "transit"
+                                  ? "bg-indigo-500 text-white animate-pulse shadow-sm"
+                                  : "bg-slate-200 dark:bg-slate-800 text-slate-400"
+                            )}>
+                              {(effectiveStatus === "out_for_delivery" || effectiveStatus === "delivered" || effectiveStatus === "completed" || order.courierHandedOver || order.productHandedOver) ? (
+                                <Check className="w-3.5 h-3.5" />
+                              ) : (
+                                "2"
+                              )}
+                            </div>
+                            <span className="text-[9px] font-bold text-slate-700 dark:text-slate-300 leading-tight">In Transit</span>
+                          </div>
+
+                          {/* Step 3: Out for Delivery */}
+                          <div className="flex flex-col items-center gap-1">
+                            <div className={cn(
+                              "w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black transition-all",
+                              (effectiveStatus === "delivered" || effectiveStatus === "completed" || order.courierHandedOver || order.productHandedOver)
+                                ? "bg-emerald-500 text-white shadow-xs"
+                                : effectiveStatus === "out_for_delivery"
+                                  ? "bg-orange-500 text-white animate-pulse shadow-sm"
+                                  : "bg-slate-200 dark:bg-slate-800 text-slate-400"
+                            )}>
+                              {(effectiveStatus === "delivered" || effectiveStatus === "completed" || order.courierHandedOver || order.productHandedOver) ? (
+                                <Check className="w-3.5 h-3.5" />
+                              ) : (
+                                "3"
+                              )}
+                            </div>
+                            <span className="text-[9px] font-bold text-slate-700 dark:text-slate-300 leading-tight">Out for Delivery</span>
+                          </div>
+
+                          {/* Step 4: Handed Over */}
+                          <div className="flex flex-col items-center gap-1">
+                            <div className={cn(
+                              "w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black transition-all",
+                              effectiveStatus === "completed"
+                                ? "bg-emerald-600 text-white shadow-xs"
+                                : (effectiveStatus === "delivered" || order.courierHandedOver || order.productHandedOver)
+                                  ? "bg-emerald-500 text-white animate-pulse shadow-sm"
+                                  : "bg-slate-200 dark:bg-slate-800 text-slate-400"
+                            )}>
+                              {(effectiveStatus === "completed" || effectiveStatus === "delivered" || order.courierHandedOver || order.productHandedOver) ? (
+                                <Check className="w-3.5 h-3.5" />
+                              ) : (
+                                "4"
+                              )}
+                            </div>
+                            <span className="text-[9px] font-bold text-slate-700 dark:text-slate-300 leading-tight">Handed Over</span>
+                          </div>
+                        </div>
+
+                        {/* Progress Bar Track */}
+                        <div className="w-full bg-slate-200 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden mt-1">
+                          <div 
+                            className="bg-emerald-500 h-full transition-all duration-500" 
+                            style={{
+                              width: (effectiveStatus === "completed" || effectiveStatus === "delivered" || order.courierHandedOver || order.productHandedOver)
+                                ? "100%"
+                                : effectiveStatus === "out_for_delivery"
+                                  ? "75%"
+                                  : effectiveStatus === "transit"
+                                    ? "50%"
+                                    : "25%"
+                            }} 
+                          />
+                        </div>
+                      </div>
+
+                      {/* Dynamic Real-time Status Card for Seller */}
+                      <div className={cn(
+                        "p-2.5 rounded-xl border text-[11px] leading-relaxed font-medium",
+                        (effectiveStatus === "completed")
+                          ? "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200"
+                          : (effectiveStatus === "delivered" || order.courierHandedOver || order.productHandedOver)
+                            ? "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-700 text-emerald-900 dark:text-emerald-200 shadow-xs"
+                            : effectiveStatus === "out_for_delivery"
+                              ? "bg-orange-50 dark:bg-orange-950/30 border-orange-200 dark:border-orange-800 text-orange-900 dark:text-orange-200"
+                              : effectiveStatus === "transit"
+                                ? "bg-indigo-50 dark:bg-indigo-950/30 border-indigo-200 dark:border-indigo-800 text-indigo-900 dark:text-indigo-200"
+                                : "bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800 text-blue-900 dark:text-blue-200"
+                      )}>
+                        {effectiveStatus === "completed" ? (
+                          <p className="flex items-center gap-1.5 font-bold">
+                            <CheckCircle className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                            Delivery Complete: Buyer confirmed delivery receipt and escrow payout has been disbursed to your balance.
+                          </p>
+                        ) : (effectiveStatus === "delivered" || order.courierHandedOver || order.productHandedOver) ? (
+                          <p className="flex items-center gap-1.5 font-bold">
+                            <CheckCircle className="w-3.5 h-3.5 text-emerald-600 shrink-0 animate-pulse" />
+                            Product Handed Over: Courier confirmed physical handover to the buyer. Status updated! Awaiting buyer receipt confirmation.
+                          </p>
+                        ) : effectiveStatus === "out_for_delivery" ? (
+                          <p className="flex items-center gap-1.5 font-bold">
+                            <MapPin className="w-3.5 h-3.5 text-orange-600 shrink-0 animate-bounce" />
+                            Out for Delivery: Courier has arrived at the buyer's doorstep. Courier will verify the delivery PIN upon physical handover.
+                          </p>
+                        ) : effectiveStatus === "transit" ? (
+                          <p className="flex items-center gap-1.5 font-bold">
+                            <Truck className="w-3.5 h-3.5 text-indigo-600 shrink-0 animate-pulse" />
+                            In Transit: Courier collected the package from you and is on the move across campus to the buyer.
+                          </p>
+                        ) : (
+                          <p className="flex items-center gap-1.5 font-bold">
+                            <Clock className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                            Courier Assigned: Booking accepted. Courier will arrive to collect the package from your location.
+                          </p>
+                        )}
+                      </div>
+
+                      {order.deliveredWorkNotes && (
+                        <div className="p-2 bg-white/60 dark:bg-slate-900/60 rounded-xl border border-slate-200/60 dark:border-slate-800 text-[10px] text-slate-500 italic">
+                          {order.deliveredWorkNotes}
+                        </div>
+                      )}
+
+                      {order.kwikTrackingUrl && order.kwikTrackingUrl !== "local_logistics" && order.kwikTrackingUrl !== "outsourced" && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTrackingRiderOrder(order);
+                            setTrackingProgress(Math.floor(Math.random() * 20) + 15);
+                          }}
+                          className="inline-flex items-center gap-1 text-xs text-orange-500 hover:text-orange-600 font-bold transition-all pt-1 cursor-pointer"
+                        >
+                          Track Shipment Live <ExternalLink className="w-3" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ) : (
                   <div className="flex flex-col gap-3 w-full">
@@ -2653,7 +2875,7 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                 <XCircle className="w-4 h-4" />
               </button>
             </div>
-          ) : (order.status === "accepted" || order.status === "declined_by_logistics") ? (
+          ) : (effectiveStatus === "accepted" || effectiveStatus === "logistics_booked" || order.status === "declined_by_logistics") ? (
             <div className="flex items-center gap-2">
               {order.type === "service" ? (
                 <>
@@ -2686,10 +2908,10 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                     type="button"
                     onClick={() => onUpdate(order.id, "Ready For Pickup")}
                     className="px-4 py-2 bg-emerald-600 text-white rounded-xl font-bold text-xs hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 dark:shadow-none flex items-center gap-2 cursor-pointer active:scale-95"
-                    title="You will hand over the product in person to the buyer or at the designated pickup station"
+                    title="Click when you have prepared the item and it is ready for in-person collection"
                   >
                     <CheckCircle className="w-3.5 h-3.5" />
-                    Self-Send / Ready for Pickup
+                    Mark as Ready for Pickup
                   </button>
                   <button 
                     type="button"
@@ -2714,14 +2936,12 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
 
                   if (isAcceptedByLogistics) {
                     return (
-                      <button 
-                        type="button"
-                        onClick={() => onUpdate(order.id, "start_dispatch")}
-                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs transition-all shadow-lg shadow-blue-100 dark:shadow-none flex items-center gap-2 cursor-pointer active:scale-95"
-                      >
-                        <Truck className="w-3.5 h-3.5" />
-                        Dispatch Order ({order.logisticsName || "Courier"})
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <span className="px-3.5 py-2 bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 rounded-xl font-bold text-xs border border-blue-200/80 dark:border-blue-800/60 flex items-center gap-2 shadow-xs select-none">
+                          <Truck className="w-3.5 h-3.5 text-blue-600 animate-pulse" />
+                          Courier Assigned ({order.logisticsName || "Courier"}) • Awaiting Courier Pickup
+                        </span>
+                      </div>
                     );
                   }
 
@@ -2791,51 +3011,35 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                 })()
               )}
             </div>
-          ) : order.status === "out_for_delivery" ? (
+          ) : effectiveStatus === "delivered" ? (
             <div className="flex items-center gap-2">
-              {(order.deliveryType === "pickup" || order.type === "service") ? (
-                order.type === "service" ? (
-                  <button 
-                    type="button"
-                    onClick={() => {
-                      setWorkNotes("");
-                      setWorkFileUrl("");
-                      setShowServiceDeliveryModal(true);
-                    }}
-                    className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-650 text-white rounded-xl font-bold text-xs hover:from-purple-700 hover:to-indigo-700 transition-all shadow-lg flex items-center gap-2 hover:scale-[1.02] active:scale-95 cursor-pointer"
-                  >
-                    <CheckCircle className="w-3.5 h-3.5 text-emerald-300 animate-pulse" />
-                    Deliver Work (Fiverr Mode)
-                  </button>
-                ) : (
-                  <button 
-                    type="button"
-                    onClick={() => onUpdate(order.id, "Ready For Pickup")}
-                    className="px-4 py-2 bg-emerald-600 text-white rounded-xl font-bold text-xs hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 dark:shadow-none flex items-center gap-2 cursor-pointer active:scale-95"
-                  >
-                    <CheckCircle className="w-3.5 h-3.5" />
-                    Mark as Ready for Pickup
-                  </button>
-                )
-              ) : (
-                <button 
-                  type="button"
-                  onClick={() => onUpdate(order.id, "start_dispatch")}
-                  className="px-4 py-2 bg-[#ff5c00] hover:bg-[#e05200] text-white rounded-xl font-black text-xs transition-all shadow-lg shadow-purple-100 dark:shadow-none flex items-center gap-2 animate-bounce cursor-pointer active:scale-95"
-                >
-                  <Truck className="w-3.5 h-3.5" />
-                  Out for Delivery
-                </button>
-              )}
-            </div>
-          ) : (order.status === "Out To Pickup Station" || order.status === "Out For Delivery") ? (
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5 animate-pulse bg-indigo-50 dark:bg-indigo-950/20 px-3 py-1.5 rounded-xl border border-indigo-100/30 dark:border-indigo-900/40">
-                <Clock className="w-3.5 h-3.5 animate-spin" />
-                In Transit ({formatRemainingTime(order) || "In Progress"})
+              <span className="text-xs font-black uppercase tracking-wider text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 px-3.5 py-1.5 rounded-xl border border-emerald-300 dark:border-emerald-700 flex items-center gap-2 shadow-xs">
+                <CheckCircle className="w-4 h-4 text-emerald-600 animate-pulse" />
+                Product Handed Over • Awaiting Buyer Confirmation
               </span>
             </div>
-          ) : order.status === "Ready For Pickup" ? (
+          ) : effectiveStatus === "completed" ? (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-black uppercase tracking-wider text-emerald-600 bg-emerald-50 dark:bg-emerald-900/20 px-3.5 py-1.5 rounded-xl border border-emerald-200 dark:border-emerald-800 flex items-center gap-1.5 shadow-xs">
+                <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                Order Completed • Escrow Released
+              </span>
+            </div>
+          ) : effectiveStatus === "out_for_delivery" ? (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-orange-600 dark:text-orange-400 flex items-center gap-1.5 bg-orange-50 dark:bg-orange-950/20 px-3 py-1.5 rounded-xl border border-orange-200 dark:border-orange-800 shadow-xs">
+                <MapPin className="w-3.5 h-3.5 animate-bounce" />
+                Out for Delivery • Courier en route to Buyer
+              </span>
+            </div>
+          ) : effectiveStatus === "transit" ? (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5 bg-indigo-50 dark:bg-indigo-950/20 px-3 py-1.5 rounded-xl border border-indigo-100/30 dark:border-indigo-900/40 shadow-xs">
+                <Truck className="w-3.5 h-3.5 animate-pulse" />
+                In Transit ({order.logisticsName || "Courier Dispatch"})
+              </span>
+            </div>
+          ) : (order.deliveryType === "pickup" && (effectiveStatus === "ready_for_pickup" || order.status === "Ready For Pickup")) ? (
             <div className="flex items-center gap-2">
               <span className="text-xs font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 px-3 py-1.5 rounded-xl border border-emerald-100/30 dark:border-[#10b981]/25 flex items-center gap-1.5">
                 <CheckCircle className="w-3.5 h-3.5" />

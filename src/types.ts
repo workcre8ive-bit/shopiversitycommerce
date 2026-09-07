@@ -167,7 +167,7 @@ export interface Order {
   paymentMethod: "online" | "pod";
   paymentStatus?: "pending" | "paid" | "failed";
   paymentReference?: string;
-  status: "pending" | "accepted" | "out_for_delivery" | "delivered" | "cancelled" | "acquired" | "completed" | "Pending Seller Acceptance" | "Out To Pickup Station" | "Ready For Pickup" | "Out For Delivery" | "Order Picked Up" | "Order Delivered" | "Ready For Delivery" | "awaiting_payment" | "payment_required" | "Payment Required" | "transit" | "ready_for_pickup" | "In Transit" | "picked_up";
+  status: "pending" | "accepted" | "out_for_delivery" | "delivered" | "cancelled" | "acquired" | "completed" | "Pending Seller Acceptance" | "Out To Pickup Station" | "Ready For Pickup" | "Out For Delivery" | "Order Picked Up" | "Order Delivered" | "Ready For Delivery" | "awaiting_payment" | "payment_required" | "Payment Required" | "transit" | "ready_for_pickup" | "In Transit" | "picked_up" | "logistics_pending" | "logistics_booked";
   type?: "good" | "service";
   createdAt: string;
   acceptedAt?: string;
