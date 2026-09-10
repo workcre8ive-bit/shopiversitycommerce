@@ -343,46 +343,81 @@ export const AvailableJobsView: React.FC<AvailableJobsViewProps> = ({
                 {/* Acceptance / Actions */}
                 <div className="pt-3 border-t border-slate-100 dark:border-zinc-850 space-y-2">
                   {jobAcceptingId === job.id ? (
-                    <div className="space-y-2 bg-orange-50/80 dark:bg-orange-950/20 p-3 rounded-xl border border-orange-200 dark:border-orange-900">
+                    <div className="space-y-3 bg-gradient-to-br from-orange-50/90 to-amber-50/70 dark:from-orange-950/30 dark:to-zinc-900/60 p-3.5 sm:p-4 rounded-2xl border border-orange-200/80 dark:border-orange-900/50 shadow-xs">
                       <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-bold text-orange-600 uppercase tracking-wider">Estimated Turnaround:</span>
+                        <div className="flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5 text-orange-600 shrink-0" />
+                          <span className="text-xs font-black text-slate-800 dark:text-zinc-100 uppercase tracking-wider">
+                            Decide Order Turnaround
+                          </span>
+                        </div>
                         <button
                           type="button"
                           onClick={() => setJobAcceptingId(null)}
-                          className="text-[10px] font-bold text-slate-400 hover:text-slate-600 cursor-pointer bg-transparent border-none"
+                          className="text-[11px] font-bold text-slate-400 hover:text-slate-600 dark:hover:text-zinc-300 cursor-pointer bg-transparent border-none"
                         >
                           Cancel
                         </button>
                       </div>
-                      <div className="grid grid-cols-3 gap-1.5">
-                        {["30-45 Mins", "1-2 Hours", "Today by 5pm"].map((preset, pIdx) => (
-                          <button
-                            key={`eta-preset-${preset}-${pIdx}`}
-                            type="button"
-                            onClick={() => setJobEtaInput(preset)}
-                            className={cn(
-                              "py-1 px-1.5 rounded-lg text-[10px] font-bold transition-all border cursor-pointer",
-                              jobEtaInput === preset
-                                ? "bg-orange-600 text-white border-orange-600"
-                                : "bg-white dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 border-slate-200 dark:border-zinc-700"
-                            )}
-                          >
-                            {preset}
-                          </button>
-                        ))}
+
+                      <p className="text-[11px] text-slate-600 dark:text-zinc-400 leading-snug">
+                        Turnaround time depends on the product type, pickup point, and destination. Select or enter the realistic turnaround for this order before confirming:
+                      </p>
+
+                      {/* Route & Product quick context */}
+                      <div className="p-2.5 rounded-xl bg-white/90 dark:bg-zinc-850/80 border border-orange-100/70 dark:border-zinc-800 text-[10px] space-y-1">
+                        <div className="flex items-center gap-1.5 font-bold text-slate-800 dark:text-zinc-200 truncate">
+                          <Package className="w-3 h-3 text-orange-500 shrink-0" />
+                          <span>{job.productName} (x{job.quantity || 1})</span>
+                        </div>
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-slate-500 dark:text-zinc-400">
+                          <span className="truncate">📍 Pickup: <strong className="text-slate-700 dark:text-zinc-300">{job.sellerAddress}</strong></span>
+                          <span className="truncate">🏁 Dropoff: <strong className="text-slate-700 dark:text-zinc-300">{job.buyerAddress}</strong></span>
+                        </div>
                       </div>
+
+                      {/* Quick turnaround presets */}
+                      <div className="space-y-1.5">
+                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Select Turnaround:</span>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                          {[
+                            "30-45 Mins (Fast Campus)",
+                            "1-2 Hours (Standard)",
+                            "2-3 Hours (Distant/Hostel)",
+                            "Today by 5:00 PM",
+                            "Today by 8:00 PM",
+                            "Next Day Morning"
+                          ].map((preset, pIdx) => (
+                            <button
+                              key={`eta-preset-${preset}-${pIdx}`}
+                              type="button"
+                              onClick={() => setJobEtaInput(preset)}
+                              className={cn(
+                                "py-1 px-1.5 rounded-lg text-[10px] font-bold transition-all border cursor-pointer truncate text-left",
+                                jobEtaInput === preset
+                                  ? "bg-orange-600 text-white border-orange-600 shadow-xs"
+                                  : "bg-white dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 border-slate-200 dark:border-zinc-700 hover:border-orange-300"
+                              )}
+                            >
+                              {preset}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
                       <input
                         type="text"
-                        placeholder="Or enter custom ETA (e.g. 1 hour)"
+                        placeholder="Or custom turnaround (e.g. 45 mins after merchant handover)"
                         value={jobEtaInput}
                         onChange={(e) => setJobEtaInput(e.target.value)}
                         className="w-full h-8 px-2.5 text-xs bg-white dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded-lg outline-none focus:border-orange-500"
                       />
+
                       <button
                         type="button"
-                        disabled={loading}
-                        onClick={() => handleAcceptJob(job.id, jobEtaInput || companyProfile.estimatedTurnaround)}
-                        className="w-full h-10 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs border-none"
+                        disabled={loading || !jobEtaInput.trim()}
+                        onClick={() => handleAcceptJob(job.id, jobEtaInput.trim() || "1-2 Hours")}
+                        className="w-full h-10 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs border-none disabled:opacity-50"
                       >
                         <Check className="w-4 h-4" /> Confirm & Accept Delivery
                       </button>
@@ -393,7 +428,7 @@ export const AvailableJobsView: React.FC<AvailableJobsViewProps> = ({
                         type="button"
                         onClick={() => {
                           setJobAcceptingId(job.id);
-                          setJobEtaInput(companyProfile.estimatedTurnaround || "1-3 Hours on Campus");
+                          setJobEtaInput("1-2 Hours (Standard)");
                         }}
                         className="flex-1 h-11 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs border-none"
                       >
@@ -415,7 +450,7 @@ export const AvailableJobsView: React.FC<AvailableJobsViewProps> = ({
                       type="button"
                       onClick={() => {
                         setJobAcceptingId(job.id);
-                        setJobEtaInput(companyProfile.estimatedTurnaround || "1-3 Hours on Campus");
+                        setJobEtaInput("1-2 Hours (Standard)");
                       }}
                       className="w-full h-11 bg-slate-900 dark:bg-zinc-800 hover:bg-orange-600 hover:dark:bg-orange-600 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs border-none"
                     >

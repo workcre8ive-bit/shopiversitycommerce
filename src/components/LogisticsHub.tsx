@@ -228,7 +228,6 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
   const [editWhatsappNumber, setEditWhatsappNumber] = React.useState("");
   const [editOfficeAddress, setEditOfficeAddress] = React.useState("");
   const [editBaseDeliveryPrice, setEditBaseDeliveryPrice] = React.useState(500);
-  const [editEstimatedTurnaround, setEditEstimatedTurnaround] = React.useState("1-3 Hours on Campus");
   const [editOperatingHours, setEditOperatingHours] = React.useState("8:00 AM - 8:00 PM");
   const [editDescription, setEditDescription] = React.useState("");
   const [editSelectedVehicles, setEditSelectedVehicles] = React.useState<string[]>([]);
@@ -307,7 +306,6 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
       setEditWhatsappNumber(companyProfile.whatsappNumber || "");
       setEditOfficeAddress(companyProfile.officeAddress || "");
       setEditBaseDeliveryPrice(companyProfile.baseDeliveryPrice || 500);
-      setEditEstimatedTurnaround(companyProfile.estimatedTurnaround || "1-3 Hours on Campus");
       setEditOperatingHours(companyProfile.operatingHours || "8:00 AM - 8:00 PM");
       setEditDescription(companyProfile.description || "");
       setEditSelectedVehicles(companyProfile.vehicleTypes && companyProfile.vehicleTypes.length > 0 ? companyProfile.vehicleTypes : ["Bike / Motorcycle"]);
@@ -1026,7 +1024,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
     setLoading(true);
     setError("");
     try {
-      const timeline = customEta?.trim() || companyProfile.estimatedTurnaround || "1-3 Hours on Campus";
+      const timeline = customEta?.trim() || "1-2 Hours (Confirmed upon Acceptance)";
       const courierPrice = companyProfile.baseDeliveryPrice || 500;
 
       // Find job from list
@@ -1360,7 +1358,6 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
         whatsappNumber: editWhatsappNumber.trim(),
         officeAddress: editOfficeAddress.trim(),
         baseDeliveryPrice: Number(editBaseDeliveryPrice) || 500,
-        estimatedTurnaround: editEstimatedTurnaround.trim() || "1-3 Hours on Campus",
         operatingHours: editOperatingHours.trim() || "8:00 AM - 8:00 PM",
         description: editDescription.trim(),
         vehicleTypes: editSelectedVehicles,
@@ -2258,8 +2255,11 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                         </div>
 
                         <div className="space-y-1">
-                          <span className="text-[10px] font-bold text-slate-400 uppercase">Estimated Turnaround Timeline</span>
-                          <p className="text-sm font-bold text-slate-700 dark:text-zinc-300">{companyProfile.estimatedTurnaround || "1-3 Hours on Campus"}</p>
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">Order Turnaround Timeline</span>
+                          <p className="text-xs font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5 mt-0.5">
+                            <Clock className="w-3.5 h-3.5 shrink-0" />
+                            <span>Decided per order upon acceptance (based on product & route)</span>
+                          </p>
                         </div>
 
                         <div className="space-y-1">
@@ -2383,15 +2383,14 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                           />
                         </div>
 
-                        <div className="space-y-1">
-                          <label className="text-xs font-bold text-slate-700 dark:text-zinc-300">Estimated Turnaround Timeline</label>
-                          <input
-                            type="text"
-                            value={editEstimatedTurnaround}
-                            onChange={(e) => setEditEstimatedTurnaround(e.target.value)}
-                            placeholder="e.g. 1-2 Hours on Campus"
-                            className="w-full h-11 px-3.5 bg-slate-50 dark:bg-zinc-800/80 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs outline-none focus:border-orange-500"
-                          />
+                        <div className="space-y-1 md:col-span-2 p-3.5 rounded-xl bg-orange-50/70 dark:bg-orange-950/20 border border-orange-200/60 dark:border-orange-900/40 text-xs">
+                          <span className="font-bold text-orange-700 dark:text-orange-300 flex items-center gap-1.5">
+                            <Clock className="w-3.5 h-3.5 shrink-0 text-orange-600" />
+                            Dynamic Order Turnaround Notice
+                          </span>
+                          <p className="text-[11px] text-slate-600 dark:text-zinc-400 mt-1 leading-relaxed">
+                            Turnaround timelines are not configured globally in settings because delivery duration depends on product size, fragility, seller pickup point, and buyer drop-off location. You will set and confirm the turnaround timeline for each order individually when accepting it from the merchant.
+                          </p>
                         </div>
 
                         <div className="space-y-1">

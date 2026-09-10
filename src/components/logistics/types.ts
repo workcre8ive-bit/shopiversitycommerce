@@ -40,6 +40,7 @@ export interface DeliveryJob {
   logisticsId?: string;
   logisticsName?: string;
   deliveryPrice: number;
+  estimatedDeliveryTimeline?: string;
   createdAt: string;
   updatedAt: string;
 }

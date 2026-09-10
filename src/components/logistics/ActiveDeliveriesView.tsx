@@ -334,9 +334,17 @@ export const ActiveDeliveriesView: React.FC<ActiveDeliveriesViewProps> = ({
                   >
                     <div className="flex items-start justify-between gap-2 border-b border-slate-100 dark:border-zinc-800 pb-2.5">
                       <div>
-                        <span className="text-[10px] font-bold text-slate-400 block">
-                          Ref: #{job.orderId.slice(-6).toUpperCase()}
-                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[10px] font-bold text-slate-400 block">
+                            Ref: #{job.orderId.slice(-6).toUpperCase()}
+                          </span>
+                          {job.estimatedDeliveryTimeline && (
+                            <span className="inline-flex items-center gap-1 text-[9px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 px-1.5 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800/60">
+                              <Clock className="w-2.5 h-2.5" />
+                              {job.estimatedDeliveryTimeline}
+                            </span>
+                          )}
+                        </div>
                         <h5 className="text-xs font-black text-slate-800 dark:text-zinc-100 line-clamp-1">
                           {job.productName} (x{job.quantity || 1})
                         </h5>
@@ -416,9 +424,17 @@ export const ActiveDeliveriesView: React.FC<ActiveDeliveriesViewProps> = ({
                   >
                     <div className="flex items-start justify-between gap-2 border-b border-slate-100 dark:border-zinc-800 pb-2.5">
                       <div>
-                        <span className="text-[10px] font-bold text-slate-400 block">
-                          Ref: #{job.orderId.slice(-6).toUpperCase()}
-                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[10px] font-bold text-slate-400 block">
+                            Ref: #{job.orderId.slice(-6).toUpperCase()}
+                          </span>
+                          {job.estimatedDeliveryTimeline && (
+                            <span className="inline-flex items-center gap-1 text-[9px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 px-1.5 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800/60">
+                              <Clock className="w-2.5 h-2.5" />
+                              {job.estimatedDeliveryTimeline}
+                            </span>
+                          )}
+                        </div>
                         <h5 className="text-xs font-black text-slate-800 dark:text-zinc-100 line-clamp-1">
                           {job.productName} (x{job.quantity || 1})
                         </h5>
@@ -483,9 +499,17 @@ export const ActiveDeliveriesView: React.FC<ActiveDeliveriesViewProps> = ({
                   >
                     <div className="flex items-start justify-between gap-2 border-b border-slate-100 dark:border-zinc-800 pb-2.5">
                       <div>
-                        <span className="text-[10px] font-bold text-slate-400 block">
-                          Ref: #{job.orderId.slice(-6).toUpperCase()}
-                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[10px] font-bold text-slate-400 block">
+                            Ref: #{job.orderId.slice(-6).toUpperCase()}
+                          </span>
+                          {job.estimatedDeliveryTimeline && (
+                            <span className="inline-flex items-center gap-1 text-[9px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 px-1.5 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800/60">
+                              <Clock className="w-2.5 h-2.5" />
+                              {job.estimatedDeliveryTimeline}
+                            </span>
+                          )}
+                        </div>
                         <h5 className="text-xs font-black text-slate-800 dark:text-zinc-100 line-clamp-1">
                           {job.productName} (x{job.quantity || 1})
                         </h5>
@@ -550,6 +574,12 @@ export const ActiveDeliveriesView: React.FC<ActiveDeliveriesViewProps> = ({
                     <span className="text-[10px] font-bold text-slate-400">
                       Updated {formatJobTime(job.updatedAt || job.createdAt)}
                     </span>
+                    {job.estimatedDeliveryTimeline && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
+                        <Clock className="w-2.5 h-2.5" />
+                        Confirmed ETA: {job.estimatedDeliveryTimeline}
+                      </span>
+                    )}
                   </div>
                   <h4 className="text-base font-black text-slate-800 dark:text-zinc-100">
                     {job.productName} (x{job.quantity || 1})

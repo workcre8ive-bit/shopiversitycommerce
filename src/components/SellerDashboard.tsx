@@ -2040,7 +2040,7 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
     setIsHiring(true);
     try {
       const logisticsPrice = Number(partner.baseDeliveryPrice) || 500;
-      const logisticsTimeline = partner.estimatedTurnaround || "1-3 Hours on Campus";
+      const logisticsTimeline = "To be confirmed by courier upon acceptance";
 
       const deliveryPayload = {
         orderId: order.id,
@@ -2634,11 +2634,15 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                           <div>
                             <p className="text-xs font-black text-slate-900 dark:text-white flex items-center gap-1.5">
                               {order.logisticsName || (order.kwikRiderId?.startsWith("CAMPUS-") ? order.kwikRiderId.replace("CAMPUS-", "").replace(/-/g, " ") : "Courier Assigned")}
-                              {order.logisticsEstimatedDeliveryTimeline && (
-                                <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400">
+                              {order.logisticsOfferStatus === "pending" ? (
+                                <span className="text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                                  (Awaiting courier confirmation & timeline)
+                                </span>
+                              ) : order.logisticsEstimatedDeliveryTimeline ? (
+                                <span className="text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
                                   ({order.logisticsEstimatedDeliveryTimeline})
                                 </span>
-                              )}
+                              ) : null}
                             </p>
                             <p className="text-[10px] text-slate-500 dark:text-slate-400">
                               Live courier delivery monitor to buyer • Managed by courier
@@ -3200,7 +3204,7 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                               </div>
                               <div className="flex flex-wrap items-center gap-2">
                                 <span className="text-[11px] font-bold text-slate-700 dark:text-zinc-300 flex items-center gap-1">
-                                  ⏱️ <span className="text-slate-500 font-medium">Timeline:</span> {partner.estimatedTurnaround || "1-3 Hours on Campus"}
+                                  ⏱️ <span className="text-slate-500 font-medium">Turnaround:</span> Decided upon order acceptance (based on product & route)
                                 </span>
                               </div>
                               <div className="flex flex-wrap gap-1">
