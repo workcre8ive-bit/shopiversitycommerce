@@ -1066,8 +1066,11 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
         const newTotalPrice = itemSubtotal + finalDeliveryPrice;
 
         await updateDoc(orderRef, {
-          status: "accepted",
+          status: "In Transit",
+          deliveryStatus: "transit",
+          logisticsStatus: "transit",
           logisticsOfferStatus: "accepted",
+          logisticsAcceptedAt: new Date().toISOString(),
           logisticsId: companyProfile.id,
           logisticsName: companyProfile.companyName,
           logisticsPhone: companyProfile.phoneNumber,
@@ -1088,7 +1091,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
           await addDoc(collection(db, "notifications"), {
             userId: orderData.sellerId,
             title: "Logistics Partner Confirmed 🚚",
-            message: `Logistics company ${companyProfile.companyName} accepted your dispatch for order ${orderData.productName || "product"}. Estimated timeline: ${timeline}.`,
+            message: `Logistics company ${companyProfile.companyName} accepted your dispatch for order ${orderData.productName || "product"}. Order is now on transit. Estimated timeline: ${timeline}.`,
             type: "order",
             isRead: false,
             createdAt: new Date().toISOString()
@@ -1099,8 +1102,8 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
         if (orderData.buyerId) {
           await addDoc(collection(db, "notifications"), {
             userId: orderData.buyerId,
-            title: "Courier Assigned to Your Order 🚚",
-            message: `Campus Courier ${companyProfile.companyName} (${companyProfile.phoneNumber}) is handling delivery of ${orderData.productName || "your order"}. Estimated timeline: ${timeline}.`,
+            title: "Your Order is On Transit 🚚",
+            message: `Campus Courier ${companyProfile.companyName} (${companyProfile.phoneNumber}) has accepted your delivery order and is now on transit! Estimated timeline: ${timeline}.`,
             type: "order",
             isRead: false,
             createdAt: new Date().toISOString()

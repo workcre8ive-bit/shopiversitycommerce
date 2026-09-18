@@ -71,11 +71,21 @@ const BACKGROUND_IMAGES = [
 
 export default function AuthPage({ 
   initialNeedsProfile = false,
-  initialMode
+  initialMode,
+  onGoToMarket
 }: { 
   initialNeedsProfile?: boolean;
   initialMode?: "login" | "signup";
+  onGoToMarket?: () => void;
 }) {
+  const handleGoToMarket = () => {
+    if (onGoToMarket) {
+      onGoToMarket();
+    } else {
+      window.location.href = "/";
+    }
+  };
+
   const [isLogin, setIsLogin] = React.useState(
     initialNeedsProfile ? false : (initialMode ? initialMode === "login" : true)
   );
@@ -1129,9 +1139,9 @@ export default function AuthPage({
   }
 
   return (
-    <div className="relative min-h-screen flex flex-col items-center justify-center p-4 sm:p-6 font-sans select-none overflow-x-hidden">
-      {/* High-Quality Rotating Campus Activity Backgrounds (Clean, clear, seamless 3s fade) */}
-      <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
+    <div className="relative min-h-full min-h-[calc(100vh-65px)] w-full flex-1 flex flex-col items-center justify-center p-4 sm:p-6 sm:py-10 font-sans select-none overflow-x-hidden">
+      {/* High-Quality Rotating Campus Activity Backgrounds - Covers the entire body across the page */}
+      <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
         {BACKGROUND_IMAGES.map((img, idx) => {
           const isActive = idx === currentBgIndex;
           return (
@@ -1149,42 +1159,42 @@ export default function AuthPage({
               <img
                 src={img}
                 alt="Campus Marketplace"
-                className="w-full h-full object-cover object-center filter brightness-[0.95] dark:brightness-[0.70] contrast-[1.04] saturate-[1.1]"
+                className="w-full h-full object-cover object-center filter brightness-[0.92] dark:brightness-[0.65] contrast-[1.05] saturate-[1.1]"
                 referrerPolicy="no-referrer"
               />
             </div>
           );
         })}
         {/* Subtle, balanced overlay keeping photographic background crisp and visible */}
-        <div className="absolute inset-0 bg-black/25 dark:bg-black/45" />
-      </div>
-
-      {/* Top Navigation */}
-      <div className="fixed top-5 left-5 z-[100] flex items-center pointer-events-auto">
-        <button 
-          onClick={() => window.location.href = "/"}
-          className="flex items-center gap-2 px-4 py-2 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border border-white/60 dark:border-zinc-700/80 rounded-2xl shadow-lg hover:shadow-xl hover:bg-white dark:hover:bg-zinc-900 text-slate-800 dark:text-zinc-100 font-bold text-xs cursor-pointer transition-all duration-200 active:scale-95 group"
-          id="auth-home-btn"
-        >
-          <Home className="w-4 h-4 text-[#ff6b00] group-hover:scale-110 transition-transform" />
-          <span>Home</span>
-        </button>
+        <div className="absolute inset-0 bg-black/30 dark:bg-black/55 backdrop-blur-[1px]" />
       </div>
 
       <motion.div 
         initial={{ opacity: 0, y: 15, scale: 0.98 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ duration: 0.4, ease: "easeOut" }}
-        className="w-full max-w-[420px] relative z-10 my-6"
+        className="w-full max-w-[425px] relative z-10 my-4"
       >
-        {/* Header Title */}
-        <div className="flex flex-col items-center mb-5 shrink-0 justify-center space-y-1 text-center">
-          <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-white drop-shadow-md">
-            {isLogin ? "Welcome Back" : "Join Shopiversity"}
-          </h2>
-          <p className="text-xs font-semibold text-white/90 drop-shadow-sm">
-            The Campus Marketplace for Nigerian Universities
-          </p>
+        {/* Brand Logo & Header Title */}
+        <div className="flex flex-col items-center mb-5 shrink-0 justify-center space-y-3 text-center">
+          <button
+            type="button"
+            onClick={handleGoToMarket}
+            id="auth-card-logo-btn"
+            className="bg-transparent border-none p-0 hover:scale-105 active:scale-95 transition-all cursor-pointer group flex items-center justify-center drop-shadow-md"
+            title="Take me to the Marketplace"
+          >
+            <Logo showText={true} />
+          </button>
+
+          <div>
+            <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-white drop-shadow-md">
+              {isLogin ? "Welcome Back" : "Join Shopiversity"}
+            </h2>
+            <p className="text-xs font-semibold text-white/90 drop-shadow-sm mt-0.5">
+              The Campus Marketplace for Nigerian Universities
+            </p>
+          </div>
         </div>
 
         {/* Auth Card with Glassmorphic Elevation */}

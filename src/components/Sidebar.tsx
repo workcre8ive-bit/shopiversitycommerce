@@ -159,7 +159,11 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
             <Logo 
               showText={true} 
               onClick={() => {
-                setActiveTab(activeRole === "seller" ? "dashboard" : "market");
+                if (!user || activeTab === "auth" || activeTab === "signup") {
+                  setActiveTab("market");
+                } else {
+                  setActiveTab(activeRole === "seller" ? "dashboard" : "market");
+                }
                 onClose();
               }}
               className="text-white"

@@ -1013,9 +1013,12 @@ export default function App() {
     }
     signOut(auth);
     setCart([]);
-    if (activeTab === "admin") {
-      setActiveTab("market");
-    }
+    setActiveTab("market");
+    setActiveRole("buyer");
+    setViewingProduct(null);
+    setViewingSellerId(null);
+    setFilterCategory("All");
+    setSearchQuery("");
   };
 
   const [isCancellingHibernation, setIsCancellingHibernation] = React.useState(false);
@@ -1266,7 +1269,10 @@ export default function App() {
             )}
             <Logo 
               onClick={() => {
-                if (activeRole === "seller") {
+                if (activeTab === "auth" || activeTab === "signup" || !currentUser) {
+                  setActiveRole("buyer");
+                  setActiveTab("market");
+                } else if (activeRole === "seller") {
                   setActiveTab("dashboard");
                 } else {
                   setActiveTab("market");
@@ -1276,11 +1282,11 @@ export default function App() {
                 setFilterCategory("All");
                 setSearchQuery("");
               }} 
-              className="ml-0.5 sm:ml-1 shrink-0" 
+              className="ml-0.5 sm:ml-1 shrink-0 cursor-pointer" 
             />
           </div>
 
-          {/* Center: Removed delivery select campus context */}
+          {/* Center: Dynamic Title for sub-tabs */}
 
         {/* Dynamic Title for sub-tabs */}
         {activeTab === "settings" && (
@@ -1305,42 +1311,71 @@ export default function App() {
           <span className="hidden sm:inline-block text-xs font-bold text-slate-700 dark:text-slate-300 font-sans">Inbox Chats</span>
         )}
 
-        {/* Right actions: Theme toggle and Cart / Sign Up */}
-        <div className="flex items-center gap-2 sm:gap-3 md:gap-4 shrink-0">
+        {/* Right actions: Theme toggle, Cart / Sign Up, and Sign Out */}
+        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
           {(!currentUser || !auth.currentUser) ? (
-            <button 
-              id="header-signup-btn"
-              onClick={() => {
-                setAuthMode("signup");
-                setActiveTab("signup");
-              }}
-              className="flex items-center gap-1.5 px-3 py-1.5 sm:px-3.5 sm:py-1.5 bg-[#ff6b00] hover:bg-[#ea6200] active:scale-95 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer border-none"
-              title="Sign Up / Create Account"
-            >
-              <UserPlus className="w-4 h-4 shrink-0" />
-              <span>Sign Up</span>
-            </button>
-          ) : (
-            /* Cart with count (only when user has logged in / signed up) */
-            (activeRole === "buyer" || cart.length > 0) && (
+            <div className="flex items-center gap-1.5">
               <button 
-                id="header-cart-btn"
-                onClick={() => setActiveTab("cart")}
-                className={cn(
-                  "relative p-1.5 hover:bg-orange-50 dark:hover:bg-zinc-800/80 rounded-xl cursor-pointer transition-colors border-none",
-                  activeTab === "cart" ? "bg-orange-100/70 dark:bg-orange-950/40 text-[#ff6b00]" : "text-[#ff6b00]"
-                )}
-                aria-label="View shopping cart"
-                title="Shopping Cart"
+                id="header-signin-btn"
+                onClick={() => {
+                  setAuthMode("login");
+                  setActiveTab("auth");
+                }}
+                className="px-2.5 py-1.5 hover:bg-slate-100 dark:hover:bg-zinc-800 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 transition-all cursor-pointer border-none"
+                title="Log In / Sign In"
               >
-                <ShoppingCart className="w-5 h-5" />
-                {cart.length > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 px-1 bg-[#ff6b00] text-[8px] font-black text-white rounded-full min-w-[14px] h-[14px] flex items-center justify-center border border-white dark:border-zinc-900 leading-none">
-                    {cart.reduce((acc, item) => acc + item.quantity, 0)}
-                  </span>
-                )}
+                <span>Sign In</span>
               </button>
-            )
+              <button 
+                id="header-signup-btn"
+                onClick={() => {
+                  setAuthMode("signup");
+                  setActiveTab("signup");
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 sm:px-3.5 sm:py-1.5 bg-[#ff6b00] hover:bg-[#ea6200] active:scale-95 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer border-none"
+                title="Sign Up / Create Account"
+              >
+                <UserPlus className="w-4 h-4 shrink-0" />
+                <span>Sign Up</span>
+              </button>
+            </div>
+          ) : (
+            <>
+              {/* Cart with count (only when user has logged in / signed up) */}
+              {(activeRole === "buyer" || cart.length > 0) && (
+                <button 
+                  id="header-cart-btn"
+                  onClick={() => setActiveTab("cart")}
+                  className={cn(
+                    "relative p-1.5 hover:bg-orange-50 dark:hover:bg-zinc-800/80 rounded-xl cursor-pointer transition-colors border-none",
+                    activeTab === "cart" ? "bg-orange-100/70 dark:bg-orange-950/40 text-[#ff6b00]" : "text-[#ff6b00]"
+                  )}
+                  aria-label="View shopping cart"
+                  title="Shopping Cart"
+                >
+                  <ShoppingCart className="w-5 h-5" />
+                  {cart.length > 0 && (
+                    <span className="absolute -top-0.5 -right-0.5 px-1 bg-[#ff6b00] text-[8px] font-black text-white rounded-full min-w-[14px] h-[14px] flex items-center justify-center border border-white dark:border-zinc-900 leading-none">
+                      {cart.reduce((acc, item) => acc + item.quantity, 0)}
+                    </span>
+                  )}
+                </button>
+              )}
+
+              {/* Sign Out Icon in Nav Bar (visible when signed in) */}
+              <button 
+                id="header-signout-btn"
+                onClick={handleLogout}
+                className="p-1.5 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-xl text-slate-600 dark:text-zinc-300 hover:text-red-600 dark:hover:text-red-400 cursor-pointer transition-all active:scale-95 border-none flex items-center gap-1.5 group"
+                title="Sign Out"
+                aria-label="Sign Out"
+              >
+                <LogOut className="w-5 h-5 text-slate-500 group-hover:text-red-600 dark:text-zinc-400 dark:group-hover:text-red-400 transition-colors" />
+                <span className="hidden md:inline-block text-xs font-bold text-slate-600 group-hover:text-red-600 dark:text-zinc-300 dark:group-hover:text-red-400 transition-colors">
+                  Sign Out
+                </span>
+              </button>
+            </>
           )}
 
           {/* Theme Mode toggle */}
@@ -1400,7 +1435,18 @@ export default function App() {
                 exit={{ opacity: 0, y: -10 }}
                 className="min-h-full flex flex-col justify-center"
               >
-                <AuthPage initialNeedsProfile={needsProfile} initialMode={authMode} />
+                <AuthPage 
+                  initialNeedsProfile={needsProfile} 
+                  initialMode={authMode} 
+                  onGoToMarket={() => {
+                    setActiveRole("buyer");
+                    setActiveTab("market");
+                    setViewingProduct(null);
+                    setViewingSellerId(null);
+                    setFilterCategory("All");
+                    setSearchQuery("");
+                  }}
+                />
               </motion.div>
             ) : activeTab === "admin" && isUserAdmin ? (
               <motion.div

@@ -875,7 +875,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
       return "out_for_delivery";
     }
 
-    // 4. In Transit stage (Rider collected box from seller, en route to buyer)
+    // 4. In Transit stage (Courier accepted dispatch / rider moving en route to buyer)
     if (
       s === "In Transit" ||
       s === "transit" ||
@@ -889,7 +889,12 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
       order.deliveryStatus === "picked_up" ||
       order.logisticsStatus === "transit" ||
       order.logisticsStatus === "picked_up" ||
-      (order.deliveryType === "delivery" && (s === "Order Picked Up" || s === "picked_up"))
+      (order.deliveryType === "delivery" && (
+        order.logisticsOfferStatus === "accepted" ||
+        Boolean(order.logisticsAcceptedAt) ||
+        s === "Order Picked Up" ||
+        s === "picked_up"
+      ))
     ) {
       return "transit";
     }
@@ -902,11 +907,10 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
       return "ready_for_pickup";
     }
 
-    // 3. Logistics booked / pending courier pickup
+    // 3. Logistics booked / pending courier acceptance
     if (
       order.deliveryType === "delivery" &&
       (
-        order.logisticsOfferStatus === "accepted" ||
         order.logisticsOfferStatus === "pending" ||
         order.status === "logistics_pending" ||
         order.status === "logistics_booked" ||
@@ -915,10 +919,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
         (order.kwikRiderId && order.kwikRiderId.length > 0)
       )
     ) {
-      if (order.logisticsOfferStatus === "pending" || order.status === "logistics_pending") {
-        return "logistics_pending";
-      }
-      return "logistics_booked";
+      return "logistics_pending";
     }
 
     // 2. Seller accepted & packaging
@@ -963,10 +964,12 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
         };
       case "transit":
         return {
-          title: isPickup ? "En Route to Station" : "In Transit",
+          title: isPickup ? "En Route to Station" : "On Transit",
           subtitle: isPickup 
             ? "Package is en route to your designated campus pickup station." 
-            : "Rider collected box from merchant and is en route to your campus location."
+            : order.logisticsName 
+              ? `${order.logisticsName} accepted dispatch and is on transit with your order.`
+              : "Logistics courier has accepted dispatch and is on transit with your order."
         };
       case "ready_for_pickup":
         return {
@@ -1449,9 +1452,10 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                           )
                         )}
                       </div>
-                      {order.logisticsName && order.logisticsOfferStatus === "accepted" && (
-                        <p className="text-[10px] text-purple-600 dark:text-purple-400 font-bold mt-1 text-center sm:text-left">
-                          🚚 {order.logisticsName} {order.logisticsPhone ? `(${order.logisticsPhone})` : ""}
+                      {order.logisticsName && (order.logisticsOfferStatus === "accepted" || effectiveStatus === "transit" || effectiveStatus === "out_for_delivery") && (
+                        <p className="text-[10px] text-purple-600 dark:text-purple-400 font-bold mt-1 text-center sm:text-left flex items-center justify-center sm:justify-start gap-1">
+                          <Truck className="w-3 h-3 text-purple-500 animate-pulse" />
+                          <span>{order.logisticsName} {order.logisticsPhone ? `(${order.logisticsPhone})` : ""} • On Transit</span>
                         </p>
                       )}
                     </div>
@@ -1678,7 +1682,13 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                               actor: "Seller ➔ Courier", 
                               icon: Truck 
                             },
-                            { key: "transit", label: "In Transit", desc: "Rider collected box from merchant", actor: "Courier", icon: Truck },
+                            { 
+                              key: "transit", 
+                              label: "On Transit", 
+                              desc: order.logisticsName ? `${order.logisticsName} accepted dispatch & is on transit` : "Courier accepted dispatch and is on transit", 
+                              actor: "Courier", 
+                              icon: Truck 
+                            },
                             { key: "out_for_delivery", label: "Out For Delivery", desc: "Rider arrived at campus doorstep", actor: "Courier", icon: MapPin },
                             { key: "delivered", label: "Order Delivered", desc: "Delivery PIN verified by courier", actor: "Courier ➔ Buyer", icon: Package },
                             ...(isPod ? [{ key: "payment_required", label: "Pay on Delivery Settlement", desc: "Paystack electronic escrow settlement", actor: "Buyer", icon: CreditCard }] : []),
@@ -1955,23 +1965,36 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                               <div className="flex items-center gap-2">
                                 <Truck className="w-4 h-4 text-purple-600 animate-pulse" />
                                 <span className="text-xs font-bold text-purple-900 dark:text-purple-200">
-                                  Package In Transit
+                                  Package On Transit
                                 </span>
                               </div>
                               <span className="text-[10px] font-bold px-2.5 py-0.5 bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 rounded-full">
-                                Heading to Campus Drop-off
+                                {order.logisticsEstimatedDeliveryTimeline || "En Route"}
                               </span>
                             </div>
                             <p className="text-[11px] text-purple-700 dark:text-purple-300 leading-relaxed font-medium">
-                              The dispatch rider has collected your package from the merchant and is heading to your delivery location.
+                              {order.logisticsName 
+                                ? `${order.logisticsName} has accepted the dispatch from the merchant and is on transit with your package.`
+                                : "Logistics courier has accepted the delivery dispatch and is on transit with your package."}
                             </p>
+                            {order.logisticsPhone && (
+                              <div className="pt-2 border-t border-purple-200/50 dark:border-purple-900/30 flex items-center justify-between text-xs">
+                                <span className="text-purple-900 dark:text-purple-200 font-semibold">Courier Contact:</span>
+                                <a
+                                  href={`tel:${order.logisticsPhone}`}
+                                  className="text-[11px] font-bold text-purple-700 dark:text-purple-300 hover:underline flex items-center gap-1"
+                                >
+                                  <Phone className="w-3 h-3" /> {order.logisticsPhone}
+                                </a>
+                              </div>
+                            )}
                           </div>
                           <button
                             disabled={true}
-                            className="w-full py-3.5 bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 rounded-2xl font-bold text-xs flex items-center justify-center gap-2 cursor-not-allowed border border-slate-200/50 dark:border-slate-800"
+                            className="w-full py-3.5 bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 rounded-2xl font-bold text-xs flex items-center justify-center gap-2 cursor-not-allowed border border-purple-200 dark:border-purple-800/60"
                           >
                             <Truck className="w-4 h-4 text-purple-500 animate-pulse" />
-                            Package In Transit to Your Destination...
+                            Package On Transit to Your Campus Destination...
                           </button>
                         </div>
                       ) : effectiveStatus === "out_for_delivery" ? (

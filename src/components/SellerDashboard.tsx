@@ -2171,16 +2171,25 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
       return "out_for_delivery";
     }
 
-    // 4. In Transit (Courier moving)
+    // 4. In Transit (Courier accepted dispatch / moving)
     if (
       s === "In Transit" ||
       s === "transit" ||
+      s === "in_transit" ||
       s === "picked_up" ||
       s === "Package Picked Up from Merchant" ||
       s === "Package Picked Up from Seller" ||
+      s === "Handed Over to Logistics" ||
+      s === "handed_over" ||
+      order.deliveryStatus === "transit" ||
       order.deliveryStatus === "picked_up" ||
+      order.logisticsStatus === "transit" ||
       order.logisticsStatus === "picked_up" ||
-      (order.deliveryType === "delivery" && s === "Order Picked Up")
+      (order.deliveryType === "delivery" && (
+        order.logisticsOfferStatus === "accepted" ||
+        Boolean(order.logisticsAcceptedAt) ||
+        s === "Order Picked Up"
+      ))
     ) {
       return "transit";
     }
@@ -2193,11 +2202,10 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
       return "ready_for_pickup";
     }
 
-    // 2. Logistics booked (delivery orders)
+    // 2. Logistics booked / pending courier acceptance (delivery orders)
     if (
       order.deliveryType === "delivery" &&
       (
-        order.logisticsOfferStatus === "accepted" ||
         order.logisticsOfferStatus === "pending" ||
         s === "logistics_pending" ||
         s === "logistics_booked" ||
