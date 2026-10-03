@@ -778,15 +778,20 @@ export default function App() {
             setNeedsProfile(false);
           } else {
             // Account was deleted from Firebase or does not exist
+            console.log(`[AUTH SYNC] User document ${user.uid} does not exist in Firebase. Purging deleted session.`);
             setCurrentUser(null);
-            if (authMode !== "signup") {
-              signOut(auth).catch(() => {});
-              localStorage.removeItem("shopiversity_cart");
-              if (user?.uid) {
-                localStorage.removeItem(`shopiversity_bank_details_${user.uid}`);
-              }
+            setNeedsProfile(false);
+            signOut(auth).catch(() => {});
+            localStorage.removeItem("shopiversity_cart");
+            if (user?.uid) {
+              localStorage.removeItem(`shopiversity_bank_details_${user.uid}`);
+              // Ensure lingering Firebase Auth record is permanently purged on backend
+              fetch("/api/account/cascade-delete", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ uid: user.uid })
+              }).catch(() => {});
             }
-            setNeedsProfile(true);
             setAuthLoading(false);
           }
         }, (error) => {

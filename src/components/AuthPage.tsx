@@ -151,7 +151,6 @@ export default function AuthPage({
   React.useEffect(() => {
     if (initialNeedsProfile) {
       setIsLogin(false);
-      setError("Your account exists but your profile is missing. Please complete the form below to continue.");
       
       if (auth.currentUser) {
         setFullName(auth.currentUser.displayName || "");
@@ -408,6 +407,17 @@ export default function AuthPage({
               setLoading(false);
               return;
             }
+          } else {
+            // Account was deleted from Firebase
+            await signOut(auth);
+            fetch("/api/account/cascade-delete", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ uid: user.uid })
+            }).catch(() => {});
+            setError("This account was previously deleted from Firebase. Please sign up to create a new account.");
+            setLoading(false);
+            return;
           }
         } catch (err: any) {
           if (err.code === "auth/invalid-credential" || err.code === "auth/user-not-found" || err.code === "auth/wrong-password") {
@@ -548,21 +558,55 @@ export default function AuthPage({
             }
           } catch (createErr: any) {
             if (createErr.code === "auth/email-already-in-use" || createErr.message?.includes("email-already-in-use")) {
-              setErrorPopup({
-                isOpen: true,
-                type: "email_in_use",
-                title: "Email Already Registered",
-                message: `The email address "${cleanEmail}" is already registered on SHOPIVERSITY. You cannot create a duplicate account with this email. Please sign in to your existing account.`,
-                email: cleanEmail,
-                primaryActionLabel: "Switch to Sign In",
-                onPrimaryAction: () => {
-                  switchAuthMode(true);
+              // Check if account was deleted from Firebase Firestore and lingering in Auth
+              try {
+                const purgeRes = await fetch("/api/account/purge-orphaned-auth", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ email: cleanEmail })
+                });
+                const purgeData = await purgeRes.json();
+                if (purgeData.purged) {
+                  // Lingering auth record was purged, retry account creation immediately!
+                  const retryCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
+                  firebaseUser = retryCredential.user;
+                  await updateProfile(firebaseUser, { displayName: fullName });
+                  try {
+                    await sendEmailVerification(firebaseUser, { url: window.location.origin, handleCodeInApp: false });
+                  } catch (e) {}
+                } else {
+                  setErrorPopup({
+                    isOpen: true,
+                    type: "email_in_use",
+                    title: "Email Already Registered",
+                    message: `The email address "${cleanEmail}" is already registered on SHOPIVERSITY. You cannot create a duplicate account with this email. Please sign in to your existing account.`,
+                    email: cleanEmail,
+                    primaryActionLabel: "Switch to Sign In",
+                    onPrimaryAction: () => {
+                      switchAuthMode(true);
+                    }
+                  });
+                  setLoading(false);
+                  return;
                 }
-              });
-              setLoading(false);
-              return;
+              } catch (purgeErr) {
+                setErrorPopup({
+                  isOpen: true,
+                  type: "email_in_use",
+                  title: "Email Already Registered",
+                  message: `The email address "${cleanEmail}" is already registered on SHOPIVERSITY. You cannot create a duplicate account with this email. Please sign in to your existing account.`,
+                  email: cleanEmail,
+                  primaryActionLabel: "Switch to Sign In",
+                  onPrimaryAction: () => {
+                    switchAuthMode(true);
+                  }
+                });
+                setLoading(false);
+                return;
+              }
+            } else {
+              throw createErr;
             }
-            throw createErr;
           }
         }
 

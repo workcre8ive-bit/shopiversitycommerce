@@ -2482,6 +2482,72 @@ const FALLBACK_BANKS = [
     }
   });
 
+  // Purge lingering Firebase Auth record if its Firestore profile was deleted from Firebase
+  app.post("/api/account/purge-orphaned-auth", async (req, res) => {
+    try {
+      const { email, uid } = req.body;
+      if (!email && !uid) {
+        return res.status(400).json({ error: "Missing email or uid parameter" });
+      }
+
+      console.log(`[ORPHANED AUTH PURGE] Checking orphaned auth user: email=${email}, uid=${uid}`);
+
+      let authUser = null;
+      try {
+        if (email) {
+          authUser = await admin.auth().getUserByEmail(email.trim().toLowerCase());
+        } else if (uid) {
+          authUser = await admin.auth().getUser(uid);
+        }
+      } catch (notFound) {
+        // User doesn't exist in Firebase Auth anyway
+        return res.status(200).json({ success: true, purged: false, message: "User not found in Firebase Auth" });
+      }
+
+      if (!authUser) {
+        return res.status(200).json({ success: true, purged: false, message: "No auth record found" });
+      }
+
+      // Check if Firestore users collection has an active document for this user
+      if (firebaseAdminDb) {
+        const userDoc = await firebaseAdminDb.collection("users").doc(authUser.uid).get();
+        if (userDoc.exists) {
+          return res.status(200).json({ 
+            success: true, 
+            purged: false, 
+            message: "Active profile document exists in Firestore; not orphaned." 
+          });
+        }
+
+        // Also check if any user has this email in Firestore
+        if (authUser.email) {
+          const emailSnap = await firebaseAdminDb.collection("users").where("email", "==", authUser.email.toLowerCase()).get();
+          if (!emailSnap.empty) {
+            return res.status(200).json({ 
+              success: true, 
+              purged: false, 
+              message: "Active profile document found matching email; not orphaned." 
+            });
+          }
+        }
+      }
+
+      // No profile found in Firestore! The account was deleted from Firebase Firestore.
+      // Purge the lingering auth record so the user can re-register or is fully cleared.
+      await admin.auth().deleteUser(authUser.uid);
+      console.log(`[ORPHANED AUTH PURGE] Successfully purged lingering Firebase Auth user ${authUser.uid} (${authUser.email})`);
+
+      return res.status(200).json({
+        success: true,
+        purged: true,
+        message: "Orphaned Firebase Auth record purged successfully."
+      });
+    } catch (err: any) {
+      console.error("[ORPHANED AUTH PURGE] Error:", err);
+      res.status(500).json({ error: err.message || "Failed to purge orphaned auth user" });
+    }
+  });
+
   // Clean up any orphaned products or public content whose creator was deleted from Firebase
   app.post("/api/account/cleanup-orphaned-content", async (req, res) => {
     try {
