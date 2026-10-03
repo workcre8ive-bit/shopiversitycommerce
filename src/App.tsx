@@ -40,6 +40,7 @@ import ReturnPolicyModal from "./components/ReturnPolicyModal";
 import Carousel from "./components/HeroCarousel";
 import Logo from "./components/Logo";
 import StickmanLoader from "./components/StickmanLoader";
+import ShopiversityLoader from "./components/ShopiversityLoader";
 import Footer from "./components/Footer";
 import { cn } from "./lib/utils";
 import { 
@@ -205,6 +206,31 @@ export default function App() {
   const [loading, setLoading] = React.useState(true);
   const [authLoading, setAuthLoading] = React.useState(true);
   const [currentUser, setCurrentUser] = React.useState<UserProfile | null>(null);
+
+  // Smooth Branded Splash Preloader State
+  const [isInitialSplashActive, setIsInitialSplashActive] = React.useState(true);
+  const splashMountTimeRef = React.useRef<number>(Date.now());
+
+  // Gracefully transition out of the Shopiversity brand loader once auth and catalogue have initialized
+  React.useEffect(() => {
+    if (!authLoading && !loading) {
+      const elapsed = Date.now() - splashMountTimeRef.current;
+      const minAnimationDuration = 800; // Ensures the clean cart and logo animation plays with elegance
+      const remainingTime = Math.max(0, minAnimationDuration - elapsed);
+      const timer = setTimeout(() => {
+        setIsInitialSplashActive(false);
+      }, remainingTime);
+      return () => clearTimeout(timer);
+    }
+  }, [authLoading, loading]);
+
+  // Safety fallback: Release the splash screen after 3.2s even under poor network conditions
+  React.useEffect(() => {
+    const safetyTimer = setTimeout(() => {
+      setIsInitialSplashActive(false);
+    }, 3200);
+    return () => clearTimeout(safetyTimer);
+  }, []);
   const [searchQuery, setSearchQuery] = React.useState("");
   const [filterCategory, setFilterCategory] = React.useState("All");
   const [filterVendor, setFilterVendor] = React.useState("All");
@@ -1059,24 +1085,14 @@ export default function App() {
 
   const isHibernated = currentUser?.hibernatedUntil && new Date(currentUser.hibernatedUntil) > new Date();
 
-  if (authLoading || (currentUser && loading)) {
+  // Premium branded Shopiversity preloader animation before the home page
+  if (isInitialSplashActive || authLoading || (currentUser && loading)) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-white dark:bg-slate-950 font-sans">
-        {connectionError && (
-          <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] w-[90%] max-w-sm">
-            <div className="bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/30 p-4 rounded-2xl flex items-center gap-3 shadow-xl">
-              <XCircle className="w-5 h-5 text-red-500 shrink-0" />
-              <p className="text-[11px] font-bold text-red-600 dark:text-red-400 leading-tight">{connectionError}</p>
-            </div>
-          </div>
-        )}
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-8 h-8 border-4 border-[#ff6b00] border-t-transparent rounded-full animate-spin" />
-          <p className="text-xs text-zinc-500 dark:text-zinc-400 font-bold uppercase tracking-widest">
-            Loading...
-          </p>
-        </div>
-      </div>
+      <ShopiversityLoader
+        connectionError={connectionError}
+        message="Loading your campus marketplace..."
+        onRetry={() => window.location.reload()}
+      />
     );
   }
 
@@ -2579,9 +2595,14 @@ export default function App() {
     </div>
   );
 
-  // Clean Full-Width Website Mode
+  // Clean Full-Width Website Mode with smooth entry fade
   return (
-    <div className="min-h-screen bg-white dark:bg-zinc-950 flex flex-col transition-colors duration-500 selection:bg-orange-500/20 relative w-full h-screen overflow-hidden font-sans">
+    <motion.div 
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.35, ease: "easeOut" }}
+      className="min-h-screen bg-white dark:bg-zinc-950 flex flex-col transition-colors duration-500 selection:bg-orange-500/20 relative w-full h-screen overflow-hidden font-sans"
+    >
       {appLayout}
 
       {/* Secret Executive Super-Admin Gateway Modal */}
@@ -2594,6 +2615,6 @@ export default function App() {
           setActiveTab("admin");
         }}
       />
-    </div>
+    </motion.div>
   );
 }

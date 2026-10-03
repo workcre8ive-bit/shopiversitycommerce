@@ -4,10 +4,130 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SHOPIVERSITY - Student E-Commerce Platform</title>
+    <meta name="description" content="A modern, clean, and mobile-first student multi-vendor e-commerce platform. The marketplace at your fingertips." />
+    <meta property="og:title" content="SHOPIVERSITY - Student E-Commerce Platform" />
+    <meta property="og:description" content="A modern, clean, and mobile-first student multi-vendor e-commerce platform. The marketplace at your fingertips." />
+    <style>
+      /* Pre-React Instant Brand Loader */
+      #initial-preloader {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background-color: #ffffff;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        z-index: 99999;
+        user-select: none;
+      }
+      @media (prefers-color-scheme: dark) {
+        #initial-preloader {
+          background-color: #060b13;
+          color: #ffffff;
+        }
+      }
+      @keyframes floatCart {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-7px); }
+      }
+      @keyframes sweepProgress {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(200%); }
+      }
+      @keyframes pulseGlow {
+        0%, 100% { opacity: 0.35; transform: scale(0.95); }
+        50% { opacity: 0.65; transform: scale(1.1); }
+      }
+      .preloader-cart-wrap {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        animation: floatCart 2.2s ease-in-out infinite;
+      }
+      .preloader-glow {
+        position: absolute;
+        width: 80px;
+        height: 80px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(255, 107, 0, 0.25) 0%, transparent 70%);
+        filter: blur(12px);
+        animation: pulseGlow 2.5s ease-in-out infinite;
+      }
+      .preloader-title {
+        margin-top: 14px;
+        font-size: 24px;
+        font-weight: 900;
+        letter-spacing: -0.025em;
+        color: #0f172a;
+      }
+      @media (prefers-color-scheme: dark) {
+        .preloader-title {
+          color: #f8fafc;
+        }
+      }
+      .preloader-tagline {
+        margin-top: 2px;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #ff6b00;
+      }
+      .preloader-bar-wrap {
+        margin-top: 22px;
+        width: 180px;
+        height: 4px;
+        border-radius: 9999px;
+        background-color: rgba(148, 163, 184, 0.2);
+        overflow: hidden;
+        position: relative;
+      }
+      .preloader-bar-fill {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 50%;
+        border-radius: 9999px;
+        background: linear-gradient(90deg, transparent, #ff6b00, transparent);
+        box-shadow: 0 0 10px rgba(255, 107, 0, 0.8);
+        animation: sweepProgress 1.4s ease-in-out infinite;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="initial-preloader">
+        <div class="preloader-cart-wrap">
+          <div class="preloader-glow"></div>
+          <svg
+            viewBox="0 0 24 24"
+            width="64"
+            height="64"
+            fill="none"
+            stroke="#ff6b00"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <circle cx="10" cy="20.5" r="1.6" fill="#ff6b00" stroke="none" />
+            <circle cx="16.5" cy="20.5" r="1.6" fill="#ff6b00" stroke="none" />
+            <path d="M 10,18 L 16.5,18" stroke-width="1.6" />
+            <path d="M 10,18 C 7.5,18 7,16.5 7,14.5" stroke-width="1.6" />
+            <path d="M 2.5,6 L 5,6.5 L 7.5,14 L 18,14 L 19.5,6.5 L 7.5,6.5" stroke-width="1.7" />
+            <path d="M 6.2,10.2 L 18.7,10.2" stroke-width="1.2" />
+            <path d="M 11,6.5 L 11,14" stroke-width="1.2" />
+            <path d="M 14.5,6.5 L 14.5,14" stroke-width="1.2" />
+          </svg>
+        </div>
+        <div class="preloader-title">Shopiversity</div>
+        <div class="preloader-tagline">The marketplace at your fingertips</div>
+        <div class="preloader-bar-wrap">
+          <div class="preloader-bar-fill"></div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-
