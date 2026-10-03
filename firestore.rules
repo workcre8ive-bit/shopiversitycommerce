@@ -261,7 +261,8 @@ service cloud.firestore {
         'refundApprovedAt', 'refundCompletedAt', 'refundDecisionNotes', 'settlementOnHold',
         // Pay on Delivery & verification completion
         'buyerDeliveryConfirmed', 'buyerDeliveryConfirmedAt', 'paymentVerifiedAt', 'handoverCode', 
-        'deliveryOtp', 'pickupOtp', 'handoverVerified', 'handoverVerifiedAt', 'paymentReceipt',
+        'deliveryOtp', 'pickupOtp', 'deliveryPin', 'sellerHandoverPin', 'sellerHandoverOtp', 
+        'sellerHandoverVerified', 'sellerHandoverVerifiedAt', 'handoverVerified', 'handoverVerifiedAt', 'paymentReceipt',
         'completedAt', 'payoutStatus', 'deliveryAttemptStatus', 'courierHandedOver', 'courierHandedOverAt',
         'productHandedOver', 'productHandedOverAt'
       ]) &&
@@ -282,7 +283,7 @@ service cloud.firestore {
              (!('disputeStatus' in data) || data.disputeStatus in ['none', 'active', 'focused', 'resolved', 'rejected', 'seller_responded']) &&
              data.deliveryType in ['delivery', 'pickup'] &&
              data.paymentMethod in ['online', 'pod', 'physical'] &&
-             data.status in ['pending', 'accepted', 'out_for_delivery', 'delivered', 'cancelled', 'acquired', 'completed', 'Pending Seller Acceptance', 'Out To Pickup Station', 'Ready For Pickup', 'Out For Delivery', 'Order Picked Up', 'Order Delivered', 'Ready For Delivery', 'awaiting_payment', 'declined_by_logistics', 'payment_required', 'In Transit', 'transit', 'in_transit', 'picked_up', 'logistics_pending', 'logistics_booked', 'ready_for_pickup', 'Payment Required'] &&
+             data.status is string &&
              isValidDateString(data.createdAt) &&
              (!('acceptedAt' in data) || data.acceptedAt == null || isValidDateString(data.acceptedAt)) &&
              (!('deliveredAt' in data) || data.deliveredAt == null || isValidDateString(data.deliveredAt)) &&
@@ -301,8 +302,9 @@ service cloud.firestore {
              (!('menuItemName' in data) || data.menuItemName is string) &&
              (!('measureType' in data) || data.measureType is string) &&
              (!('measureAmount' in data) || data.measureAmount is string || data.measureAmount is number) &&
-             (!('deliveryTime' in data) || data.deliveryTime is number) &&
+             (!('deliveryTime' in data) || data.deliveryTime is number || data.deliveryTime is string) &&
              (!('deliveryTimeUnit' in data) || data.deliveryTimeUnit is string) &&
+             (!('itemSubtotal' in data) || data.itemSubtotal is number) &&
              (!('buyerEmail' in data) || data.buyerEmail is string) &&
              (!('referrerId' in data) || data.referrerId is string || data.referrerId == null) &&
              (!('referralCommissionAmount' in data) || data.referralCommissionAmount is number) &&
@@ -327,7 +329,12 @@ service cloud.firestore {
              (!('buyerRefundAmount' in data) || data.buyerRefundAmount is number) &&
              (!('settlementOnHold' in data) || data.settlementOnHold is bool) &&
              (!('buyerDeliveryConfirmed' in data) || data.buyerDeliveryConfirmed is bool) &&
-             (!('handoverVerified' in data) || data.handoverVerified is bool);
+             (!('handoverVerified' in data) || data.handoverVerified is bool) &&
+             (!('deliveryPin' in data) || data.deliveryPin is string) &&
+             (!('sellerHandoverPin' in data) || data.sellerHandoverPin is string) &&
+             (!('sellerHandoverOtp' in data) || data.sellerHandoverOtp is string) &&
+             (!('sellerHandoverVerified' in data) || data.sellerHandoverVerified is bool) &&
+             (!('sellerHandoverVerifiedAt' in data) || data.sellerHandoverVerifiedAt == null || isValidDateString(data.sellerHandoverVerifiedAt));
     }
 
     function isValidNotification(data) {
@@ -490,12 +497,17 @@ service cloud.firestore {
       allow update: if isAuthenticated() && !isSuspended() && isValidOrder(request.resource.data) && (
         isAdmin() ||
         (
-          (request.auth.uid == resource.data.buyerId || request.auth.uid == resource.data.sellerId) &&
+          (
+            request.auth.uid == resource.data.buyerId || 
+            request.auth.uid == resource.data.sellerId ||
+            resource.data.get('logisticsId', '') == request.auth.uid ||
+            request.resource.data.get('logisticsId', '') == request.auth.uid ||
+            exists(/databases/$(database)/documents/logistics_companies/$(request.auth.uid))
+          ) &&
           request.resource.data.buyerId == resource.data.buyerId &&
           request.resource.data.sellerId == resource.data.sellerId &&
           request.resource.data.productId == resource.data.productId &&
           request.resource.data.quantity == resource.data.quantity &&
-          request.resource.data.totalPrice == resource.data.totalPrice &&
           request.resource.data.createdAt == resource.data.createdAt
         ) || (
           // Allow logistics or system updates to only change status & tracking details
@@ -506,13 +518,15 @@ service cloud.firestore {
             'courierHandedOverAt', 'updatedAt', 'logisticsId', 'logisticsName', 
             'logisticsPhone', 'logisticsDeliveryPrice', 'logisticsEstimatedDeliveryTimeline', 
             'logisticsAssignedAt', 'logisticsAcceptedAt', 'logisticsTimeline', 'deliveryTime', 'deliveryTimeUnit',
-            'deliveryPrice', 'deliveryFee'
+            'deliveryPrice', 'deliveryFee', 'totalPrice', 'itemSubtotal', 'handoverVerified', 'handoverVerifiedAt',
+            'buyerDeliveryConfirmed', 'buyerDeliveryConfirmedAt', 'deliveryOtp', 'pickupOtp', 'handoverCode',
+            'deliveryPin', 'sellerHandoverPin', 'sellerHandoverOtp', 'sellerHandoverVerified', 'sellerHandoverVerifiedAt',
+            'payoutStatus', 'deliveryAttemptStatus', 'deliveredWorkFileUrl'
           ]) &&
           request.resource.data.buyerId == resource.data.buyerId &&
           request.resource.data.sellerId == resource.data.sellerId &&
           request.resource.data.productId == resource.data.productId &&
           request.resource.data.quantity == resource.data.quantity &&
-          request.resource.data.totalPrice == resource.data.totalPrice &&
           request.resource.data.createdAt == resource.data.createdAt
         )
       );

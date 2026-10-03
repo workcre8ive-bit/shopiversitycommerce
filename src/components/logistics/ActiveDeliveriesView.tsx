@@ -13,7 +13,8 @@ import {
   Kanban, 
   List, 
   Package,
-  AlertCircle
+  AlertCircle,
+  KeyRound
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { DeliveryJob, LogisticsCompany } from "./types";
@@ -34,7 +35,8 @@ interface ActiveDeliveriesViewProps {
   stagePickedUpCount: number;
   stageInTransitCount: number;
   handleUpdateStatus: (jobId: string, currentStatus: DeliveryJob["status"]) => Promise<void>;
-  setOtpModalJob: (job: DeliveryJob) => void;
+  openOtpModal: (job: DeliveryJob, type: "seller" | "buyer") => void;
+  setOtpModalJob?: (job: DeliveryJob) => void;
   setOtpInput: (val: string) => void;
   setOtpError: (val: string | null) => void;
   loading: boolean;
@@ -57,6 +59,7 @@ export const ActiveDeliveriesView: React.FC<ActiveDeliveriesViewProps> = ({
   stagePickedUpCount,
   stageInTransitCount,
   handleUpdateStatus,
+  openOtpModal,
   setOtpModalJob,
   setOtpInput,
   setOtpError,
@@ -69,11 +72,11 @@ export const ActiveDeliveriesView: React.FC<ActiveDeliveriesViewProps> = ({
         <button
           type="button"
           disabled={loading}
-          onClick={() => handleUpdateStatus(job.id, job.status)}
+          onClick={() => openOtpModal(job, "seller")}
           className="w-full h-11 px-4 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 shadow-md shadow-purple-600/20 cursor-pointer border-none active:scale-95"
         >
-          <Truck className="w-4 h-4" />
-          Product Handed Over by Seller (Move to Transit)
+          <KeyRound className="w-4 h-4" />
+          Verify Seller Handover PIN & Collect Package
         </button>
       );
     }
@@ -87,7 +90,7 @@ export const ActiveDeliveriesView: React.FC<ActiveDeliveriesViewProps> = ({
           className="w-full h-11 px-4 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 shadow-md shadow-orange-500/20 cursor-pointer border-none active:scale-95"
         >
           <MapPin className="w-4 h-4" />
-          Out for Delivery
+          Out for Doorstep Delivery
         </button>
       );
     }
@@ -97,15 +100,11 @@ export const ActiveDeliveriesView: React.FC<ActiveDeliveriesViewProps> = ({
         <button
           type="button"
           disabled={loading}
-          onClick={() => {
-            setOtpModalJob(job);
-            setOtpInput("");
-            setOtpError(null);
-          }}
+          onClick={() => openOtpModal(job, "buyer")}
           className="w-full h-11 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 shadow-md shadow-emerald-600/20 cursor-pointer border-none active:scale-95"
         >
           <ShieldCheck className="w-4 h-4" />
-          Verify Delivery PIN & Deliver to Buyer
+          Verify Buyer Delivery PIN & Complete Delivery
         </button>
       );
     }

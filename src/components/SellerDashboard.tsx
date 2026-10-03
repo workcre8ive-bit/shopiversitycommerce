@@ -79,7 +79,9 @@ import {
   MapPin,
   Phone,
   Tag,
-  Navigation
+  Navigation,
+  KeyRound,
+  Copy
 } from "lucide-react";
 import { 
   BarChart, 
@@ -96,7 +98,7 @@ import {
 } from 'recharts';
 
 import { motion, AnimatePresence } from "motion/react";
-import { cn } from "../lib/utils";
+import { cn, getOrderSellerHandoverPin } from "../lib/utils";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
 import { compressImage } from "../lib/imageUtils";
 import { NIGERIAN_STATES, STATE_CITIES, NIGERIAN_LGAS, CITY_STREETS } from "../constants/locations";
@@ -2667,6 +2669,75 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                         )}
                       </div>
 
+                      {/* 6-Digit Seller Handover PIN Section */}
+                      {(() => {
+                        const sellerHandoverPin = getOrderSellerHandoverPin(order);
+                        const isHandedOver = Boolean(order.sellerHandoverVerified || order.productHandedOver || effectiveStatus === "out_for_delivery" || effectiveStatus === "delivered" || effectiveStatus === "completed");
+
+                        return !isHandedOver ? (
+                          <div className="p-3.5 bg-purple-50 dark:bg-purple-950/40 border-2 border-purple-300 dark:border-purple-800/70 rounded-2xl space-y-2.5 shadow-xs">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2">
+                                <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                                  <KeyRound className="w-4 h-4" />
+                                </div>
+                                <div>
+                                  <p className="text-[11px] font-black uppercase tracking-wider text-purple-900 dark:text-purple-200">
+                                    Seller Handover PIN
+                                  </p>
+                                  <p className="text-[10px] text-purple-700 dark:text-purple-400 font-medium">
+                                    Courier must enter this PIN to confirm physical pickup
+                                  </p>
+                                </div>
+                              </div>
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-200 dark:bg-purple-900 text-purple-800 dark:text-purple-200">
+                                Awaiting Courier
+                              </span>
+                            </div>
+
+                            <div className="p-3 bg-white dark:bg-slate-900 rounded-xl border border-purple-200 dark:border-purple-800 flex items-center justify-between gap-3 shadow-inner">
+                              <div className="space-y-0.5">
+                                <p className="text-[9px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
+                                  Your 6-Digit Handover PIN
+                                </p>
+                                <p className="text-2xl font-black font-mono tracking-[0.25em] text-purple-600 dark:text-purple-400 select-all">
+                                  {sellerHandoverPin}
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  navigator.clipboard.writeText(sellerHandoverPin);
+                                  alert(`Seller Handover PIN ${sellerHandoverPin} copied to clipboard!`);
+                                }}
+                                className="px-3.5 py-1.5 bg-purple-100 hover:bg-purple-200 dark:bg-purple-900/60 dark:hover:bg-purple-800 text-purple-800 dark:text-purple-200 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 border-none"
+                              >
+                                <Copy className="w-3.5 h-3.5" />
+                                <span>Copy PIN</span>
+                              </button>
+                            </div>
+
+                            <div className="flex items-start gap-1.5 text-[10px] text-purple-800 dark:text-purple-300 font-medium bg-purple-100/60 dark:bg-purple-900/30 p-2 rounded-xl">
+                              <ShieldCheck className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400 shrink-0 mt-0.5" />
+                              <span>
+                                When the courier arrives to collect this item, ask them for or give them this 6-digit PIN. Once the courier verifies it on their screen, the order will automatically move to <strong>In Transit</strong>.
+                              </span>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="p-2.5 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 rounded-xl flex items-center justify-between text-[11px] text-emerald-800 dark:text-emerald-300 font-semibold">
+                            <span className="flex items-center gap-1.5">
+                              <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                              Product Handed Over to Courier • Handover PIN Verified
+                            </span>
+                            <span className="text-[10px] font-mono text-emerald-700/80 dark:text-emerald-400/80 font-bold">
+                              PIN: {sellerHandoverPin}
+                            </span>
+                          </div>
+                        );
+                      })()}
+
                       {/* 4-Step Visual Progress Stepper */}
                       <div className="space-y-1.5 pt-1">
                         <div className="grid grid-cols-4 gap-1 text-center">
@@ -2691,13 +2762,13 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                           <div className="flex flex-col items-center gap-1">
                             <div className={cn(
                               "w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black transition-all",
-                              (effectiveStatus === "out_for_delivery" || effectiveStatus === "delivered" || effectiveStatus === "completed" || order.courierHandedOver || order.productHandedOver)
+                              (effectiveStatus === "out_for_delivery" || effectiveStatus === "delivered" || effectiveStatus === "completed" || order.courierHandedOver)
                                 ? "bg-emerald-500 text-white shadow-xs"
-                                : effectiveStatus === "transit"
+                                : (effectiveStatus === "transit" || order.productHandedOver || order.sellerHandoverVerified)
                                   ? "bg-indigo-500 text-white animate-pulse shadow-sm"
                                   : "bg-slate-200 dark:bg-slate-800 text-slate-400"
                             )}>
-                              {(effectiveStatus === "out_for_delivery" || effectiveStatus === "delivered" || effectiveStatus === "completed" || order.courierHandedOver || order.productHandedOver) ? (
+                              {(effectiveStatus === "out_for_delivery" || effectiveStatus === "delivered" || effectiveStatus === "completed" || order.courierHandedOver) ? (
                                 <Check className="w-3.5 h-3.5" />
                               ) : (
                                 "2"
@@ -2710,13 +2781,13 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                           <div className="flex flex-col items-center gap-1">
                             <div className={cn(
                               "w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black transition-all",
-                              (effectiveStatus === "delivered" || effectiveStatus === "completed" || order.courierHandedOver || order.productHandedOver)
+                              (effectiveStatus === "delivered" || effectiveStatus === "completed" || order.courierHandedOver)
                                 ? "bg-emerald-500 text-white shadow-xs"
                                 : effectiveStatus === "out_for_delivery"
                                   ? "bg-orange-500 text-white animate-pulse shadow-sm"
                                   : "bg-slate-200 dark:bg-slate-800 text-slate-400"
                             )}>
-                              {(effectiveStatus === "delivered" || effectiveStatus === "completed" || order.courierHandedOver || order.productHandedOver) ? (
+                              {(effectiveStatus === "delivered" || effectiveStatus === "completed" || order.courierHandedOver) ? (
                                 <Check className="w-3.5 h-3.5" />
                               ) : (
                                 "3"
@@ -2731,11 +2802,11 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                               "w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black transition-all",
                               effectiveStatus === "completed"
                                 ? "bg-emerald-600 text-white shadow-xs"
-                                : (effectiveStatus === "delivered" || order.courierHandedOver || order.productHandedOver)
+                                : (effectiveStatus === "delivered" || order.courierHandedOver)
                                   ? "bg-emerald-500 text-white animate-pulse shadow-sm"
                                   : "bg-slate-200 dark:bg-slate-800 text-slate-400"
                             )}>
-                              {(effectiveStatus === "completed" || effectiveStatus === "delivered" || order.courierHandedOver || order.productHandedOver) ? (
+                              {(effectiveStatus === "completed" || effectiveStatus === "delivered" || order.courierHandedOver) ? (
                                 <Check className="w-3.5 h-3.5" />
                               ) : (
                                 "4"
@@ -2750,14 +2821,14 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                           <div 
                             className="bg-emerald-500 h-full transition-all duration-500" 
                             style={{
-                              width: (effectiveStatus === "completed" || effectiveStatus === "delivered" || order.courierHandedOver || order.productHandedOver)
+                              width: (effectiveStatus === "completed" || effectiveStatus === "delivered" || order.courierHandedOver)
                                 ? "100%"
                                 : effectiveStatus === "out_for_delivery"
                                   ? "75%"
-                                  : effectiveStatus === "transit"
+                                  : (effectiveStatus === "transit" || order.productHandedOver || order.sellerHandoverVerified)
                                     ? "50%"
                                     : "25%"
-                            }} 
+                            }}
                           />
                         </div>
                       </div>

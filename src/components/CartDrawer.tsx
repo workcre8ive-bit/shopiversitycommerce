@@ -4,7 +4,7 @@ import { X, ShoppingBag, Trash2, Plus, Minus, Send, CheckCircle, Truck, Package 
 import { motion, AnimatePresence } from "motion/react";
 import { auth, db } from "../firebase";
 import { collection, addDoc, doc, updateDoc, getDoc, query, where, getDocs, setDoc } from "firebase/firestore";
-import { cn } from "../lib/utils";
+import { cn, generateSixDigitPin } from "../lib/utils";
 import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
 import { usePaystackPayment } from "../hooks/usePaystackPayment";
 
@@ -177,10 +177,16 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
         }
         const uniqueOrderId = sellerOrderIdMap[item.sellerId];
         const uniqueProductId = `PRD-${randPrd}`;
+        const deliveryOtp = generateSixDigitPin();
+        const sellerHandoverPin = generateSixDigitPin();
 
         const orderData: any = {
           uniqueOrderId,
           uniqueProductId,
+          deliveryOtp,
+          deliveryPin: deliveryOtp,
+          sellerHandoverPin,
+          sellerHandoverOtp: sellerHandoverPin,
           buyerId: auth.currentUser!.uid,
           buyerName: currentUser?.displayName || "Anonymous",
           buyerEmail: currentUser?.email || auth.currentUser?.email || "",
@@ -287,6 +293,10 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
                 logisticsId: prodData.logisticsCompanyId,
                 logisticsName: prodData.logisticsCompanyName || "Shopiversity Logistics",
                 deliveryPrice: Number(prodData.deliveryPrice) || 500,
+                deliveryOtp,
+                deliveryPin: deliveryOtp,
+                sellerHandoverPin,
+                sellerHandoverOtp: sellerHandoverPin,
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString()
               };

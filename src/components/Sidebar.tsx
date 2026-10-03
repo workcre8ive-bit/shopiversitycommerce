@@ -62,11 +62,11 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
 
   const navItems = !user ? [
     { id: "market", label: "Marketplace", icon: Store },
+    { id: "auth", label: "Sign In", icon: User },
     { id: "signup", label: "Sign Up", icon: UserPlus },
     { id: "search", label: "Search", icon: Search },
     { id: "logistics", label: "Campus Logistics", icon: Truck },
-    { id: "settings", label: "Sign In", icon: User },
-  ] : (user?.state === "Logistics Partner") ? [
+  ] : (user?.state === "Logistics Partner" || user?.role === "logistics") ? [
     ...adminItem,
     { id: "logistics", label: "Campus Logistics Hub", icon: Truck },
     { id: "notifications", label: "Notifications", icon: Bell },
@@ -159,7 +159,9 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
             <Logo 
               showText={true} 
               onClick={() => {
-                if (!user || activeTab === "auth" || activeTab === "signup") {
+                if (user?.state === "Logistics Partner" || user?.role === "logistics") {
+                  setActiveTab("logistics");
+                } else if (!user || activeTab === "auth" || activeTab === "signup") {
                   setActiveTab("market");
                 } else {
                   setActiveTab(activeRole === "seller" ? "dashboard" : "market");
@@ -173,11 +175,11 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
           <div className="flex items-center justify-between relative z-10">
             <button
               onClick={() => {
-                setActiveTab("settings");
+                setActiveTab(user ? "settings" : "auth");
                 onClose();
               }}
-              className="w-14 h-14 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center border border-white/30 shadow-xl overflow-hidden hover:scale-105 active:scale-95 transition-all cursor-pointer border-none outline-none group"
-              title="View Profile Settings"
+              className="w-14 h-14 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center border border-white/30 shadow-xl overflow-hidden hover:scale-105 active:scale-95 transition-all cursor-pointer border-none outline-none group touch-manipulation"
+              title={user ? "View Profile Settings" : "Sign In"}
             >
               {user?.photoURL ? (
                 <img src={user.photoURL} alt="" className="w-full h-full object-cover" />
@@ -190,7 +192,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
               {(user?.role === "both" || user?.role === "seller" || user?.role === "admin") && user?.state !== "Logistics Partner" && (
                 <button 
                   onClick={onToggleRole}
-                  className="flex items-center gap-2 px-3 py-2 bg-white/20 backdrop-blur-md rounded-xl border border-white/30 text-white hover:bg-white/30 transition-all active:scale-95 shadow-lg group"
+                  className="flex items-center gap-2 px-3 py-2 bg-white/20 backdrop-blur-md rounded-xl border border-white/30 text-white hover:bg-white/30 transition-all active:scale-95 shadow-lg group touch-manipulation"
                 >
                   <ArrowLeftRight className="w-3.5 h-3.5 group-hover:rotate-180 transition-transform duration-500" />
                   <span className="text-[10px] font-black uppercase tracking-widest">
@@ -203,18 +205,45 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
           
           <button
             onClick={() => {
-              setActiveTab("settings");
+              setActiveTab(user ? "settings" : "auth");
               onClose();
             }}
-            className="relative z-10 text-left hover:opacity-90 transition-opacity cursor-pointer border-none outline-none group"
-            title="View Profile Settings"
+            className="relative z-10 text-left hover:opacity-90 transition-opacity cursor-pointer border-none outline-none group touch-manipulation"
+            title={user ? "View Profile Settings" : "Sign In"}
           >
             <p className="text-white/70 text-xs font-bold uppercase tracking-widest flex items-center gap-1.5">
-              <span>{user?.state === "Logistics Partner" ? "Logistics Partner Account" : (activeRole === "buyer" ? "Shopping Account" : "Seller Account")}</span>
+              <span>{(user?.state === "Logistics Partner" || user?.role === "logistics") ? "Logistics Partner Account" : (activeRole === "buyer" ? "Shopping Account" : "Seller Account")}</span>
               <ChevronRight className="w-3.5 h-3.5 text-white/70 group-hover:translate-x-0.5 transition-transform" />
             </p>
             <h2 className="text-2xl font-black !text-white tracking-tight no-underline">Hello, {user?.displayName?.split(' ')[0] || "Guest"}</h2>
           </button>
+
+          {!user && (
+            <div className="grid grid-cols-2 gap-2.5 pt-1 relative z-10">
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab("auth");
+                  onClose();
+                }}
+                className="min-h-[42px] px-3 py-2 bg-white/20 hover:bg-white/30 active:scale-95 backdrop-blur-md border border-white/35 rounded-xl text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer touch-manipulation whitespace-nowrap shadow-sm"
+              >
+                <User className="w-4 h-4 shrink-0" />
+                <span>Sign In</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab("signup");
+                  onClose();
+                }}
+                className="min-h-[42px] px-3 py-2 bg-white hover:bg-orange-50 active:scale-95 text-[#ff6b00] rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-all cursor-pointer border-none touch-manipulation whitespace-nowrap shadow-md"
+              >
+                <UserPlus className="w-4 h-4 shrink-0" />
+                <span>Sign Up</span>
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Navigation */}
@@ -225,7 +254,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
                <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-widest">Your Experience</h3>
             </div>
             <div className="space-y-1">
-              {navItems.filter(item => ["settings", "orders", "notifications", "messages", "history", "referrals", "support", "feedback-help", "admin", "payouts"].includes(item.id)).map((item, idx) => (
+              {navItems.filter(item => ["auth", "signup", "settings", "orders", "notifications", "messages", "history", "referrals", "support", "feedback-help", "admin", "payouts"].includes(item.id)).map((item, idx) => (
                 <button
                    key={`nav-exp-${item.id}-${idx}`}
                    onClick={() => {
@@ -258,7 +287,16 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
                <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-widest">Explore Campus</h3>
             </div>
             <div className="space-y-1">
-               {navItems.filter(item => ["market", "cart", "search", "dashboard", "add-product", "my-products", "storefront", "logistics"].includes(item.id)).map((item, idx) => (
+               {navItems.filter(item => {
+                 const isLogistics = user?.state === "Logistics Partner" || user?.role === "logistics" || activeTab === "logistics";
+                 if (isLogistics && (item.id === "dashboard" || item.id === "cart")) {
+                   return false;
+                 }
+                 if (activeRole === "seller" && item.id === "cart") {
+                   return false;
+                 }
+                 return ["market", "cart", "search", "dashboard", "add-product", "my-products", "storefront", "logistics"].includes(item.id);
+               }).map((item, idx) => (
                 <button
                   key={`nav-explore-${item.id}-${idx}`}
                   onClick={() => {

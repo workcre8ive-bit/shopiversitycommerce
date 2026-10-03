@@ -6,7 +6,7 @@ import { auth, db } from "../firebase";
 import { collection, query, where, orderBy, onSnapshot, addDoc, doc, getDoc, setDoc, getDocs, updateDoc, deleteDoc } from "firebase/firestore";
 import { usePaystackPayment } from "../hooks/usePaystackPayment";
 
-import { cn } from "../lib/utils";
+import { cn, generateSixDigitPin } from "../lib/utils";
 import ReportModal from "./ReportModal";
 import ReviewSuccessModal from "./ReviewSuccessModal";
 import Logo from "./Logo";
@@ -251,10 +251,16 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
       const totalPayablePrice = selectedServicePackage ? (selectedServicePackage.price || product.price || 0) : (product.price || 0);
       const commissionAmount = totalPayablePrice * 0.045; // 4.5% commission
       const sellerEarnings = totalPayablePrice - commissionAmount;
+      const deliveryOtp = generateSixDigitPin();
+      const sellerHandoverPin = generateSixDigitPin();
 
       const orderData = {
         uniqueOrderId,
         uniqueProductId,
+        deliveryOtp,
+        deliveryPin: deliveryOtp,
+        sellerHandoverPin,
+        sellerHandoverOtp: sellerHandoverPin,
         buyerId: auth.currentUser.uid,
         buyerName: currentUser?.displayName || "Anonymous",
         buyerEmail: currentUser?.email || auth.currentUser?.email || "",
@@ -349,10 +355,16 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
       const totalPayablePrice = tier ? Number(tier.price) : 0;
       const commissionAmount = totalPayablePrice * 0.02; // 2% for events
       const sellerEarnings = totalPayablePrice - commissionAmount;
+      const deliveryOtp = generateSixDigitPin();
+      const sellerHandoverPin = generateSixDigitPin();
 
       const orderData = {
         uniqueOrderId,
         uniqueProductId,
+        deliveryOtp,
+        deliveryPin: deliveryOtp,
+        sellerHandoverPin,
+        sellerHandoverOtp: sellerHandoverPin,
         buyerId: auth.currentUser.uid,
         buyerName: currentUser?.displayName || "Anonymous",
         buyerEmail: currentUser?.email || auth.currentUser?.email || "",

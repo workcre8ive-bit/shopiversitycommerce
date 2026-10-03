@@ -19,8 +19,8 @@ export interface UserProfile {
   phoneNumber: string;
   phone?: string;
   photoURL?: string;
-  role: "buyer" | "seller" | "admin" | "both";
-  activeRole?: "buyer" | "seller";
+  role: "buyer" | "seller" | "admin" | "both" | "logistics";
+  activeRole?: "buyer" | "seller" | "logistics";
   referralCode?: string;
   referredBy?: string;
   referralEarnings?: number;
@@ -236,6 +236,11 @@ export interface Order {
   handoverCode?: string;
   deliveryOtp?: string;
   pickupOtp?: string;
+  deliveryPin?: string;
+  sellerHandoverPin?: string;
+  sellerHandoverOtp?: string;
+  sellerHandoverVerified?: boolean;
+  sellerHandoverVerifiedAt?: string;
   handoverVerified?: boolean;
   handoverVerifiedAt?: string;
   paymentReceipt?: OrderPaymentReceipt;
@@ -378,6 +383,11 @@ export interface DeliveryJob {
   deliveryPrice: number;
   estimatedDeliveryTimeline?: string;
   payoutStatus?: "pending" | "released" | "paid";
+  deliveryOtp?: string;
+  deliveryPin?: string;
+  sellerHandoverPin?: string;
+  sellerHandoverOtp?: string;
+  sellerHandoverVerified?: boolean;
   createdAt: string;
   updatedAt: string;
 }

@@ -51,6 +51,7 @@ import { cn, generateReferralCode } from "../lib/utils";
 import { UserProfile, Notification } from "../types";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
 import { compressImage } from "../lib/imageUtils";
+import AuthErrorModal, { AuthErrorModalProps } from "./AuthErrorModal";
 import { SCHOOL_TYPES, NIGERIAN_SCHOOLS } from "../constants/schools";
 import { NIGERIAN_STATES, STATE_CITIES } from "../constants/locations";
 import TermsAndConditions from "./TermsAndConditions";
@@ -72,11 +73,15 @@ const BACKGROUND_IMAGES = [
 export default function AuthPage({ 
   initialNeedsProfile = false,
   initialMode,
-  onGoToMarket
+  onModeChange,
+  onGoToMarket,
+  onNavigateToLogistics
 }: { 
   initialNeedsProfile?: boolean;
   initialMode?: "login" | "signup";
+  onModeChange?: (mode: "login" | "signup") => void;
   onGoToMarket?: () => void;
+  onNavigateToLogistics?: () => void;
 }) {
   const handleGoToMarket = () => {
     if (onGoToMarket) {
@@ -89,12 +94,31 @@ export default function AuthPage({
   const [isLogin, setIsLogin] = React.useState(
     initialNeedsProfile ? false : (initialMode ? initialMode === "login" : true)
   );
+
+  const switchAuthMode = (loginMode: boolean) => {
+    setIsLogin(loginMode);
+    setStep(1);
+    setError("");
+    setFieldErrors({});
+    if (onModeChange) {
+      onModeChange(loginMode ? "login" : "signup");
+    }
+  };
   const [role, setRole] = React.useState<"buyer" | "seller">("buyer");
   const [step, setStep] = React.useState(1);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState("");
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({});
   const [currentBgIndex, setCurrentBgIndex] = React.useState(0);
+  const [errorPopup, setErrorPopup] = React.useState<{
+    isOpen: boolean;
+    type: "logistics_mismatch" | "buyer_seller_mismatch" | "email_in_use" | "generic";
+    title: string;
+    message: string;
+    email?: string;
+    primaryActionLabel?: string;
+    onPrimaryAction?: () => void;
+  } | null>(null);
 
   // Synchronize mode if prop changes
   React.useEffect(() => {
@@ -298,19 +322,70 @@ export default function AuthPage({
 
     try {
       if (isLogin) {
+        const cleanEmail = email.trim().toLowerCase();
+        
+        // Pre-check: Check if this email is a logistics partner account
+        if (cleanEmail) {
+          try {
+            const logCompanyQ = query(collection(db, "logistics_companies"), where("email", "==", cleanEmail));
+            const logCompanySnap = await getDocs(logCompanyQ);
+            const logUserQ = query(collection(db, "users"), where("email", "==", cleanEmail), where("role", "==", "logistics"));
+            const logUserSnap = await getDocs(logUserQ);
+
+            if (!logCompanySnap.empty || !logUserSnap.empty) {
+              setErrorPopup({
+                isOpen: true,
+                type: "logistics_mismatch",
+                title: "Logistics Partner Account Detected",
+                message: `The email address "${cleanEmail}" is registered as an official Campus Logistics Partner account. This portal is strictly for Buyers and Sellers. Please sign in through the Campus Logistics Hub, or use a separate email address.`,
+                email: cleanEmail,
+                primaryActionLabel: "Go to Campus Logistics Hub",
+                onPrimaryAction: () => {
+                  if (onNavigateToLogistics) {
+                    onNavigateToLogistics();
+                  } else {
+                    handleGoToMarket();
+                  }
+                }
+              });
+              setLoading(false);
+              return;
+            }
+          } catch (preCheckErr) {
+            console.warn("Logistics email pre-check notice:", preCheckErr);
+          }
+        }
+
         try {
           const userCredential = await signInWithEmailAndPassword(auth, email, password);
           const user = userCredential.user;
           const userDoc = await getDoc(doc(db, "users", user.uid));
+          const logisticsDoc = await getDoc(doc(db, "logistics_companies", user.uid));
           
+          if (logisticsDoc.exists() || (userDoc.exists() && (userDoc.data()?.role === "logistics" || userDoc.data()?.state === "Logistics Partner"))) {
+            await signOut(auth);
+            setErrorPopup({
+              isOpen: true,
+              type: "logistics_mismatch",
+              title: "Logistics Partner Account Detected",
+              message: `The email address "${user.email || cleanEmail}" is registered as an official Campus Logistics Partner account. It cannot be used to sign in as a Buyer or Seller. Please use the Campus Logistics Hub to access your fleet operations.`,
+              email: user.email || cleanEmail,
+              primaryActionLabel: "Go to Campus Logistics Hub",
+              onPrimaryAction: () => {
+                if (onNavigateToLogistics) {
+                  onNavigateToLogistics();
+                } else {
+                  handleGoToMarket();
+                }
+              }
+            });
+            setError("This email address is registered as a Logistics Partner account. Please use the Logistics Hub to log in.");
+            setLoading(false);
+            return;
+          }
+
           if (userDoc.exists()) {
             const userData = userDoc.data();
-            if (userData.role === "logistics") {
-              await signOut(auth);
-              setError("This email address is registered as a Logistics Partner account. Please use the Logistics Hub to log in, or sign up with a separate email for Buyer/Seller access.");
-              setLoading(false);
-              return;
-            }
             if (userData.isSuspended) {
               await signOut(auth);
               setError("Your account has been suspended for violating SHOPIVERSITY terms. Please contact support if you believe this is a mistake.");
@@ -337,6 +412,7 @@ export default function AuthPage({
       } else {
         // If we are in "needsProfile" mode, we might already be logged in (e.g. via Google or if account creation succeeded but profile failed)
         let firebaseUser = auth.currentUser;
+        const cleanEmail = email.trim().toLowerCase();
         
         if (!firebaseUser) {
           // Validate fields
@@ -393,22 +469,90 @@ export default function AuthPage({
             setLoading(false);
             return;
           }
+
+          // Check 1: Is this email already registered as a Logistics Partner?
+          try {
+            const logCompanyQ = query(collection(db, "logistics_companies"), where("email", "==", cleanEmail));
+            const logCompanySnap = await getDocs(logCompanyQ);
+            const logUserQ = query(collection(db, "users"), where("email", "==", cleanEmail), where("role", "==", "logistics"));
+            const logUserSnap = await getDocs(logUserQ);
+
+            if (!logCompanySnap.empty || !logUserSnap.empty) {
+              setErrorPopup({
+                isOpen: true,
+                type: "logistics_mismatch",
+                title: "Email Reserved for Logistics",
+                message: `The email address "${cleanEmail}" is already registered as an active Campus Logistics Partner. It cannot be used to register a Buyer or Seller account. Please access the Logistics Hub or register with a different personal email address.`,
+                email: cleanEmail,
+                primaryActionLabel: "Go to Campus Logistics Hub",
+                onPrimaryAction: () => {
+                  if (onNavigateToLogistics) {
+                    onNavigateToLogistics();
+                  } else {
+                    handleGoToMarket();
+                  }
+                }
+              });
+              setLoading(false);
+              return;
+            }
+
+            // Check 2: Has this email already been used to sign up as a user?
+            const existingUserQ = query(collection(db, "users"), where("email", "==", cleanEmail));
+            const existingUserSnap = await getDocs(existingUserQ);
+            if (!existingUserSnap.empty) {
+              setErrorPopup({
+                isOpen: true,
+                type: "email_in_use",
+                title: "Email Already Registered",
+                message: `An account with the email address "${cleanEmail}" is already registered on SHOPIVERSITY. You cannot create a duplicate account with this email. Please sign in to your existing account.`,
+                email: cleanEmail,
+                primaryActionLabel: "Switch to Sign In",
+                onPrimaryAction: () => {
+                  switchAuthMode(true);
+                }
+              });
+              setLoading(false);
+              return;
+            }
+          } catch (preCheckErr) {
+            console.warn("Signup email pre-check notice:", preCheckErr);
+          }
         }
 
         if (!firebaseUser) {
-          const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
-          firebaseUser = userCredential.user;
-          await updateProfile(firebaseUser, { displayName: fullName });
-
           try {
-            const actionCodeSettings = {
-              url: window.location.origin,
-              handleCodeInApp: false
-            };
-            await sendEmailVerification(firebaseUser, actionCodeSettings);
-            console.log(`[FIREBASE AUTH] Verification email dispatched directly to ${email}`);
-          } catch (evErr) {
-            console.warn("sendEmailVerification notice:", evErr);
+            const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
+            firebaseUser = userCredential.user;
+            await updateProfile(firebaseUser, { displayName: fullName });
+
+            try {
+              const actionCodeSettings = {
+                url: window.location.origin,
+                handleCodeInApp: false
+              };
+              await sendEmailVerification(firebaseUser, actionCodeSettings);
+              console.log(`[FIREBASE AUTH] Verification email dispatched directly to ${email}`);
+            } catch (evErr) {
+              console.warn("sendEmailVerification notice:", evErr);
+            }
+          } catch (createErr: any) {
+            if (createErr.code === "auth/email-already-in-use" || createErr.message?.includes("email-already-in-use")) {
+              setErrorPopup({
+                isOpen: true,
+                type: "email_in_use",
+                title: "Email Already Registered",
+                message: `The email address "${cleanEmail}" is already registered on SHOPIVERSITY. You cannot create a duplicate account with this email. Please sign in to your existing account.`,
+                email: cleanEmail,
+                primaryActionLabel: "Switch to Sign In",
+                onPrimaryAction: () => {
+                  switchAuthMode(true);
+                }
+              });
+              setLoading(false);
+              return;
+            }
+            throw createErr;
           }
         }
 
@@ -758,11 +902,42 @@ export default function AuthPage({
 
   const processGoogleUser = async (user: any) => {
     // Check if user is registered as a Logistics partner
+    const cleanGoogleEmail = (user.email || "").toLowerCase();
     const logisticsCompanyDoc = await getDoc(doc(db, "logistics_companies", user.uid));
     const userDoc = await getDoc(doc(db, "users", user.uid));
+    let isLogisticsEmail = false;
 
-    if (logisticsCompanyDoc.exists() || (userDoc.exists() && userDoc.data()?.role === "logistics")) {
+    if (!logisticsCompanyDoc.exists() && cleanGoogleEmail) {
+      try {
+        const logCompanyQ = query(collection(db, "logistics_companies"), where("email", "==", cleanGoogleEmail));
+        const logCompanySnap = await getDocs(logCompanyQ);
+        const logUserQ = query(collection(db, "users"), where("email", "==", cleanGoogleEmail), where("role", "==", "logistics"));
+        const logUserSnap = await getDocs(logUserQ);
+        if (!logCompanySnap.empty || !logUserSnap.empty) {
+          isLogisticsEmail = true;
+        }
+      } catch (e) {
+        console.warn("Google logistics check notice:", e);
+      }
+    }
+
+    if (logisticsCompanyDoc.exists() || isLogisticsEmail || (userDoc.exists() && (userDoc.data()?.role === "logistics" || userDoc.data()?.state === "Logistics Partner"))) {
       await signOut(auth);
+      setErrorPopup({
+        isOpen: true,
+        type: "logistics_mismatch",
+        title: "Logistics Partner Account Detected",
+        message: `This Google account (${user.email}) is registered as a Campus Logistics Fleet Partner. Buyers and Sellers must use a separate personal account. Please access the Campus Logistics Hub to manage your fleet operations.`,
+        email: user.email,
+        primaryActionLabel: "Go to Campus Logistics Hub",
+        onPrimaryAction: () => {
+          if (onNavigateToLogistics) {
+            onNavigateToLogistics();
+          } else {
+            handleGoToMarket();
+          }
+        }
+      });
       setError("This account is registered as a Logistics Partner. Sellers and Buyers must use a separate account.");
       setLoading(false);
       return;
@@ -1139,9 +1314,9 @@ export default function AuthPage({
   }
 
   return (
-    <div className="relative min-h-full min-h-[calc(100vh-65px)] w-full flex-1 flex flex-col items-center justify-center p-4 sm:p-6 sm:py-10 font-sans select-none overflow-x-hidden">
-      {/* High-Quality Rotating Campus Activity Backgrounds - Covers the entire body across the page */}
-      <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
+    <div className="relative min-h-full min-h-[calc(100vh-65px)] w-full flex-1 flex flex-col items-center justify-center p-4 sm:p-6 sm:py-10 font-sans select-none overflow-x-hidden bg-zinc-950">
+      {/* High-Quality Rotating Campus Activity Backgrounds - Fixed full coverage */}
+      <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
         {BACKGROUND_IMAGES.map((img, idx) => {
           const isActive = idx === currentBgIndex;
           return (
@@ -1159,14 +1334,14 @@ export default function AuthPage({
               <img
                 src={img}
                 alt="Campus Marketplace"
-                className="w-full h-full object-cover object-center filter brightness-[0.92] dark:brightness-[0.65] contrast-[1.05] saturate-[1.1]"
+                className="w-full h-full object-cover object-center filter brightness-[0.88] dark:brightness-[0.60] contrast-[1.05] saturate-[1.1]"
                 referrerPolicy="no-referrer"
               />
             </div>
           );
         })}
-        {/* Subtle, balanced overlay keeping photographic background crisp and visible */}
-        <div className="absolute inset-0 bg-black/30 dark:bg-black/55 backdrop-blur-[1px]" />
+        {/* Subtle, balanced dark overlay keeping photographic background crisp while ensuring zero white background bleed */}
+        <div className="absolute inset-0 bg-black/40 dark:bg-black/60 backdrop-blur-[1.5px]" />
       </div>
 
       <motion.div 
@@ -1175,30 +1350,18 @@ export default function AuthPage({
         transition={{ duration: 0.4, ease: "easeOut" }}
         className="w-full max-w-[425px] relative z-10 my-4"
       >
-        {/* Brand Logo & Header Title */}
-        <div className="flex flex-col items-center mb-5 shrink-0 justify-center space-y-3 text-center">
-          <button
-            type="button"
-            onClick={handleGoToMarket}
-            id="auth-card-logo-btn"
-            className="bg-transparent border-none p-0 hover:scale-105 active:scale-95 transition-all cursor-pointer group flex items-center justify-center drop-shadow-md"
-            title="Take me to the Marketplace"
-          >
-            <Logo showText={true} />
-          </button>
-
-          <div>
-            <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-white drop-shadow-md">
-              {isLogin ? "Welcome Back" : "Join Shopiversity"}
-            </h2>
-            <p className="text-xs font-semibold text-white/90 drop-shadow-sm mt-0.5">
-              The Campus Marketplace for Nigerian Universities
-            </p>
-          </div>
+        {/* Header Title (Single unified branding without duplicate logo) */}
+        <div className="flex flex-col items-center mb-5 shrink-0 justify-center space-y-1.5 text-center">
+          <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-white drop-shadow-md">
+            {isLogin ? "Welcome Back" : "Join Shopiversity"}
+          </h2>
+          <p className="text-xs font-semibold text-white/90 drop-shadow-sm">
+            The Campus Marketplace for Nigerian Universities
+          </p>
         </div>
 
         {/* Auth Card with Glassmorphic Elevation */}
-        <div className="bg-white/95 dark:bg-zinc-900/95 backdrop-blur-2xl rounded-3xl border border-white/60 dark:border-zinc-750/80 p-6 sm:p-8 shadow-2xl ring-1 ring-black/5 dark:ring-white/5">
+        <div className="bg-white/95 dark:bg-zinc-900/95 backdrop-blur-2xl rounded-3xl border border-white/60 dark:border-zinc-750/80 p-4 sm:p-6 md:p-8 shadow-2xl ring-1 ring-black/5 dark:ring-white/5">
           <AnimatePresence mode="popLayout">
 
             {isVerificationSuccess ? (
@@ -1637,54 +1800,82 @@ export default function AuthPage({
                   </div>
                 )}
 
-                <div className="flex items-center justify-between mb-5">
-                  <h1 className="text-2xl font-normal text-zinc-900 dark:text-zinc-100 leading-tight">
+                {/* Responsive Mobile-First Sign In / Sign Up Mode Switcher */}
+                <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 dark:bg-zinc-800/90 rounded-xl mb-4 border border-slate-200/70 dark:border-zinc-700/70">
+                  <button
+                    type="button"
+                    onClick={() => switchAuthMode(true)}
+                    className={cn(
+                      "min-h-[40px] sm:min-h-[38px] py-2 px-3 rounded-lg text-xs sm:text-[13px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer touch-manipulation select-none whitespace-nowrap active:scale-95",
+                      isLogin
+                        ? "bg-white dark:bg-zinc-900 text-[#ff6b00] shadow-sm border border-slate-200/80 dark:border-zinc-700"
+                        : "text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-200"
+                    )}
+                  >
+                    <span>Sign In</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => switchAuthMode(false)}
+                    className={cn(
+                      "min-h-[40px] sm:min-h-[38px] py-2 px-3 rounded-lg text-xs sm:text-[13px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer touch-manipulation select-none whitespace-nowrap active:scale-95",
+                      !isLogin
+                        ? "bg-[#ff6b00] text-white shadow-sm"
+                        : "text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-200"
+                    )}
+                  >
+                    <span>Sign Up</span>
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between gap-2 mb-4">
+                  <h1 className="text-xl sm:text-2xl font-bold text-zinc-900 dark:text-zinc-100 leading-tight">
                     {isLogin ? "Sign-In" : "Create Account"}
                   </h1>
                   <button
                     type="button"
-                    onClick={() => window.location.href = "/"}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-800 rounded-md cursor-pointer"
+                    onClick={handleGoToMarket}
+                    className="min-h-[34px] flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 transition-all bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-800 rounded-lg cursor-pointer touch-manipulation active:scale-95 whitespace-nowrap shrink-0"
                     title="Back to Home Page"
                     id="back-to-home-auth-header"
                   >
-                    <Home className="w-3.5 h-3.5 text-zinc-500" />
+                    <Home className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
                     <span className="font-bold text-[11px]">Home</span>
                   </button>
                 </div>
 
                 {/* Buyer/Seller Selection (Only for SignUp) */}
                 {!isLogin && (
-                  <div className="mb-4 space-y-1">
+                  <div className="mb-4 space-y-1.5">
                     <span className="block text-xs font-bold text-zinc-800 dark:text-zinc-300">
                       I want to register as a:
                     </span>
-                    <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 dark:bg-zinc-800 rounded">
+                    <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 dark:bg-zinc-800 rounded-xl">
                       <button 
                         type="button"
                         onClick={() => setRole("buyer")}
                         className={cn(
-                          "py-1.5 px-3 rounded text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer",
+                          "min-h-[38px] py-1.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer touch-manipulation active:scale-95 whitespace-nowrap",
                           role === "buyer" 
                             ? "bg-white dark:bg-zinc-700 text-slate-900 dark:text-white shadow-sm border border-slate-200 dark:border-zinc-800" 
                             : "text-slate-500 hover:text-slate-800 dark:hover:text-zinc-205"
                         )}
                       >
-                        <ShoppingBag className="w-3.5 h-3.5" />
-                        Buyer
+                        <ShoppingBag className="w-3.5 h-3.5 shrink-0" />
+                        <span>Buyer</span>
                       </button>
                       <button 
                         type="button"
                         onClick={() => setRole("seller")}
                         className={cn(
-                          "py-1.5 px-3 rounded text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer",
+                          "min-h-[38px] py-1.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer touch-manipulation active:scale-95 whitespace-nowrap",
                           role === "seller" 
                             ? "bg-white dark:bg-zinc-700 text-slate-905 dark:text-white shadow-sm border border-slate-202 dark:border-zinc-808" 
                             : "text-slate-500 hover:text-slate-800 dark:hover:text-zinc-205"
                         )}
                       >
-                        <Store className="w-3.5 h-3.5" />
-                        Seller
+                        <Store className="w-3.5 h-3.5 shrink-0" />
+                        <span>Seller</span>
                       </button>
                     </div>
                   </div>
@@ -1869,10 +2060,10 @@ export default function AuthPage({
                     <button 
                       type="submit"
                       disabled={loading || isVerifyingId}
-                      className="w-full h-9 bg-gradient-to-b from-[#ffd814] to-[#f7ca00] hover:brightness-95 active:brightness-90 text-zinc-950 font-bold rounded-lg border border-[#a88734] transition-all text-xs font-semibold shadow-sm flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      className="w-full min-h-[44px] sm:min-h-[42px] py-2.5 px-4 bg-gradient-to-b from-[#ffd814] to-[#f7ca00] hover:brightness-95 active:scale-[0.98] text-zinc-950 font-bold rounded-xl border border-[#a88734] transition-all text-xs sm:text-sm shadow-sm flex items-center justify-center gap-2 cursor-pointer touch-manipulation select-none whitespace-nowrap disabled:opacity-50"
                     >
                       {loading ? (
-                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        <div className="w-4 h-4 border-2 border-zinc-950 border-t-transparent rounded-full animate-spin" />
                       ) : (
                         <span>{isLogin ? "Sign-In" : "Create Account"}</span>
                       )}
@@ -1911,9 +2102,9 @@ export default function AuthPage({
                     type="button"
                     onClick={handleGoogleSignIn}
                     disabled={loading}
-                    className="w-full h-9 bg-white dark:bg-zinc-800 border border-slate-350 dark:border-zinc-700 text-slate-700 dark:text-zinc-100 rounded text-xs font-semibold flex items-center justify-center gap-2 hover:bg-slate-50 dark:hover:bg-zinc-750 transition-colors shadow-sm cursor-pointer disabled:opacity-50"
+                    className="w-full min-h-[44px] sm:min-h-[42px] py-2.5 px-4 bg-white dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 text-slate-700 dark:text-zinc-100 rounded-xl text-xs sm:text-sm font-semibold flex items-center justify-center gap-2.5 hover:bg-slate-50 dark:hover:bg-zinc-750 active:scale-[0.98] transition-all shadow-sm cursor-pointer touch-manipulation select-none whitespace-nowrap disabled:opacity-50"
                   >
-                    <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-[15px] h-[15px]" alt="Google logo" />
+                    <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-4 h-4 shrink-0" alt="Google logo" />
                     <span>Continue with Google</span>
                   </button>
                 </div>
@@ -1925,13 +2116,9 @@ export default function AuthPage({
                   </p>
                   
                   <button 
-                    onClick={() => {
-                      setIsLogin(!isLogin);
-                      setStep(1);
-                      setError("");
-                      setFieldErrors({});
-                    }}
-                    className="w-full h-[34px] bg-gradient-to-b from-[#fafafa] to-[#f4f4f4] hover:from-[#f4f4f4] hover:to-[#e7e7e7] dark:from-[#3a3a3a] dark:to-[#2e2e2e] dark:hover:from-[#2e2e2e] dark:hover:to-[#222222] border border-slate-350 dark:border-zinc-700 text-slate-800 dark:text-zinc-200 rounded text-xs font-bold transition-all shadow-sm cursor-pointer"
+                    type="button"
+                    onClick={() => switchAuthMode(!isLogin)}
+                    className="w-full min-h-[42px] sm:min-h-[40px] py-2 px-4 bg-gradient-to-b from-[#fafafa] to-[#f4f4f4] hover:from-[#f4f4f4] hover:to-[#e7e7e7] dark:from-[#3a3a3a] dark:to-[#2e2e2e] dark:hover:from-[#2e2e2e] dark:hover:to-[#222222] border border-slate-300 dark:border-zinc-700 text-slate-800 dark:text-zinc-200 rounded-xl text-xs font-bold transition-all shadow-sm cursor-pointer touch-manipulation select-none active:scale-[0.98] whitespace-nowrap"
                   >
                     {isLogin ? "Create your SHOPIVERSITY account" : "Sign-In with existing account"}
                   </button>
@@ -2104,6 +2291,20 @@ export default function AuthPage({
               </div>
             )}
           </AnimatePresence>
+
+          {/* Auth Error Popup Modal */}
+          {errorPopup && (
+            <AuthErrorModal
+              isOpen={errorPopup.isOpen}
+              onClose={() => setErrorPopup(null)}
+              type={errorPopup.type}
+              title={errorPopup.title}
+              message={errorPopup.message}
+              email={errorPopup.email}
+              primaryActionLabel={errorPopup.primaryActionLabel}
+              onPrimaryAction={errorPopup.onPrimaryAction}
+            />
+          )}
         </div>
       </motion.div>
     </div>

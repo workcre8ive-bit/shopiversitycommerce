@@ -889,12 +889,11 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
       order.deliveryStatus === "picked_up" ||
       order.logisticsStatus === "transit" ||
       order.logisticsStatus === "picked_up" ||
-      (order.deliveryType === "delivery" && (
-        order.logisticsOfferStatus === "accepted" ||
-        Boolean(order.logisticsAcceptedAt) ||
-        s === "Order Picked Up" ||
-        s === "picked_up"
-      ))
+      order.logisticsOfferStatus === "accepted" ||
+      Boolean(order.logisticsAcceptedAt) ||
+      Boolean(order.productHandedOver) ||
+      Boolean(order.sellerHandoverVerified) ||
+      s === "Order Picked Up"
     ) {
       return "transit";
     }

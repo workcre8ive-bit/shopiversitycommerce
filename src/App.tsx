@@ -9,7 +9,6 @@ import {
   onSnapshot, 
   doc,
   updateDoc,
-  getDocFromServer,
   getDocs,
   addDoc,
   getDoc
@@ -358,6 +357,15 @@ export default function App() {
     if (newTab === "settings") {
       setSettingsSubView("hub");
     }
+    if (newTab === "auth") {
+      setAuthMode("login");
+      setViewingProduct(null);
+      setViewingSellerId(null);
+    } else if (newTab === "signup") {
+      setAuthMode("signup");
+      setViewingProduct(null);
+      setViewingSellerId(null);
+    }
     setActiveTabState((prev) => {
       if (prev !== newTab) {
         setTabHistory((history) => {
@@ -683,10 +691,10 @@ export default function App() {
 
             setCurrentUser(profile);
             
-            if (profile.state === "Logistics Partner") {
-              setActiveRole("buyer");
+            if (profile.state === "Logistics Partner" || profile.role === "logistics") {
+              setActiveTab("logistics");
             } else if (profile.role === "admin") {
-                setActiveRole(profile.activeRole || "buyer");
+              setActiveRole(profile.activeRole || "buyer");
             } else if (profile.role === "both") {
               setActiveRole(profile.activeRole || "buyer");
             } else if (profile.role === "seller") {
@@ -696,7 +704,7 @@ export default function App() {
             }
 
             if (!initialTabSet.current) {
-              if (profile.state === "Logistics Partner") {
+              if (profile.state === "Logistics Partner" || profile.role === "logistics") {
                 setActiveTab("logistics");
               } else {
                 const startRole = profile.activeRole || (profile.role === "seller" ? "seller" : "buyer");
@@ -1249,11 +1257,11 @@ export default function App() {
           className="bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md text-zinc-800 dark:text-zinc-100 border-b border-slate-100 dark:border-zinc-800/80 sticky top-0 z-[120] shrink-0 select-none font-sans px-3 sm:px-6 h-14 flex items-center justify-between shadow-sm"
         >
           {/* Left: App title or dynamic back button */}
-          <div className="flex items-center gap-1.5 sm:gap-2">
+          <div className="flex items-center gap-1 sm:gap-2 min-w-0 shrink">
             {viewingSellerId || viewingProduct || (activeTab !== "market" && activeTab !== "search" && activeTab !== "messages" && activeTab !== "orders" && activeTab !== "settings" && activeTab !== "dashboard") ? (
               <button 
                 onClick={handleGoBack} 
-                className="p-1.5 hover:bg-slate-100 dark:hover:bg-zinc-800/80 rounded-xl text-[#ff6b00] active:scale-90 transition-all cursor-pointer border-none shrink-0"
+                className="p-1.5 hover:bg-slate-100 dark:hover:bg-zinc-800/80 rounded-xl text-[#ff6b00] active:scale-90 transition-all cursor-pointer border-none shrink-0 touch-manipulation"
                 title="Go Back"
               >
                 <ArrowLeft className="w-5 h-5" />
@@ -1261,7 +1269,7 @@ export default function App() {
             ) : (
               <button
                 onClick={() => setIsSidebarOpen(true)}
-                className="p-1 hover:bg-slate-100 dark:hover:bg-zinc-800/80 rounded-xl text-[#ff6b00] active:scale-95 transition-all cursor-pointer border-none flex items-center justify-center shrink-0"
+                className="p-1 hover:bg-slate-100 dark:hover:bg-zinc-800/80 rounded-xl text-[#ff6b00] active:scale-95 transition-all cursor-pointer border-none flex items-center justify-center shrink-0 touch-manipulation"
                 title="Open Navigation Menu"
               >
                 <Menu className="w-5 h-5" />
@@ -1269,7 +1277,9 @@ export default function App() {
             )}
             <Logo 
               onClick={() => {
-                if (activeTab === "auth" || activeTab === "signup" || !currentUser) {
+                if (currentUser?.state === "Logistics Partner" || currentUser?.role === "logistics") {
+                  setActiveTab("logistics");
+                } else if (activeTab === "auth" || activeTab === "signup" || !currentUser) {
                   setActiveRole("buyer");
                   setActiveTab("market");
                 } else if (activeRole === "seller") {
@@ -1282,7 +1292,7 @@ export default function App() {
                 setFilterCategory("All");
                 setSearchQuery("");
               }} 
-              className="ml-0.5 sm:ml-1 shrink-0 cursor-pointer" 
+              className="ml-0.5 sm:ml-1 min-w-0 cursor-pointer" 
             />
           </div>
 
@@ -1314,35 +1324,49 @@ export default function App() {
         {/* Right actions: Theme toggle, Cart / Sign Up, and Sign Out */}
         <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
           {(!currentUser || !auth.currentUser) ? (
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
               <button 
                 id="header-signin-btn"
+                type="button"
                 onClick={() => {
+                  setViewingProduct(null);
+                  setViewingSellerId(null);
                   setAuthMode("login");
                   setActiveTab("auth");
                 }}
-                className="px-2.5 py-1.5 hover:bg-slate-100 dark:hover:bg-zinc-800 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 transition-all cursor-pointer border-none"
+                className={cn(
+                  "min-h-[34px] sm:min-h-[38px] px-2.5 sm:px-3.5 py-1.5 rounded-xl text-[11px] sm:text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 touch-manipulation select-none active:scale-95 flex items-center justify-center border",
+                  (activeTab === "auth" || (isTabRestricted && authMode === "login"))
+                    ? "bg-slate-900 dark:bg-white text-white dark:text-zinc-900 border-slate-900 dark:border-white shadow-sm"
+                    : "bg-slate-100/90 hover:bg-slate-200/80 dark:bg-zinc-800/90 dark:hover:bg-zinc-700 text-slate-800 dark:text-zinc-100 border-slate-200/80 dark:border-zinc-700/80"
+                )}
                 title="Log In / Sign In"
               >
                 <span>Sign In</span>
               </button>
               <button 
                 id="header-signup-btn"
+                type="button"
                 onClick={() => {
+                  setViewingProduct(null);
+                  setViewingSellerId(null);
                   setAuthMode("signup");
                   setActiveTab("signup");
                 }}
-                className="flex items-center gap-1.5 px-3 py-1.5 sm:px-3.5 sm:py-1.5 bg-[#ff6b00] hover:bg-[#ea6200] active:scale-95 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer border-none"
+                className={cn(
+                  "min-h-[34px] sm:min-h-[38px] flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 bg-[#ff6b00] hover:bg-[#ea6200] active:scale-95 text-white rounded-xl text-[11px] sm:text-xs font-bold shadow-sm shadow-orange-500/20 transition-all cursor-pointer border-none whitespace-nowrap shrink-0 touch-manipulation select-none",
+                  (activeTab === "signup" || (isTabRestricted && authMode === "signup")) && "ring-2 ring-orange-300 dark:ring-orange-500/50"
+                )}
                 title="Sign Up / Create Account"
               >
-                <UserPlus className="w-4 h-4 shrink-0" />
+                <UserPlus className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
                 <span>Sign Up</span>
               </button>
             </div>
           ) : (
             <>
-              {/* Cart with count (only when user has logged in / signed up) */}
-              {(activeRole === "buyer" || cart.length > 0) && (
+              {/* Cart with count: strictly for buyers when browsing outside dashboards/logistics (hidden in sellers, buyer dashboard, seller dashboard, and logistics) */}
+              {activeRole === "buyer" && activeTab !== "dashboard" && activeTab !== "logistics" && currentUser?.state !== "Logistics Partner" && currentUser?.role !== "logistics" && (
                 <button 
                   id="header-cart-btn"
                   onClick={() => setActiveTab("cart")}
@@ -1427,7 +1451,7 @@ export default function App() {
           )}
 
           <AnimatePresence mode="wait">
-            {!currentUser && isTabRestricted ? (
+            {(!currentUser || !auth.currentUser) && isTabRestricted ? (
               <motion.div
                 key="auth"
                 initial={{ opacity: 0, y: 10 }}
@@ -1438,6 +1462,10 @@ export default function App() {
                 <AuthPage 
                   initialNeedsProfile={needsProfile} 
                   initialMode={authMode} 
+                  onModeChange={(mode) => {
+                    setAuthMode(mode);
+                    setActiveTabState(mode === "login" ? "auth" : "signup");
+                  }}
                   onGoToMarket={() => {
                     setActiveRole("buyer");
                     setActiveTab("market");
@@ -1445,6 +1473,9 @@ export default function App() {
                     setViewingSellerId(null);
                     setFilterCategory("All");
                     setSearchQuery("");
+                  }}
+                  onNavigateToLogistics={() => {
+                    setActiveTab("logistics");
                   }}
                 />
               </motion.div>
@@ -1974,7 +2005,7 @@ export default function App() {
                   })()}
                 </div>
               </motion.div>
-            ) : activeTab === "dashboard" && activeRole === "buyer" ? (
+            ) : activeTab === "dashboard" && activeRole === "buyer" && currentUser?.state !== "Logistics Partner" && currentUser?.role !== "logistics" ? (
               <motion.div
                 key="buyer-dashboard"
                 initial={{ opacity: 0, y: 10 }}
@@ -2162,7 +2193,16 @@ export default function App() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
               >
-                <LogisticsHub onBackToMarket={() => setActiveTab("market")} />
+                <LogisticsHub 
+                  onBackToMarket={() => {
+                    setActiveRole("buyer");
+                    setActiveTab("market");
+                  }} 
+                  onNavigateToAuth={(mode) => {
+                    setAuthMode(mode || "login");
+                    setActiveTab("auth");
+                  }}
+                />
               </motion.div>
             ) : (
               <motion.div 

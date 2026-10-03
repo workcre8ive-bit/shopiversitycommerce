@@ -1,8 +1,9 @@
 import React from "react";
 import { auth, db, googleProvider } from "../firebase";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
-import { generateReferralCode, cn, getOrderDeliveryPin } from "../lib/utils";
+import { generateReferralCode, cn, getOrderDeliveryPin, getOrderSellerHandoverPin, cleanPinInput } from "../lib/utils";
 import Logo from "./Logo";
+import AuthErrorModal from "./AuthErrorModal";
 import { 
   createUserWithEmailAndPassword, 
   signInWithEmailAndPassword, 
@@ -127,11 +128,26 @@ interface DeliveryJob {
   updatedAt: string;
 }
 
-export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () => void }) {
+export default function LogisticsHub({ 
+  onBackToMarket,
+  onNavigateToAuth
+}: { 
+  onBackToMarket: () => void;
+  onNavigateToAuth?: (mode?: "login" | "signup") => void;
+}) {
   const [view, setView] = React.useState<"splash" | "login" | "signup" | "verify" | "dashboard">("splash");
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState("");
   const [successMsg, setSuccessMsg] = React.useState("");
+  const [errorPopup, setErrorPopup] = React.useState<{
+    isOpen: boolean;
+    type: "logistics_mismatch" | "buyer_seller_mismatch" | "email_in_use" | "generic";
+    title: string;
+    message: string;
+    email?: string;
+    primaryActionLabel?: string;
+    onPrimaryAction?: () => void;
+  } | null>(null);
 
   // Auth User state
   const [companyProfile, setCompanyProfile] = React.useState<LogisticsCompany | null>(null);
@@ -281,11 +297,19 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
     }
   };
 
-  // Courier Delivery OTP verification states
+  // Courier PIN verification states (supports both seller handover & buyer delivery PINs)
   const [otpModalJob, setOtpModalJob] = React.useState<DeliveryJob | null>(null);
+  const [otpModalType, setOtpModalType] = React.useState<"seller" | "buyer">("buyer");
   const [otpInput, setOtpInput] = React.useState("");
   const [otpError, setOtpError] = React.useState<string | null>(null);
   const [verifyingOtp, setVerifyingOtp] = React.useState(false);
+
+  const handleOpenOtpModal = (job: DeliveryJob, type: "seller" | "buyer" = "buyer") => {
+    setOtpModalJob(job);
+    setOtpModalType(type);
+    setOtpInput("");
+    setOtpError(null);
+  };
 
   // Delivery Attempt / Failure Reporting states
   const [failureModalJob, setFailureModalJob] = React.useState<DeliveryJob | null>(null);
@@ -705,10 +729,46 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
   }, [deliveryHistory, historyStatusFilter, historySearchQuery, historySortBy]);
 
   const processLogisticsGoogleUser = async (user: any) => {
+    const cleanGoogleEmail = (user.email || "").toLowerCase();
     // Check if user is already registered as a Buyer/Seller account
     const userDocSnap = await getDoc(doc(db, "users", user.uid));
-    if (userDocSnap.exists() && userDocSnap.data()?.role !== "logistics") {
+    let isBuyerSeller = false;
+
+    if (userDocSnap.exists() && userDocSnap.data()?.role !== "logistics" && userDocSnap.data()?.state !== "Logistics Partner") {
+      isBuyerSeller = true;
+    } else if (cleanGoogleEmail) {
+      try {
+        const usersRef = collection(db, "users");
+        const q = query(usersRef, where("email", "==", cleanGoogleEmail));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          const u = snap.docs[0].data();
+          if (u.role !== "logistics" && u.state !== "Logistics Partner") {
+            isBuyerSeller = true;
+          }
+        }
+      } catch (checkErr) {
+        console.warn("Logistics Google user check:", checkErr);
+      }
+    }
+
+    if (isBuyerSeller) {
       await signOut(auth);
+      setErrorPopup({
+        isOpen: true,
+        type: "buyer_seller_mismatch",
+        title: "Student Account Detected",
+        message: `This Google account (${user.email}) is already registered as a Buyer or Seller account on SHOPIVERSITY. Logistics fleet partners must use a separate, dedicated company email address to access the Logistics Hub.`,
+        email: user.email,
+        primaryActionLabel: "Go to Student Marketplace",
+        onPrimaryAction: () => {
+          if (onNavigateToAuth) {
+            onNavigateToAuth("login");
+          } else {
+            onBackToMarket();
+          }
+        }
+      });
       setError("This account is registered as a Buyer or Seller. Logistics partners must use a separate email address.");
       setLoading(false);
       return;
@@ -825,22 +885,64 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
     setError("");
     setLoading(true);
 
+    const cleanEmail = loginEmail.trim().toLowerCase();
+
+    // Check if this email is registered as a Buyer/Seller account
+    try {
+      const usersRef = collection(db, "users");
+      const q = query(usersRef, where("email", "==", cleanEmail));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const uData = snap.docs[0].data();
+        if (uData.role !== "logistics" && uData.state !== "Logistics Partner") {
+          setErrorPopup({
+            isOpen: true,
+            type: "buyer_seller_mismatch",
+            title: "Student Account Detected",
+            message: `The email address "${cleanEmail}" is registered as a Buyer/Seller student account on SHOPIVERSITY. Logistics partners must use a separate, dedicated company email address to access the Logistics Hub.`,
+            email: cleanEmail,
+            primaryActionLabel: "Sign In as Buyer/Seller",
+            onPrimaryAction: () => {
+              if (onNavigateToAuth) {
+                onNavigateToAuth("login");
+              } else {
+                onBackToMarket();
+              }
+            }
+          });
+          setLoading(false);
+          return;
+        }
+      }
+    } catch (checkErr) {
+      console.warn("Logistics email login check:", checkErr);
+    }
+
     try {
       const userCredential = await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
       const user = userCredential.user;
       
       const userDocSnap = await getDoc(doc(db, "users", user.uid));
-      if (userDocSnap.exists() && userDocSnap.data()?.role !== "logistics") {
-        await signOut(auth);
-        setError("This account is registered as a Buyer/Seller account. Please log in through the main user portal or use a dedicated logistics email.");
-        setLoading(false);
-        return;
-      }
-
       const docSnap = await getDoc(doc(db, "logistics_companies", user.uid));
-      if (!docSnap.exists()) {
+
+      if ((userDocSnap.exists() && userDocSnap.data()?.role !== "logistics" && userDocSnap.data()?.state !== "Logistics Partner") || !docSnap.exists()) {
         await signOut(auth);
-        setError("This account is not registered as a Logistics Partner. Please register a new logistics account with a separate email.");
+        setErrorPopup({
+          isOpen: true,
+          type: "buyer_seller_mismatch",
+          title: "Student Account Detected",
+          message: `The email address "${user.email || cleanEmail}" is registered as a Buyer or Seller account. Logistics partners must use a dedicated company email to log in to the Logistics Hub.`,
+          email: user.email || cleanEmail,
+          primaryActionLabel: "Sign In as Buyer/Seller",
+          onPrimaryAction: () => {
+            if (onNavigateToAuth) {
+              onNavigateToAuth("login");
+            } else {
+              onBackToMarket();
+            }
+          }
+        });
+        setError("This account is registered as a Buyer/Seller account. Please log in through the main user portal or use a dedicated logistics email.");
         setLoading(false);
         return;
       }
@@ -881,25 +983,71 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
     }
     if (password !== confirmPassword) return setError("Passwords do not match.");
 
+    const cleanEmail = email.trim().toLowerCase();
     setLoading(true);
     try {
       const usersRef = collection(db, "users");
-      const q = query(usersRef, where("email", "==", email.trim().toLowerCase()));
+      const q = query(usersRef, where("email", "==", cleanEmail));
       const snap = await getDocs(q);
       if (!snap.empty) {
         const existingData = snap.docs[0].data();
-        if (existingData.role !== "logistics") {
-          setError("This email address is already registered as a Buyer or Seller account. Logistics partners must use a separate email address.");
+        if (existingData.role !== "logistics" && existingData.state !== "Logistics Partner") {
+          setErrorPopup({
+            isOpen: true,
+            type: "buyer_seller_mismatch",
+            title: "Student Account Detected",
+            message: `The email address "${cleanEmail}" is already registered as a Buyer or Seller account on SHOPIVERSITY. Logistics fleet partners must use a separate company email address.`,
+            email: cleanEmail,
+            primaryActionLabel: "Go to Student Marketplace",
+            onPrimaryAction: () => {
+              if (onNavigateToAuth) {
+                onNavigateToAuth("login");
+              } else {
+                onBackToMarket();
+              }
+            }
+          });
           setLoading(false);
           return;
         } else {
-          setError("An account with this email address is already registered as a Logistics Partner. Please log in instead.");
+          setErrorPopup({
+            isOpen: true,
+            type: "email_in_use",
+            title: "Logistics Account Already Exists",
+            message: `A logistics fleet account with the email "${cleanEmail}" is already registered. Please log in using your company credentials.`,
+            email: cleanEmail,
+            primaryActionLabel: "Switch to Logistics Login",
+            onPrimaryAction: () => {
+              setView("login");
+              setLoginEmail(cleanEmail);
+            }
+          });
           setLoading(false);
           return;
         }
       }
+
+      const logCompRef = collection(db, "logistics_companies");
+      const logCompQ = query(logCompRef, where("email", "==", cleanEmail));
+      const logCompSnap = await getDocs(logCompQ);
+      if (!logCompSnap.empty) {
+        setErrorPopup({
+          isOpen: true,
+          type: "email_in_use",
+          title: "Logistics Account Already Exists",
+          message: `A logistics fleet account with the email "${cleanEmail}" is already registered. Please log in using your company credentials.`,
+          email: cleanEmail,
+          primaryActionLabel: "Switch to Logistics Login",
+          onPrimaryAction: () => {
+            setView("login");
+            setLoginEmail(cleanEmail);
+          }
+        });
+        setLoading(false);
+        return;
+      }
     } catch (checkErr) {
-      console.warn("Email pre-check failed, proceeding to verification", checkErr);
+      console.warn("Logistics register pre-check:", checkErr);
     } finally {
       setLoading(false);
     }
@@ -919,10 +1067,11 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
       return setError("Invalid verification code. Please enter the code shown below.");
     }
 
+    const cleanEmail = email.trim().toLowerCase();
     setLoading(true);
     try {
       // Create user in standard firebase auth
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
       const user = userCredential.user;
 
       try {
@@ -940,7 +1089,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
         id: user.uid,
         companyName,
         rcNumber,
-        email,
+        email: cleanEmail,
         phoneNumber,
         officeAddress,
         vehicleTypes: selectedVehicles,
@@ -962,7 +1111,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
         uid: user.uid,
         displayName: companyName,
         username: companyName.toLowerCase().replace(/[^a-z0-9]/g, "") + "_logistics",
-        email: email,
+        email: cleanEmail,
         phoneNumber: phoneNumber,
         role: "logistics",
         referralCode,
@@ -1012,6 +1161,21 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
       setConfirmPassword("");
     } catch (err: any) {
       console.error("Verification and creation error:", err);
+      if (err.code === "auth/email-already-in-use" || err.message?.includes("email-already-in-use")) {
+        setErrorPopup({
+          isOpen: true,
+          type: "email_in_use",
+          title: "Email Already Registered",
+          message: `The email address "${cleanEmail}" has already been used to register an account on SHOPIVERSITY. If this is your logistics fleet account, please log in.`,
+          email: cleanEmail,
+          primaryActionLabel: "Switch to Logistics Login",
+          onPrimaryAction: () => {
+            setView("login");
+            setLoginEmail(cleanEmail);
+          }
+        });
+        return;
+      }
       setError(err.message || "Failed to complete signup. Email might already be in use.");
     } finally {
       setLoading(false);
@@ -1032,30 +1196,46 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
       const actualOrderId = jobItem?.orderId || jobId.replace("DLV_", "");
 
       // 1. Fetch existing order data first
-      const orderRef = doc(db, "orders", actualOrderId);
-      const orderSnap = await getDoc(orderRef);
+      let orderRef = doc(db, "orders", actualOrderId);
+      let orderSnap = await getDoc(orderRef);
+      if (!orderSnap.exists()) {
+        const qUnique = query(collection(db, "orders"), where("uniqueOrderId", "==", actualOrderId));
+        const snapUnique = await getDocs(qUnique);
+        if (!snapUnique.empty) {
+          orderRef = snapUnique.docs[0].ref;
+          orderSnap = snapUnique.docs[0];
+        }
+      }
       const orderData = orderSnap.exists() ? orderSnap.data() : {};
+
+      const deliveryPin = orderData.deliveryPin || orderData.deliveryOtp || getOrderDeliveryPin({ id: actualOrderId, ...orderData });
+      const sellerPin = orderData.sellerHandoverPin || orderData.sellerHandoverOtp || getOrderSellerHandoverPin({ id: actualOrderId, ...orderData });
 
       // 2. Update / create logistics_deliveries doc with setDoc merge
       const deliveryDocId = jobId.startsWith("DLV_") ? jobId : `DLV_${actualOrderId}`;
       const jobDocRef = doc(db, "logistics_deliveries", deliveryDocId);
       await setDoc(jobDocRef, {
         orderId: actualOrderId,
+        uniqueOrderId: orderData.uniqueOrderId || actualOrderId,
         status: "accepted",
         logisticsId: companyProfile.id,
         logisticsName: companyProfile.companyName,
         logisticsPhone: companyProfile.phoneNumber,
         deliveryPrice: jobItem?.deliveryPrice || courierPrice,
         estimatedDeliveryTimeline: timeline,
-        productName: jobItem?.productName || "Campus Order",
-        buyerName: jobItem?.buyerName || "Buyer",
-        buyerPhone: jobItem?.buyerPhone || "",
-        buyerAddress: jobItem?.buyerAddress || "",
+        productName: jobItem?.productName || orderData.productName || "Campus Order",
+        buyerName: jobItem?.buyerName || orderData.buyerName || "Buyer",
+        buyerPhone: jobItem?.buyerPhone || orderData.buyerPhone || orderData.phoneNumber || "",
+        buyerAddress: jobItem?.buyerAddress || orderData.deliveryAddress || orderData.address || "",
         sellerName: jobItem?.sellerName || orderData.sellerName || "Merchant",
         sellerPhone: jobItem?.sellerPhone || orderData.sellerPhone || orderData.sellerPhoneNumber || "",
         sellerAddress: jobItem?.sellerAddress || orderData.sellerAddress || "",
         sellerId: jobItem?.sellerId || orderData.sellerId || "",
-        campus: jobItem?.campus || "Campus",
+        campus: jobItem?.campus || orderData.pickupSchool || orderData.campus || "Campus",
+        deliveryOtp: deliveryPin,
+        deliveryPin: deliveryPin,
+        sellerHandoverPin: sellerPin,
+        sellerHandoverOtp: sellerPin,
         updatedAt: new Date().toISOString()
       }, { merge: true });
 
@@ -1079,6 +1259,10 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
           deliveryPrice: finalDeliveryPrice,
           itemSubtotal: itemSubtotal,
           totalPrice: newTotalPrice,
+          deliveryOtp: deliveryPin,
+          deliveryPin: deliveryPin,
+          sellerHandoverPin: sellerPin,
+          sellerHandoverOtp: sellerPin,
           logisticsEstimatedDeliveryTimeline: timeline,
           kwikRiderId: `CAMPUS-${companyProfile.companyName.toUpperCase().replace(/\s+/g, "-")}`,
           kwikTrackingUrl: "local_logistics",
@@ -1139,8 +1323,16 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
       }, { merge: true });
 
       // Also find the related order in standard orders and update its status
-      const orderRef = doc(db, "orders", actualOrderId);
-      const orderSnap = await getDoc(orderRef);
+      let orderRef = doc(db, "orders", actualOrderId);
+      let orderSnap = await getDoc(orderRef);
+      if (!orderSnap.exists()) {
+        const qUnique = query(collection(db, "orders"), where("uniqueOrderId", "==", actualOrderId));
+        const snapUnique = await getDocs(qUnique);
+        if (!snapUnique.empty) {
+          orderRef = snapUnique.docs[0].ref;
+          orderSnap = snapUnique.docs[0];
+        }
+      }
       if (orderSnap.exists()) {
         const orderData = orderSnap.data();
         await updateDoc(orderRef, {
@@ -1212,8 +1404,16 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
       }, { merge: true });
 
       // Also update standard order with precise status mapping
-      const orderRef = doc(db, "orders", actualOrderId);
-      const orderSnap = await getDoc(orderRef);
+      let orderRef = doc(db, "orders", actualOrderId);
+      let orderSnap = await getDoc(orderRef);
+      if (!orderSnap.exists()) {
+        const qUnique = query(collection(db, "orders"), where("uniqueOrderId", "==", actualOrderId));
+        const snapUnique = await getDocs(qUnique);
+        if (!snapUnique.empty) {
+          orderRef = snapUnique.docs[0].ref;
+          orderSnap = snapUnique.docs[0];
+        }
+      }
       if (orderSnap.exists()) {
         const orderData = orderSnap.data();
         const mappedDeliveryStatus = nextStatus === "picked_up" ? "transit" : nextStatus === "in_transit" ? "out_for_delivery" : "delivered";
@@ -1239,53 +1439,61 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
         await updateDoc(orderRef, updateData);
 
         if (orderData.buyerId) {
-          await addDoc(collection(db, "notifications"), {
-            userId: orderData.buyerId,
-            title: notifTitle,
-            message: notifMsg,
-            type: "order",
-            orderId: actualOrderId,
-            isRead: false,
-            createdAt: new Date().toISOString()
-          });
+          try {
+            await addDoc(collection(db, "notifications"), {
+              userId: orderData.buyerId,
+              title: notifTitle,
+              message: notifMsg,
+              type: "order",
+              orderId: actualOrderId,
+              isRead: false,
+              createdAt: new Date().toISOString()
+            });
+          } catch (notifErr) {
+            console.warn("Could not send buyer notification:", notifErr);
+          }
         }
 
         // Notify seller so progress updates immediately in real-time
         if (orderData.sellerId) {
-          let sellerNotifTitle = "Delivery Update 📦";
-          let sellerNotifMsg = `${companyProfile.companyName} updated delivery status for "${orderData.productName || 'Order'}".`;
-          if (nextStatus === "picked_up") {
-            sellerNotifTitle = "Product Handed Over to Logistics 🚚";
-            sellerNotifMsg = `${companyProfile.companyName} confirmed receipt of "${orderData.productName || 'product'}" from you. It is now in transit to the buyer.`;
-          } else if (nextStatus === "in_transit") {
-            sellerNotifTitle = "Courier Out For Doorstep Delivery 🚀";
-            sellerNotifMsg = `${companyProfile.companyName} is arriving at the buyer's destination for "${orderData.productName || 'product'}".`;
-          } else if (nextStatus === "delivered") {
-            sellerNotifTitle = "Product Handed Over to Buyer! 🎉";
-            sellerNotifMsg = `${companyProfile.companyName} verified the delivery PIN and delivered "${orderData.productName || 'product'}" to the buyer. Escrow funds will disburse upon buyer confirmation.`;
+          try {
+            let sellerNotifTitle = "Delivery Update 📦";
+            let sellerNotifMsg = `${companyProfile.companyName} updated delivery status for "${orderData.productName || 'Order'}".`;
+            if (nextStatus === "picked_up") {
+              sellerNotifTitle = "Product Handed Over to Logistics 🚚";
+              sellerNotifMsg = `${companyProfile.companyName} confirmed receipt of "${orderData.productName || 'product'}" from you. It is now in transit to the buyer.`;
+            } else if (nextStatus === "in_transit") {
+              sellerNotifTitle = "Courier Out For Doorstep Delivery 🚀";
+              sellerNotifMsg = `${companyProfile.companyName} is arriving at the buyer's destination for "${orderData.productName || 'product'}".`;
+            } else if (nextStatus === "delivered") {
+              sellerNotifTitle = "Product Handed Over to Buyer! 🎉";
+              sellerNotifMsg = `${companyProfile.companyName} verified the delivery PIN and delivered "${orderData.productName || 'product'}" to the buyer. Escrow funds will disburse upon buyer confirmation.`;
+            }
+            await addDoc(collection(db, "notifications"), {
+              userId: orderData.sellerId,
+              title: sellerNotifTitle,
+              message: sellerNotifMsg,
+              type: "order",
+              orderId: actualOrderId,
+              isRead: false,
+              createdAt: new Date().toISOString()
+            });
+          } catch (notifErr) {
+            console.warn("Could not send seller notification:", notifErr);
           }
-          await addDoc(collection(db, "notifications"), {
-            userId: orderData.sellerId,
-            title: sellerNotifTitle,
-            message: sellerNotifMsg,
-            type: "order",
-            orderId: actualOrderId,
-            isRead: false,
-            createdAt: new Date().toISOString()
-          });
         }
       }
       setSuccessMsg(`Status updated to: ${nextStatus.replace("_", " ").toUpperCase()}`);
       setTimeout(() => setSuccessMsg(""), 4000);
     } catch (err: any) {
       console.error("Failed to update status:", err);
-      setError("Failed to update delivery status.");
+      setError(err?.message || "Failed to update delivery status.");
     } finally {
       setLoading(false);
     }
   };
 
-  // Courier OTP Verification when at buyer's doorstep
+  // Courier OTP / PIN Verification (Supports Seller Handover PIN & Buyer Delivery PIN)
   const handleVerifyCourierOtp = async (bypass: boolean = false) => {
     if (!otpModalJob || !companyProfile) return;
     setVerifyingOtp(true);
@@ -1293,36 +1501,133 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
 
     try {
       const actualOrderId = otpModalJob.orderId || otpModalJob.id.replace("DLV_", "");
-      const orderRef = doc(db, "orders", actualOrderId);
-      const orderSnap = await getDoc(orderRef);
+      let orderRef = doc(db, "orders", actualOrderId);
+      let orderSnap = await getDoc(orderRef);
       
-      if (orderSnap.exists()) {
-        const orderData = orderSnap.data();
-        const derivedPin = getOrderDeliveryPin({ id: actualOrderId, deliveryOtp: orderData?.deliveryOtp });
-        const validCodes = [
-          orderData.deliveryOtp,
-          derivedPin,
-          orderData.pickupOtp,
-          orderData.handoverCode,
-          actualOrderId.slice(-6).toUpperCase(),
-          actualOrderId.slice(-6).toLowerCase()
-        ].filter(Boolean).map(c => String(c).trim().toLowerCase());
+      if (!orderSnap.exists()) {
+        const qUnique = query(collection(db, "orders"), where("uniqueOrderId", "==", actualOrderId));
+        const snapUnique = await getDocs(qUnique);
+        if (!snapUnique.empty) {
+          orderRef = snapUnique.docs[0].ref;
+          orderSnap = snapUnique.docs[0];
+        }
+      }
 
-        const entered = otpInput.trim().toLowerCase();
-        if (!bypass && entered.length > 0 && !validCodes.includes(entered)) {
-          setOtpError("Invalid Delivery PIN. Ask the buyer to show the 6-digit PIN on their Order Tracking screen.");
+      const orderData = orderSnap.exists() ? orderSnap.data() : (otpModalJob as any);
+      const isSeller = otpModalType === "seller";
+
+      if (!bypass) {
+        const enteredClean = cleanPinInput(otpInput);
+        if (!enteredClean) {
+          setOtpError(isSeller ? "Please enter the 6-digit Seller Handover PIN." : "Please enter the 6-digit Delivery PIN.");
+          setVerifyingOtp(false);
+          return;
+        }
+
+        const validPins = new Set<string>();
+
+        if (isSeller) {
+          // Seller Handover PIN sources
+          if (orderData?.sellerHandoverPin) validPins.add(cleanPinInput(orderData.sellerHandoverPin));
+          if (orderData?.sellerHandoverOtp) validPins.add(cleanPinInput(orderData.sellerHandoverOtp));
+          if (otpModalJob?.sellerHandoverPin) validPins.add(cleanPinInput(otpModalJob.sellerHandoverPin));
+          if (otpModalJob?.sellerHandoverOtp) validPins.add(cleanPinInput(otpModalJob.sellerHandoverOtp));
+
+          // Deterministic Seller PIN calculation fallback
+          validPins.add(cleanPinInput(getOrderSellerHandoverPin(orderData)));
+          validPins.add(cleanPinInput(getOrderSellerHandoverPin(otpModalJob)));
+          validPins.add(cleanPinInput(getOrderSellerHandoverPin({ id: actualOrderId, ...orderData })));
+          if (orderData?.uniqueOrderId) {
+            validPins.add(cleanPinInput(getOrderSellerHandoverPin({ id: orderData.uniqueOrderId, ...orderData })));
+          }
+          if (orderSnap.exists()) {
+            validPins.add(cleanPinInput(getOrderSellerHandoverPin({ id: orderSnap.id, ...orderData })));
+          }
+          if (actualOrderId.length >= 6) {
+            validPins.add(cleanPinInput(actualOrderId.slice(-6)));
+          }
+        } else {
+          // Buyer Delivery PIN sources
+          if (orderData?.deliveryOtp) validPins.add(cleanPinInput(orderData.deliveryOtp));
+          if (orderData?.deliveryPin) validPins.add(cleanPinInput(orderData.deliveryPin));
+          if (orderData?.pickupOtp) validPins.add(cleanPinInput(orderData.pickupOtp));
+          if (orderData?.handoverCode) validPins.add(cleanPinInput(orderData.handoverCode));
+          if (otpModalJob?.deliveryOtp) validPins.add(cleanPinInput(otpModalJob.deliveryOtp));
+          if (otpModalJob?.deliveryPin) validPins.add(cleanPinInput(otpModalJob.deliveryPin));
+
+          // Deterministic Buyer Delivery PIN calculation fallback
+          validPins.add(cleanPinInput(getOrderDeliveryPin(orderData)));
+          validPins.add(cleanPinInput(getOrderDeliveryPin(otpModalJob)));
+          validPins.add(cleanPinInput(getOrderDeliveryPin({ id: actualOrderId, ...orderData })));
+          if (orderData?.uniqueOrderId) {
+            validPins.add(cleanPinInput(getOrderDeliveryPin({ id: orderData.uniqueOrderId, ...orderData })));
+          }
+          if (orderSnap.exists()) {
+            validPins.add(cleanPinInput(getOrderDeliveryPin({ id: orderSnap.id, ...orderData })));
+          }
+          if (actualOrderId.length >= 6) {
+            validPins.add(cleanPinInput(actualOrderId.slice(-6)));
+          }
+        }
+
+        if (!validPins.has(enteredClean)) {
+          if (isSeller) {
+            setOtpError("Invalid Seller Handover PIN. Ask the merchant to check the 6-digit Handover PIN displayed on their Seller Dashboard for this order.");
+          } else {
+            setOtpError("Invalid Delivery PIN. Ask the buyer to check the 6-digit Delivery PIN displayed on their Order Tracking screen.");
+          }
           setVerifyingOtp(false);
           return;
         }
       }
 
-      // Progress status to delivered
-      await handleUpdateStatus(otpModalJob.id, "in_transit");
+      // Progress status based on verified stage
+      if (isSeller) {
+        // Move from accepted to picked_up
+        await handleUpdateStatus(otpModalJob.id, "accepted");
+        if (orderSnap.exists()) {
+          const now = new Date().toISOString();
+          await updateDoc(orderRef, {
+            sellerHandoverVerified: true,
+            sellerHandoverVerifiedAt: now,
+            productHandedOver: true,
+            productHandedOverAt: now,
+            handedOverBySellerAt: now,
+            pickedUpAt: now,
+            status: "In Transit",
+            deliveryStatus: "transit",
+            logisticsStatus: "transit",
+            updatedAt: now
+          });
+        }
+        setSuccessMsg("Seller Handover PIN verified! Order is now picked up and in transit.");
+      } else {
+        // Move from in_transit to delivered
+        await handleUpdateStatus(otpModalJob.id, "in_transit");
+        if (orderSnap.exists()) {
+          const now = new Date().toISOString();
+          await updateDoc(orderRef, {
+            courierHandedOver: true,
+            courierHandedOverAt: now,
+            handoverVerified: true,
+            handoverVerifiedAt: now,
+            buyerDeliveryConfirmed: true,
+            buyerDeliveryConfirmedAt: now,
+            status: "Order Delivered",
+            deliveryStatus: "delivered",
+            logisticsStatus: "delivered",
+            updatedAt: now
+          });
+        }
+        setSuccessMsg("Buyer Delivery PIN verified! Package marked as delivered.");
+      }
+
       setOtpModalJob(null);
       setOtpInput("");
+      setTimeout(() => setSuccessMsg(""), 5000);
     } catch (err: any) {
       console.error("Error verifying OTP:", err);
-      setOtpError(err.message || "Failed to verify delivery PIN.");
+      setOtpError(err.message || "Failed to verify PIN.");
     } finally {
       setVerifyingOtp(false);
     }
@@ -1449,12 +1754,14 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
             </div>
           </div>
         </div>
-        <button
-          onClick={onBackToMarket}
-          className="px-4 py-2 bg-white/20 hover:bg-white/30 text-white rounded-xl text-xs font-bold transition-all border border-white/20 cursor-pointer shadow-sm"
-        >
-          Back to Marketplace
-        </button>
+        {(!companyProfile && view === "splash") && (
+          <button
+            onClick={onBackToMarket}
+            className="px-4 py-2 bg-white/20 hover:bg-white/30 text-white rounded-xl text-xs font-bold transition-all border border-white/20 cursor-pointer shadow-sm"
+          >
+            Back to Marketplace
+          </button>
+        )}
       </div>
 
       <div className="max-w-7xl mx-auto px-4 mt-6">
@@ -1523,8 +1830,8 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                 </div>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl mx-auto pt-4">
-                <div className="bg-white dark:bg-zinc-900 p-8 rounded-[2.5rem] border border-slate-200/60 dark:border-zinc-800/60 shadow-sm hover:shadow-md transition-all flex flex-col justify-between">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6 max-w-2xl mx-auto pt-4">
+                <div className="bg-white dark:bg-zinc-900 p-6 sm:p-8 rounded-3xl sm:rounded-[2.5rem] border border-slate-200/60 dark:border-zinc-800/60 shadow-sm hover:shadow-md transition-all flex flex-col justify-between">
                   <div className="space-y-2 text-left mb-6">
                     <div className="w-10 h-10 rounded-full bg-orange-50 dark:bg-orange-950/20 flex items-center justify-center text-orange-600 mb-3">
                       <UserCheck className="w-5 h-5" />
@@ -1533,14 +1840,15 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                     <p className="text-xs text-slate-400">Access your logistics fleet manager dashboard, track shipments, and request bank payouts.</p>
                   </div>
                   <button
+                    type="button"
                     onClick={() => setView("login")}
-                    className="w-full h-12 bg-slate-900 dark:bg-zinc-800 hover:bg-orange-600 hover:dark:bg-orange-600 text-white rounded-xl font-bold text-sm transition-all cursor-pointer"
+                    className="w-full min-h-[46px] px-4 py-3 bg-slate-900 dark:bg-zinc-800 hover:bg-orange-600 hover:dark:bg-orange-600 active:scale-[0.98] text-white rounded-xl font-bold text-xs sm:text-sm transition-all cursor-pointer touch-manipulation select-none whitespace-nowrap"
                   >
                     Log In to Fleet Manager
                   </button>
                 </div>
 
-                <div className="bg-white dark:bg-zinc-900 p-8 rounded-[2.5rem] border border-slate-200/60 dark:border-zinc-800/60 shadow-sm hover:shadow-md transition-all flex flex-col justify-between">
+                <div className="bg-white dark:bg-zinc-900 p-6 sm:p-8 rounded-3xl sm:rounded-[2.5rem] border border-slate-200/60 dark:border-zinc-800/60 shadow-sm hover:shadow-md transition-all flex flex-col justify-between">
                   <div className="space-y-2 text-left mb-6">
                     <div className="w-10 h-10 rounded-full bg-amber-50 dark:bg-amber-950/20 flex items-center justify-center text-amber-600 mb-3">
                       <Sparkles className="w-5 h-5" />
@@ -1549,8 +1857,9 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                     <p className="text-xs text-slate-400">Register your dispatch company, define your coverage campuses, select vehicle types, and set base prices.</p>
                   </div>
                   <button
+                    type="button"
                     onClick={() => setView("signup")}
-                    className="w-full h-12 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-orange-500/10 transition-all cursor-pointer"
+                    className="w-full min-h-[46px] px-4 py-3 bg-orange-600 hover:bg-orange-700 active:scale-[0.98] text-white rounded-xl font-bold text-xs sm:text-sm shadow-lg shadow-orange-500/10 transition-all cursor-pointer touch-manipulation select-none whitespace-nowrap"
                   >
                     Create Partner Account
                   </button>
@@ -1562,9 +1871,26 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
 
         {/* 2. LOGIN VIEW */}
         {view === "login" && (
-          <div className="max-w-md mx-auto bg-white dark:bg-zinc-900 p-8 rounded-[2.5rem] border border-slate-200/60 dark:border-zinc-800/60 shadow-sm mt-6">
-            <div className="text-center space-y-1 mb-8">
-              <h2 className="text-2xl font-black text-slate-800 dark:text-zinc-100">Log In Partner</h2>
+          <div className="max-w-md mx-auto bg-white dark:bg-zinc-900 p-5 sm:p-8 rounded-3xl sm:rounded-[2.5rem] border border-slate-200/60 dark:border-zinc-800/60 shadow-sm mt-6">
+            <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 dark:bg-zinc-800/90 rounded-xl mb-6 border border-slate-200/70 dark:border-zinc-700/70">
+              <button
+                type="button"
+                onClick={() => setView("login")}
+                className="min-h-[40px] py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center cursor-pointer touch-manipulation select-none whitespace-nowrap bg-white dark:bg-zinc-900 text-orange-600 shadow-sm border border-slate-200/80 dark:border-zinc-700"
+              >
+                Partner Sign In
+              </button>
+              <button
+                type="button"
+                onClick={() => setView("signup")}
+                className="min-h-[40px] py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center cursor-pointer touch-manipulation select-none whitespace-nowrap text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-200 active:scale-95"
+              >
+                Partner Sign Up
+              </button>
+            </div>
+
+            <div className="text-center space-y-1 mb-6 sm:mb-8">
+              <h2 className="text-xl sm:text-2xl font-black text-slate-800 dark:text-zinc-100">Log In Partner</h2>
               <p className="text-xs text-slate-400">Manage dispatch and deliver goods across campus</p>
             </div>
 
@@ -1574,9 +1900,9 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                 type="button"
                 onClick={handleGoogleAuth}
                 disabled={loading}
-                className="w-full h-13 bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-750 text-slate-700 dark:text-zinc-200 border border-slate-200/80 dark:border-zinc-700 rounded-2xl font-bold text-sm transition-all flex items-center justify-center gap-3 cursor-pointer shadow-sm hover:shadow-md"
+                className="w-full min-h-[46px] py-2.5 px-4 bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-750 active:scale-[0.98] text-slate-700 dark:text-zinc-200 border border-slate-200/80 dark:border-zinc-700 rounded-2xl font-bold text-xs sm:text-sm transition-all flex items-center justify-center gap-3 cursor-pointer shadow-sm hover:shadow-md touch-manipulation select-none whitespace-nowrap"
               >
-                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" alt="Google logo" />
+                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5 shrink-0" alt="Google logo" />
                 <span>Log In with Google</span>
               </button>
 
@@ -1641,7 +1967,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full h-13 bg-orange-600 hover:bg-orange-700 text-white rounded-2xl font-bold text-sm shadow-md shadow-orange-500/15 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                className="w-full min-h-[48px] py-3 px-4 bg-orange-600 hover:bg-orange-700 active:scale-[0.98] text-white rounded-2xl font-bold text-xs sm:text-sm shadow-md shadow-orange-500/15 transition-all flex items-center justify-center gap-2 cursor-pointer touch-manipulation select-none whitespace-nowrap"
               >
                 {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Log In to Dashboard"}
               </button>
@@ -1650,7 +1976,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
             <div className="text-center mt-6">
               <p className="text-xs font-medium text-slate-400">
                 Don't have a logistics account?{" "}
-                <button onClick={() => setView("signup")} className="text-orange-600 hover:underline font-bold bg-transparent border-none cursor-pointer">
+                <button onClick={() => setView("signup")} className="text-orange-600 hover:underline font-bold bg-transparent border-none cursor-pointer touch-manipulation">
                   Register Company
                 </button>
               </p>
@@ -1660,9 +1986,26 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
 
         {/* 3. SIGNUP VIEW */}
         {view === "signup" && (
-          <div className="max-w-2xl mx-auto bg-white dark:bg-zinc-900 p-8 rounded-[2.5rem] border border-slate-200/60 dark:border-zinc-800/60 shadow-sm mt-6">
-            <div className="text-center space-y-1 mb-8">
-              <h2 className="text-2xl font-black text-slate-800 dark:text-zinc-100 font-sans">Register Logistics Company</h2>
+          <div className="max-w-2xl mx-auto bg-white dark:bg-zinc-900 p-5 sm:p-8 rounded-3xl sm:rounded-[2.5rem] border border-slate-200/60 dark:border-zinc-800/60 shadow-sm mt-6">
+            <div className="max-w-md mx-auto grid grid-cols-2 gap-1.5 p-1 bg-slate-100 dark:bg-zinc-800/90 rounded-xl mb-6 border border-slate-200/70 dark:border-zinc-700/70">
+              <button
+                type="button"
+                onClick={() => setView("login")}
+                className="min-h-[40px] py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center cursor-pointer touch-manipulation select-none whitespace-nowrap text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-200 active:scale-95"
+              >
+                Partner Sign In
+              </button>
+              <button
+                type="button"
+                onClick={() => setView("signup")}
+                className="min-h-[40px] py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center cursor-pointer touch-manipulation select-none whitespace-nowrap bg-orange-600 text-white shadow-sm"
+              >
+                Partner Sign Up
+              </button>
+            </div>
+
+            <div className="text-center space-y-1 mb-6 sm:mb-8">
+              <h2 className="text-xl sm:text-2xl font-black text-slate-800 dark:text-zinc-100 font-sans">Register Logistics Company</h2>
               <p className="text-xs text-slate-400">Set up your delivery details to receive high-demand dispatch jobs</p>
             </div>
 
@@ -1686,9 +2029,9 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                 type="button"
                 onClick={handleGoogleAuth}
                 disabled={loading}
-                className="w-full h-13 bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-750 text-slate-700 dark:text-zinc-200 border border-slate-200/80 dark:border-zinc-700 rounded-2xl font-bold text-sm transition-all flex items-center justify-center gap-3 cursor-pointer shadow-sm hover:shadow-md"
+                className="w-full min-h-[46px] py-2.5 px-4 bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-750 active:scale-[0.98] text-slate-700 dark:text-zinc-200 border border-slate-200/80 dark:border-zinc-700 rounded-2xl font-bold text-xs sm:text-sm transition-all flex items-center justify-center gap-3 cursor-pointer shadow-sm hover:shadow-md touch-manipulation select-none whitespace-nowrap"
               >
-                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" alt="Google logo" />
+                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5 shrink-0" alt="Google logo" />
                 <span>Register with Google</span>
               </button>
 
@@ -2145,6 +2488,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                   stagePickedUpCount={stagePickedUpCount}
                   stageInTransitCount={stageInTransitCount}
                   handleUpdateStatus={handleUpdateStatus}
+                  openOtpModal={handleOpenOtpModal}
                   setOtpModalJob={setOtpModalJob}
                   setOtpInput={setOtpInput}
                   setOtpError={setOtpError}
@@ -2686,15 +3030,20 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-2xl bg-orange-100 dark:bg-orange-950/50 flex items-center justify-center text-orange-600 dark:text-orange-400">
+                    <div className={cn(
+                      "w-12 h-12 rounded-2xl flex items-center justify-center",
+                      otpModalType === "seller" 
+                        ? "bg-purple-100 dark:bg-purple-950/50 text-purple-600 dark:text-purple-400" 
+                        : "bg-orange-100 dark:bg-orange-950/50 text-orange-600 dark:text-orange-400"
+                    )}>
                       <KeyRound className="w-6 h-6" />
                     </div>
                     <div>
                       <h3 className="text-base font-black text-slate-900 dark:text-white">
-                        Verify Handover PIN
+                        {otpModalType === "seller" ? "Verify Seller Handover PIN" : "Verify Buyer Delivery PIN"}
                       </h3>
                       <p className="text-xs text-slate-500 dark:text-zinc-400">
-                        Order #{otpModalJob.orderId?.slice(0, 8) || otpModalJob.id.slice(0, 8)}
+                        {otpModalType === "seller" ? "Merchant Package Handover" : "Doorstep Buyer Handover"} • Order #{otpModalJob.orderId?.slice(0, 8) || otpModalJob.id.slice(0, 8)}
                       </p>
                     </div>
                   </div>
@@ -2712,7 +3061,11 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                 </div>
 
                 <p className="text-xs text-slate-600 dark:text-zinc-300 leading-relaxed font-medium">
-                  Ask the buyer for their <strong>6-digit Delivery PIN</strong> shown on their Order Tracking screen. Entering this PIN confirms package handover.
+                  {otpModalType === "seller" ? (
+                    <>Ask the merchant for their <strong>6-digit Handover PIN</strong> shown on their Seller Dashboard for this order. Entering this PIN confirms you have collected the physical package from the seller.</>
+                  ) : (
+                    <>Ask the buyer for their <strong>6-digit Delivery PIN</strong> shown on their Order Tracking screen. Entering this PIN confirms package delivery and authorizes escrow disbursement.</>
+                  )}
                 </p>
 
                 {otpError && (
@@ -2724,7 +3077,7 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
 
                 <div className="space-y-1.5">
                   <label className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-zinc-300">
-                    Enter Buyer's 6-Digit PIN
+                    {otpModalType === "seller" ? "Enter Seller's 6-Digit Handover PIN" : "Enter Buyer's 6-Digit Delivery PIN"}
                   </label>
                   <input
                     type="text"
@@ -2735,7 +3088,12 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                       setOtpError(null);
                     }}
                     placeholder="e.g. 123456"
-                    className="w-full h-14 text-center font-mono text-2xl font-black tracking-widest bg-slate-50 dark:bg-zinc-950 border-2 border-slate-300 dark:border-zinc-700 rounded-2xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 outline-none uppercase transition-all"
+                    className={cn(
+                      "w-full h-14 text-center font-mono text-2xl font-black tracking-widest bg-slate-50 dark:bg-zinc-950 border-2 rounded-2xl text-slate-900 dark:text-white placeholder:text-slate-400 outline-none uppercase transition-all",
+                      otpModalType === "seller"
+                        ? "border-purple-300 dark:border-purple-700 focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20"
+                        : "border-slate-300 dark:border-zinc-700 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20"
+                    )}
                   />
                 </div>
 
@@ -2744,29 +3102,49 @@ export default function LogisticsHub({ onBackToMarket }: { onBackToMarket: () =>
                     type="button"
                     disabled={verifyingOtp || !otpInput.trim()}
                     onClick={() => handleVerifyCourierOtp(false)}
-                    className="w-full h-12 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md shadow-orange-500/20"
+                    className={cn(
+                      "w-full h-12 text-white rounded-xl font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md",
+                      otpModalType === "seller"
+                        ? "bg-purple-600 hover:bg-purple-700 shadow-purple-600/20"
+                        : "bg-orange-600 hover:bg-orange-700 shadow-orange-500/20"
+                    )}
                   >
                     {verifyingOtp ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
-                    Verify PIN & Confirm Handover
+                    {otpModalType === "seller" ? "Verify Handover PIN & Collect Product" : "Verify PIN & Complete Delivery"}
                   </button>
 
                   <button
                     type="button"
                     disabled={verifyingOtp}
                     onClick={() => {
-                      if (confirm("Are you sure you want to bypass the PIN? Use this only if the buyer physically accepted the item but cannot access their phone.")) {
+                      const party = otpModalType === "seller" ? "seller" : "buyer";
+                      if (confirm(`Are you sure you want to bypass the PIN? Use this only if the ${party} physically handed over / accepted the package but cannot access their device.`)) {
                         handleVerifyCourierOtp(true);
                       }
                     }}
                     className="w-full h-10 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-600 dark:text-zinc-400 rounded-xl font-semibold text-xs transition-all cursor-pointer"
                   >
-                    Buyer Phone Unavailable (Bypass & Confirm Handover)
+                    {otpModalType === "seller" ? "Seller Device Unavailable (Bypass & Collect)" : "Buyer Phone Unavailable (Bypass & Deliver)"}
                   </button>
                 </div>
               </motion.div>
             </div>
           )}
         </AnimatePresence>
+
+        {/* Auth Error Popup Modal */}
+        {errorPopup && (
+          <AuthErrorModal
+            isOpen={errorPopup.isOpen}
+            onClose={() => setErrorPopup(null)}
+            type={errorPopup.type}
+            title={errorPopup.title}
+            message={errorPopup.message}
+            email={errorPopup.email}
+            primaryActionLabel={errorPopup.primaryActionLabel}
+            onPrimaryAction={errorPopup.onPrimaryAction}
+          />
+        )}
       </div>
     </div>
   );
