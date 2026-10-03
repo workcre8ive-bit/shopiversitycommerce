@@ -13,7 +13,10 @@ import {
   signInWithRedirect,
   getRedirectResult,
   signOut,
-  browserPopupRedirectResolver
+  browserPopupRedirectResolver,
+  RecaptchaVerifier,
+  signInWithPhoneNumber,
+  type ConfirmationResult
 } from "firebase/auth";
 import { doc, setDoc, getDoc, updateDoc, collection, addDoc, query, where, getDocs } from "firebase/firestore";
 import { motion, AnimatePresence } from "motion/react";
@@ -209,23 +212,8 @@ export default function AuthPage({
         url: window.location.origin,
         handleCodeInApp: false
       };
+      // Send official password reset email directly via Firebase
       await sendPasswordResetEmail(auth, resetEmail.trim(), actionCodeSettings);
-
-      // Also trigger customized Brevo password reset notification
-      try {
-        await fetch("/api/send-password-reset", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            email: resetEmail.trim(),
-            code: Math.floor(100000 + Math.random() * 900000).toString(),
-            resetUrl: `${window.location.origin}/?reset=true`
-          })
-        });
-      } catch (brevoErr) {
-        console.warn("Brevo reset notification notice:", brevoErr);
-      }
-
       setResetEmailSent(true);
     } catch (err: any) {
       console.error("Password reset error:", err);
@@ -252,7 +240,7 @@ export default function AuthPage({
   const [isVerificationChoice, setIsVerificationChoice] = React.useState(false);
   const [isVerificationSuccess, setIsVerificationSuccess] = React.useState(false);
   const [verificationMethod, setVerificationMethod] = React.useState<"email" | "phone" | null>(null);
-  const [generatedCode, setGeneratedCode] = React.useState("");
+  const [confirmationResult, setConfirmationResult] = React.useState<ConfirmationResult | null>(null);
   const [verificationInput, setVerificationInput] = React.useState("");
   const [isEmailVerified, setIsEmailVerified] = React.useState(false);
   const [resendingCode, setResendingCode] = React.useState(false);
@@ -772,41 +760,49 @@ export default function AuthPage({
     }
   };
 
-  const handleVerifyCode = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError("");
-    setLoading(true);
-
-    if (verificationInput !== generatedCode) {
-      setError("Invalid verification code. Please check your email and try again.");
-      setLoading(false);
-      return;
+  const getRecaptchaVerifier = () => {
+    if ((window as any).recaptchaVerifier) {
+      return (window as any).recaptchaVerifier;
     }
+    const verifier = new RecaptchaVerifier(auth, "recaptcha-container", {
+      size: "invisible",
+      callback: () => {
+        // reCAPTCHA solved
+      },
+      "expired-callback": () => {
+        setError("reCAPTCHA verification expired. Please try requesting the code again.");
+      }
+    });
+    (window as any).recaptchaVerifier = verifier;
+    return verifier;
+  };
+
+  const handleSendEmailCode = async () => {
+    setLoading(true);
+    setError("");
+    const targetEmail = email.trim();
 
     try {
-      const referralCode = generateReferralCode(fullName);
-      const referredBy = referralCodeInput || localStorage.getItem('referredBy');
-      
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      const firebaseUser = userCredential.user;
-      await updateProfile(firebaseUser, { displayName: fullName });
-
-      try {
-        const actionCodeSettings = {
-          url: window.location.origin,
-          handleCodeInApp: false
-        };
-        await sendEmailVerification(firebaseUser, actionCodeSettings);
-        console.log(`[FIREBASE AUTH] Verification email dispatched directly to ${email}`);
-      } catch (evErr) {
-        console.warn("sendEmailVerification notice:", evErr);
+      let currentAuthUser = auth.currentUser;
+      if (!currentAuthUser) {
+        const userCredential = await createUserWithEmailAndPassword(auth, targetEmail, password);
+        currentAuthUser = userCredential.user;
+        await updateProfile(currentAuthUser, { displayName: fullName });
       }
 
+      const actionCodeSettings = {
+        url: window.location.origin,
+        handleCodeInApp: false
+      };
+      await sendEmailVerification(currentAuthUser, actionCodeSettings);
+
+      const referralCode = generateReferralCode(fullName || "USER");
+      const referredBy = referralCodeInput || localStorage.getItem("referredBy");
       const userProfile: UserProfile = {
-        uid: firebaseUser.uid,
+        uid: currentAuthUser.uid,
         displayName: fullName,
         username: username.toLowerCase(),
-        email: email.toLowerCase(),
+        email: targetEmail.toLowerCase(),
         phoneNumber: phonePrefix === "+234" && phone.startsWith("0") ? `+234${phone.replace(/\D/g, "").slice(1)}` : `${phonePrefix}${phone}`,
         gender: gender,
         role: role === "seller" ? "both" : "buyer",
@@ -827,10 +823,122 @@ export default function AuthPage({
         verificationIdUrl: verificationIdUrl || "",
         profileCompleted: false 
       };
+      await setDoc(doc(db, "users", currentAuthUser.uid), userProfile);
+
+      setVerificationMethod("email");
+      setIsVerifyingEmail(true);
+      setIsVerificationChoice(false);
+      setError(`A verification link has been sent directly to ${targetEmail} via Firebase. Please check your inbox and tap 'I Have Verified'.`);
+    } catch (err: any) {
+      console.error("Firebase sendEmailVerification error:", err);
+      setError(getFirestoreErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSendPhoneCode = async () => {
+    setLoading(true);
+    setError("");
+
+    const rawDigits = phone.replace(/\D/g, "");
+    if (!rawDigits || rawDigits.length < 7) {
+      setError("Please enter a valid phone number to receive your SMS code.");
+      setLoading(false);
+      return;
+    }
+
+    const fullPhoneNumber = phonePrefix === "+234" && rawDigits.startsWith("0")
+      ? `+234${rawDigits.slice(1)}`
+      : `${phonePrefix}${rawDigits}`;
+
+    try {
+      const appVerifier = getRecaptchaVerifier();
+      console.log(`[FIREBASE SMS] Dispatching phone authentication SMS to ${fullPhoneNumber} via Firebase...`);
+      const confirmation = await signInWithPhoneNumber(auth, fullPhoneNumber, appVerifier);
+      setConfirmationResult(confirmation);
+      setVerificationMethod("phone");
+      setIsVerifyingPhone(true);
+      setIsVerificationChoice(false);
+      setError(`Firebase SMS sent to ${fullPhoneNumber}! Enter the 6-digit code received via SMS.`);
+    } catch (err: any) {
+      console.error("Firebase Phone Auth Error:", err);
+      if ((window as any).recaptchaVerifier) {
+        try {
+          (window as any).recaptchaVerifier.clear();
+          (window as any).recaptchaVerifier = null;
+        } catch (e) {}
+      }
+      if (err.code === "auth/invalid-phone-number") {
+        setError("Invalid phone number format. Please ensure your country code and phone number are correct.");
+      } else if (err.code === "auth/too-many-requests" || err.code === "auth/quota-exceeded") {
+        setError("Too many SMS verification requests. Please try again later or use Email Verification.");
+      } else if (err.code === "auth/captcha-check-failed") {
+        setError("reCAPTCHA verification failed. Please try again.");
+      } else {
+        setError(err.message || "Failed to send SMS code via Firebase. Please try again or use Email Verification.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyPhoneCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+
+    if (!confirmationResult) {
+      setError("No pending SMS verification found. Please request a new verification code.");
+      setLoading(false);
+      return;
+    }
+
+    if (!verificationInput || verificationInput.trim().length !== 6) {
+      setError("Please enter the 6-digit code sent to your phone via SMS.");
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const userCredential = await confirmationResult.confirm(verificationInput.trim());
+      const firebaseUser = userCredential.user;
+
+      if (fullName) {
+        await updateProfile(firebaseUser, { displayName: fullName });
+      }
+
+      const referralCode = generateReferralCode(fullName || "USER");
+      const referredBy = referralCodeInput || localStorage.getItem("referredBy");
+
+      const userProfile: UserProfile = {
+        uid: firebaseUser.uid,
+        displayName: fullName || "User",
+        username: username.toLowerCase(),
+        email: email ? email.toLowerCase() : (firebaseUser.email || ""),
+        phoneNumber: firebaseUser.phoneNumber || `${phonePrefix}${phone}`,
+        gender: gender,
+        role: role === "seller" ? "both" : "buyer",
+        activeRole: role,
+        referralCode,
+        referredBy: referredBy || "",
+        referralEarnings: 0,
+        referralCount: 0,
+        schoolType: "", 
+        schoolName: "", 
+        state: "", 
+        city: "", 
+        deliveryAddress: "", 
+        isVerified: true, 
+        isSuspended: false,
+        reportCount: 0,
+        createdAt: new Date().toISOString(),
+        verificationIdUrl: verificationIdUrl || "",
+        profileCompleted: false 
+      };
 
       await setDoc(doc(db, "users", firebaseUser.uid), userProfile);
-      
-      // If referred by someone, increment their referral count
+
       if (referredBy) {
         const referrersQ = query(collection(db, "users"), where("referralCode", "==", referredBy));
         const referrersSnap = await getDocs(referrersQ);
@@ -841,116 +949,40 @@ export default function AuthPage({
         }
       }
 
-      localStorage.removeItem('referredBy');
+      localStorage.removeItem("referredBy");
 
-      // Send welcome notification
       const welcomeNotification: Notification = {
         id: crypto.randomUUID(),
         userId: firebaseUser.uid,
         title: "Welcome to SHOPIVERSITY!",
-        message: `Hi ${fullName}, welcome to SHOPIVERSITY! Your account is verified. Please log in to continue.`,
+        message: `Hi ${fullName}, welcome to SHOPIVERSITY! Your phone number has been verified via Firebase SMS.`,
         type: "welcome",
         isRead: false,
         createdAt: new Date().toISOString()
       };
       await addDoc(collection(db, "notifications"), welcomeNotification);
 
-      // Mandatory sign out - users must login after manual verification
-      await signOut(auth);
-
       setIsVerificationSuccess(true);
-      setIsVerifyingEmail(false);
       setIsVerifyingPhone(false);
-      setLoading(false);
     } catch (err: any) {
-      setError(getFirestoreErrorMessage(err));
-      handleFirestoreError(err, OperationType.WRITE, `users/new-user`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSendEmailCode = async () => {
-    setLoading(true);
-    setError("");
-    const targetEmail = email.trim();
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    setGeneratedCode(code);
-
-    try {
-      const response = await fetch("/api/send-verification", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: targetEmail, code }),
-      });
-      
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to send verification code");
-      }
-      
-      if (data.fallback) {
-        setError(`Verification code generated: ${code}. Check inbox or enter the code directly below to verify.`);
-        setVerificationInput(code);
+      console.error("Firebase SMS Verification Error:", err);
+      if (err.code === "auth/invalid-verification-code") {
+        setError("Invalid SMS verification code. Please check the code sent to your phone and try again.");
+      } else if (err.code === "auth/code-expired") {
+        setError("The SMS verification code has expired. Please request a new code.");
       } else {
-        setError(`A 6-digit verification code has been sent directly to ${targetEmail}. Please check your inbox and spam folder.`);
+        setError(err.message || "Failed to verify SMS code with Firebase. Please try again.");
       }
-      setIsVerifyingEmail(true);
-      setIsVerificationChoice(false);
-    } catch (err: any) {
-      setError(`Failed to send verification code: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSendPhoneCode = async () => {
-    setLoading(true);
-    setError("");
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    setGeneratedCode(code);
-
-    try {
-      setError(`SMS Simulation: Verification code generated (${code}) and auto-filled below for phone ${phonePrefix}${phone}.`);
-      setVerificationInput(code);
-      setIsVerifyingPhone(true);
-      setIsVerificationChoice(false);
-    } catch (err: any) {
-      setError(`Failed to send SMS: ${err.message}`);
     } finally {
       setLoading(false);
     }
   };
 
   const handleResendCode = async () => {
-    setResendingCode(true);
-    setError("");
-    const targetEmail = email.trim();
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    setGeneratedCode(code);
-
-    try {
-      const response = await fetch("/api/send-verification", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: targetEmail, code }),
-      });
-      
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to resend code");
-      }
-      
-      if (data.fallback) {
-        setError(`New verification code generated: ${code}. Check inbox or enter the code directly below to verify.`);
-        setVerificationInput(code);
-      } else {
-        setError(`A new 6-digit verification code has been sent directly to ${targetEmail}.`);
-      }
-    } catch (err: any) {
-      setError(`Failed to resend code: ${err.message}`);
-    } finally {
-      setResendingCode(false);
+    if (verificationMethod === "phone") {
+      await handleSendPhoneCode();
+    } else {
+      await handleResendVerificationEmail();
     }
   };
 
@@ -1416,6 +1448,7 @@ export default function AuthPage({
 
         {/* Auth Card with Glassmorphic Elevation */}
         <div className="bg-white/95 dark:bg-zinc-900/95 backdrop-blur-2xl rounded-3xl border border-white/60 dark:border-zinc-750/80 p-4 sm:p-6 md:p-8 shadow-2xl ring-1 ring-black/5 dark:ring-white/5">
+          <div id="recaptcha-container" className="my-1 flex justify-center"></div>
           <AnimatePresence mode="popLayout">
 
             {isVerificationSuccess ? (
@@ -1769,11 +1802,11 @@ export default function AuthPage({
                   </button>
                   <div className="text-left space-y-0.5">
                     <h3 className="text-base font-bold text-slate-900 dark:text-zinc-100">
-                      {isVerifyingEmail ? "Check your email" : "Check your phone"}
+                      Check your phone for SMS
                     </h3>
-                    <p className="text-xs text-slate-505 dark:text-zinc-400 leading-normal">
-                      Code sent to <span className="font-bold text-slate-900 dark:text-zinc-200">
-                        {isVerifyingEmail ? email : `${phonePrefix}${phone}`}
+                    <p className="text-xs text-slate-500 dark:text-zinc-400 leading-normal">
+                      Firebase SMS sent to <span className="font-bold text-slate-900 dark:text-zinc-200">
+                        {phonePrefix === "+234" && phone.startsWith("0") ? `+234${phone.replace(/\D/g, "").slice(1)}` : `${phonePrefix}${phone}`}
                       </span>
                     </p>
                   </div>
@@ -1788,14 +1821,14 @@ export default function AuthPage({
                   </div>
                 )}
 
-                <form onSubmit={handleVerifyCode} className="space-y-4 text-left font-sans">
+                <form onSubmit={handleVerifyPhoneCode} className="space-y-4 text-left font-sans">
                   <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-900 dark:text-zinc-350">Enter Verification Code</label>
+                    <label className="text-xs font-bold text-slate-900 dark:text-zinc-350">Enter 6-Digit SMS Code</label>
                     <input 
                       required
                       type="text"
                       maxLength={6}
-                      placeholder="6-digit code"
+                      placeholder="• • • • • •"
                       value={verificationInput}
                       onChange={(e) => setVerificationInput(e.target.value.replace(/\D/g, ""))}
                       className="w-full h-11 px-3 bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-700 rounded-2xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-orange-500 focus:ring-1 focus:ring-orange-500 outline-none text-center text-xl font-black tracking-[0.3em]"
@@ -1806,22 +1839,22 @@ export default function AuthPage({
                     <button 
                       type="submit"
                       disabled={loading || verificationInput.length !== 6}
-                      className="w-full h-9 bg-gradient-to-b from-[#ffd814] to-[#f7ca00] hover:brightness-95 active:brightness-90 text-zinc-950 font-bold rounded-lg border border-[#a88734] transition-all text-xs font-semibold shadow-sm flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      className="w-full h-11 bg-gradient-to-r from-[#ff6b00] to-[#ff8c00] hover:from-[#ea6200] hover:to-[#ff7b00] text-white font-bold rounded-xl transition-all text-xs shadow-md flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
                     >
                       {loading ? (
                         <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                       ) : (
-                        <span>Verify & Create Account</span>
+                        <span>Verify SMS & Activate Account</span>
                       )}
                     </button>
                     
                     <button 
                       type="button"
-                      onClick={isVerifyingEmail ? handleResendCode : handleSendPhoneCode}
-                      disabled={resendingCode || loading}
-                      className="text-xs font-bold text-[#0066c0] hover:underline"
+                      onClick={handleSendPhoneCode}
+                      disabled={loading}
+                      className="text-xs font-bold text-[#ff6b00] hover:underline"
                     >
-                      {resendingCode ? "Sending Code..." : "Didn't receive code? Resend"}
+                      {loading ? "Sending SMS via Firebase..." : "Didn't receive code? Resend SMS via Firebase"}
                     </button>
 
                     <button 
