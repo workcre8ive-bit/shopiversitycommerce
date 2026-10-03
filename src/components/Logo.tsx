@@ -5,15 +5,21 @@ interface LogoProps {
   className?: string;
   showText?: boolean;
   onClick?: () => void;
+  variant?: "default" | "white";
 }
 
-export default function Logo({ className, showText = true, onClick }: LogoProps) {
+export default function Logo({ className, showText = true, onClick, variant = "default" }: LogoProps) {
+  const isWhite = variant === "white";
+
   const content = (
     <div className={cn("flex items-center gap-1.5 sm:gap-2 select-none min-w-0", className)}>
       {/* Precision Vector Re-creation of the Custom Shopiversity Cart in standard square 24x24 */}
       <svg
         viewBox="0 0 24 24"
-        className="h-[26px] w-[26px] sm:h-[36px] sm:w-[36px] text-[#ff6b00] dark:text-[#ff7f1a] fill-none shrink-0 transition-all"
+        className={cn(
+          "h-[26px] w-[26px] sm:h-[36px] sm:w-[36px] fill-none shrink-0 transition-all",
+          isWhite ? "text-white" : "text-[#ff6b00] dark:text-[#ff7f1a]"
+        )}
         stroke="currentColor"
         strokeWidth="1.6"
         strokeLinecap="round"
@@ -41,10 +47,20 @@ export default function Logo({ className, showText = true, onClick }: LogoProps)
       {/* Text block: Shopiversity + the marketplace at your fingertips */}
       {showText && (
         <div className="flex flex-col text-left justify-center min-w-0">
-          <span className="text-[15px] sm:text-2xl font-black tracking-tight text-[#ff6b00] dark:text-[#ff7f1a] font-sans transition-colors leading-none truncate">
+          <span
+            className={cn(
+              "text-[15px] sm:text-2xl font-black tracking-tight font-sans transition-colors leading-none truncate",
+              isWhite ? "text-white drop-shadow-sm" : "text-[#ff6b00] dark:text-[#ff7f1a]"
+            )}
+          >
             Shopiversity
           </span>
-          <span className="hidden min-[400px]:block text-[7.5px] sm:text-[10px] font-bold text-[#ff6b00] dark:text-[#ff7f1a] tracking-tight mt-0.5 font-sans lowercase leading-none truncate">
+          <span
+            className={cn(
+              "hidden min-[400px]:block text-[7.5px] sm:text-[10px] font-bold tracking-tight mt-0.5 font-sans lowercase leading-none truncate",
+              isWhite ? "text-white/80" : "text-[#ff6b00] dark:text-[#ff7f1a]"
+            )}
+          >
             the marketplace at your fingertips
           </span>
         </div>

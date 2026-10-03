@@ -44,10 +44,12 @@ import {
   Home,
   Info,
   RefreshCw,
-  Sparkles
+  Sparkles,
+  Truck
 } from "lucide-react";
 import Logo from "./Logo";
 import { cn, generateReferralCode } from "../lib/utils";
+import { generateSmartUsername } from "../utils/accountCleanup";
 import { UserProfile, Notification } from "../types";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
 import { compressImage } from "../lib/imageUtils";
@@ -73,12 +75,14 @@ const BACKGROUND_IMAGES = [
 export default function AuthPage({ 
   initialNeedsProfile = false,
   initialMode,
+  initialRole,
   onModeChange,
   onGoToMarket,
   onNavigateToLogistics
 }: { 
   initialNeedsProfile?: boolean;
   initialMode?: "login" | "signup";
+  initialRole?: "buyer" | "seller";
   onModeChange?: (mode: "login" | "signup") => void;
   onGoToMarket?: () => void;
   onNavigateToLogistics?: () => void;
@@ -104,7 +108,13 @@ export default function AuthPage({
       onModeChange(loginMode ? "login" : "signup");
     }
   };
-  const [role, setRole] = React.useState<"buyer" | "seller">("buyer");
+  const [role, setRole] = React.useState<"buyer" | "seller">(initialRole || "buyer");
+
+  React.useEffect(() => {
+    if (initialRole) {
+      setRole(initialRole);
+    }
+  }, [initialRole]);
   const [step, setStep] = React.useState(1);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState("");
@@ -146,10 +156,7 @@ export default function AuthPage({
       if (auth.currentUser) {
         setFullName(auth.currentUser.displayName || "");
         setEmail(auth.currentUser.email || "");
-        if (auth.currentUser.email) {
-          const prefix = auth.currentUser.email.split("@")[0].toLowerCase().replace(/[^a-z0-9]/g, "");
-          setUsername(`${prefix}${Math.floor(1000 + Math.random() * 9000)}`);
-        }
+        setUsername(generateSmartUsername(auth.currentUser.displayName || "User"));
       }
     }
   }, [initialNeedsProfile]);
@@ -298,17 +305,20 @@ export default function AuthPage({
   }, []);
 
   const generateUsername = () => {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!email || !emailRegex.test(email)) {
-      setFieldErrors(prev => ({ ...prev, email: "Please enter a valid email address first to generate a username." }));
+    const candidateName = fullName.trim() || `${firstName} ${lastName}`.trim();
+    if (!candidateName) {
+      setFieldErrors(prev => ({ 
+        ...prev, 
+        fullName: "Please enter your full name first to generate your 6-character username." 
+      }));
       return;
     }
-    const emailPrefix = email.split("@")[0].toLowerCase().replace(/[^a-z0-9]/g, "");
-    const randomNum = Math.floor(1000 + Math.random() * 9000);
-    const newUsername = `${emailPrefix}${randomNum}`;
+    const newUsername = generateSmartUsername(candidateName);
     setUsername(newUsername);
     setFieldErrors(prev => {
       const nextErrors = { ...prev };
+      delete nextErrors.fullName;
+      delete nextErrors.username;
       delete nextErrors.email;
       return nextErrors;
     });
@@ -950,7 +960,7 @@ export default function AuthPage({
       const userProfile: UserProfile = {
         uid: user.uid,
         displayName: user.displayName || "Anonymous",
-        username: (user.email?.split("@")[0] || "user") + Math.floor(Math.random() * 1000),
+        username: generateSmartUsername(user.displayName || "User"),
         email: user.email || "",
         phoneNumber: user.phoneNumber || "",
         role: role === "seller" ? "both" : "buyer",
@@ -1862,7 +1872,7 @@ export default function AuthPage({
                         )}
                       >
                         <ShoppingBag className="w-3.5 h-3.5 shrink-0" />
-                        <span>Buyer</span>
+                        <span>Customer / Buyer</span>
                       </button>
                       <button 
                         type="button"
@@ -1878,6 +1888,18 @@ export default function AuthPage({
                         <span>Seller</span>
                       </button>
                     </div>
+                    {onNavigateToLogistics && (
+                      <div className="pt-1 text-center">
+                        <button
+                          type="button"
+                          onClick={onNavigateToLogistics}
+                          className="text-[11px] font-semibold text-orange-600 dark:text-orange-400 hover:underline inline-flex items-center justify-center gap-1 mx-auto bg-transparent border-none cursor-pointer"
+                        >
+                          <Truck className="w-3.5 h-3.5" />
+                          <span>Register as a Logistics Fleet Partner instead</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -1944,14 +1966,17 @@ export default function AuthPage({
                         />
 
                         <div className="space-y-1 text-left">
-                          <label className="block text-xs font-bold text-zinc-850 dark:text-zinc-205">Username</label>
+                          <label className="block text-xs font-bold text-zinc-850 dark:text-zinc-205">
+                            Username <span className="text-[10px] font-normal text-slate-500 dark:text-zinc-400">(6 chars)</span>
+                          </label>
                           <div className="flex gap-1.5">
                             <input 
                               type="text" 
                               required
-                              placeholder="Choose username" 
+                              placeholder="e.g. ayo482" 
                               value={username} 
-                              onChange={(e) => setUsername(e.target.value)} 
+                              maxLength={6}
+                              onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 6))} 
                               className={cn(
                                 "flex-1 h-[34px] px-3 bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 rounded text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-[#9333ea] focus:ring-1 focus:ring-[#9333ea] outline-none text-[13px] shadow-sm transition-all",
                                 fieldErrors.username && "border-red-500"
@@ -1960,6 +1985,7 @@ export default function AuthPage({
                             <button 
                               type="button"
                               onClick={generateUsername}
+                              title="Generate 6-character username based on your name"
                               className="h-[34px] px-2.5 bg-gradient-to-b from-[#f7dfa5] to-[#f0c14b] dark:from-[#353535] dark:to-[#222222] border border-[#a88734] dark:border-zinc-700 text-slate-900 dark:text-zinc-200 text-[11px] font-bold rounded shadow-sm hover:brightness-95 transition-all outline-none cursor-pointer"
                             >
                               Generate

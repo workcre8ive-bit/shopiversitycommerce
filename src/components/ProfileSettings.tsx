@@ -44,6 +44,7 @@ import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from ".
 import { compressImage } from "../lib/imageUtils";
 import { auth } from "../firebase";
 import { deleteUser, signOut } from "firebase/auth";
+import { cascadeDeleteUserAccount, generateSmartUsername } from "../utils/accountCleanup";
 import { cn } from "../lib/utils";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -852,110 +853,16 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
     setDeleteError("");
     try {
       const firebaseUser = auth.currentUser;
-      if (firebaseUser) {
-        const uid = user.uid;
+      const uid = user.uid;
 
-        // 1. Delete user's products
-        const productsQ = query(collection(db, "products"), where("sellerId", "==", uid));
-        const productsSnap = await getDocs(productsQ);
-        for (const d of productsSnap.docs) {
-          try {
-            await deleteDoc(d.ref);
-          } catch (e) {
-            console.error("Error deleting product:", d.id, e);
-          }
-        }
-
-        // 2. Delete user's orders (as buyer or seller)
-        const buyerOrdersQ = query(collection(db, "orders"), where("buyerId", "==", uid));
-        const sellerOrdersQ = query(collection(db, "orders"), where("sellerId", "==", uid));
-        const [buyerOrdersSnap, sellerOrdersSnap] = await Promise.all([getDocs(buyerOrdersQ), getDocs(sellerOrdersQ)]);
-        for (const d of buyerOrdersSnap.docs) {
-          try {
-            await deleteDoc(d.ref);
-          } catch (e) {
-            console.error("Error deleting buyer order:", d.id, e);
-          }
-        }
-        for (const d of sellerOrdersSnap.docs) {
-          try {
-            await deleteDoc(d.ref);
-          } catch (e) {
-            console.error("Error deleting seller order:", d.id, e);
-          }
-        }
-
-        // 3. Delete notifications
-        const notificationsQ = query(collection(db, "notifications"), where("userId", "==", uid));
-        const notificationsSnap = await getDocs(notificationsQ);
-        for (const d of notificationsSnap.docs) {
-          try {
-            await deleteDoc(d.ref);
-          } catch (e) {
-            console.error("Error deleting notification:", d.id, e);
-          }
-        }
-
-        // 4. Delete payout requests
-        const payoutQ = query(collection(db, "payoutRequests"), where("sellerId", "==", uid));
-        const payoutSnap = await getDocs(payoutQ);
-        for (const d of payoutSnap.docs) {
-          try {
-            await deleteDoc(d.ref);
-          } catch (e) {
-            console.error("Error deleting payout request:", d.id, e);
-          }
-        }
-
-        // 5. Delete reviews (by buyer or on seller's products)
-        const buyerReviewsQ = query(collection(db, "reviews"), where("buyerId", "==", uid));
-        const buyerReviewsSnap = await getDocs(buyerReviewsQ);
-        for (const d of buyerReviewsSnap.docs) {
-          try {
-            await deleteDoc(d.ref);
-          } catch (e) {
-            console.error("Error deleting buyer review:", d.id, e);
-          }
-        }
-        
-        for (const productDoc of productsSnap.docs) {
-          const productReviewsQ = query(collection(db, "reviews"), where("productId", "==", productDoc.id));
-          const productReviewsSnap = await getDocs(productReviewsQ);
-          for (const d of productReviewsSnap.docs) {
-            try {
-              await deleteDoc(d.ref);
-            } catch (e) {
-              console.error("Error deleting product review:", d.id, e);
-            }
-          }
-        }
-
-        // 6. Delete reports
-        const reporterReportsQ = query(collection(db, "reports"), where("reporterId", "==", uid));
-        const vendorReportsQ = query(collection(db, "reports"), where("vendorId", "==", uid));
-        const [repSnap, venSnap] = await Promise.all([getDocs(reporterReportsQ), getDocs(vendorReportsQ)]);
-        for (const d of repSnap.docs) {
-          try {
-            await deleteDoc(d.ref);
-          } catch (e) {
-            console.error("Error deleting reporter report:", d.id, e);
-          }
-        }
-        for (const d of venSnap.docs) {
-          try {
-            await deleteDoc(d.ref);
-          } catch (e) {
-            console.error("Error deleting vendor report:", d.id, e);
-          }
-        }
-
-        // 7. Delete user document
-        await deleteDoc(doc(db, "users", uid));
-
-        // 8. Delete from Firebase Auth
-        await deleteUser(firebaseUser);
-        alert("Account and all associated data deleted successfully.");
+      const result = await cascadeDeleteUserAccount(uid, firebaseUser);
+      if (!result.success && result.error) {
+        setDeleteError(result.error);
+        return;
       }
+
+      alert("Your account and all created products, listings, and public data have been permanently deleted from Firebase.");
+      window.location.reload();
     } catch (error: any) {
       console.error("Delete account error:", error);
       if (error.code === "auth/requires-recent-login") {
@@ -1222,12 +1129,27 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
               </div>
             </div>
             <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Username</label>
+              <div className="flex items-center justify-between ml-1">
+                <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest">
+                  Username <span className="text-[10px] font-normal text-slate-400 lowercase">(6 chars)</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setUsername(generateSmartUsername(fullName || user.displayName))}
+                  title="Generate 6-character username based on your name"
+                  className="text-[10px] font-bold text-orange-600 dark:text-orange-400 hover:underline cursor-pointer bg-transparent border-none p-0 flex items-center gap-1"
+                >
+                  <Sparkles className="w-3 h-3" />
+                  Generate 6-char
+                </button>
+              </div>
               <div className="relative">
                 <AtSign className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                 <input 
                   value={username}
-                  onChange={(e) => setUsername(e.target.value)}
+                  maxLength={6}
+                  onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 6))}
+                  placeholder="e.g. ayo482"
                   className="w-full h-14 pl-12 pr-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-purple-500 outline-none transition-all text-slate-900 dark:text-white"
                 />
               </div>

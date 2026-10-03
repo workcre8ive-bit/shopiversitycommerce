@@ -11,7 +11,8 @@ import {
   updateDoc,
   getDocs,
   addDoc,
-  getDoc
+  getDoc,
+  deleteDoc
 } from "firebase/firestore";
 import { Product, UserProfile, CartItem, Notification } from "./types";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "./lib/firebase-errors";
@@ -194,6 +195,7 @@ export default function App() {
 
   const [products, setProducts] = React.useState<Product[]>([]);
   const [sellers, setSellers] = React.useState<UserProfile[]>([]);
+  const [existingUserIds, setExistingUserIds] = React.useState<Set<string>>(new Set());
 
   const sellersMap = React.useMemo(() => {
     const map: Record<string, UserProfile> = {};
@@ -206,6 +208,32 @@ export default function App() {
   const [loading, setLoading] = React.useState(true);
   const [authLoading, setAuthLoading] = React.useState(true);
   const [currentUser, setCurrentUser] = React.useState<UserProfile | null>(null);
+
+  // Automatically detect and delete from Firebase any orphaned products created by deleted accounts
+  React.useEffect(() => {
+    if (loading || existingUserIds.size === 0 || products.length === 0) return;
+
+    // Detect products whose seller does not exist in Firebase users collection
+    const orphaned = products.filter(p => p.sellerId && !existingUserIds.has(p.sellerId));
+    if (orphaned.length > 0) {
+      console.log(`[ORPHAN CLEANUP] Detected ${orphaned.length} orphaned products from deleted accounts. Purging from Firebase...`);
+      const orphanedSet = new Set(orphaned.map(p => p.id));
+      // Remove from app state immediately
+      setProducts(prev => prev.filter(p => !orphanedSet.has(p.id)));
+
+      // Delete from Firebase Firestore
+      orphaned.forEach(p => {
+        deleteDoc(doc(db, "products", p.id)).catch(() => {});
+      });
+
+      // Call backend cleanup endpoint to purge database
+      fetch("/api/account/cleanup-orphaned-content", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productIds: orphaned.map(p => p.id) })
+      }).catch(() => {});
+    }
+  }, [products, existingUserIds, loading]);
 
   // Smooth Branded Splash Preloader State
   const [isInitialSplashActive, setIsInitialSplashActive] = React.useState(true);
@@ -405,6 +433,7 @@ export default function App() {
 
   const [activeRole, setActiveRole] = React.useState<"buyer" | "seller">("buyer");
   const [authMode, setAuthMode] = React.useState<"login" | "signup">("signup");
+  const [authRole, setAuthRole] = React.useState<"buyer" | "seller">("buyer");
   const [chatWithUserId, setChatWithUserId] = React.useState<string | null>(null);
   const [isCartOpen, setIsCartOpen] = React.useState(false);
   const [isReturnPolicyOpen, setIsReturnPolicyOpen] = React.useState(false);
@@ -748,11 +777,17 @@ export default function App() {
             setAuthLoading(false);
             setNeedsProfile(false);
           } else {
+            // Account was deleted from Firebase or does not exist
             setCurrentUser(null);
+            if (authMode !== "signup") {
+              signOut(auth).catch(() => {});
+              localStorage.removeItem("shopiversity_cart");
+              if (user?.uid) {
+                localStorage.removeItem(`shopiversity_bank_details_${user.uid}`);
+              }
+            }
             setNeedsProfile(true);
-            setTimeout(() => {
-              setAuthLoading(false);
-            }, 1500);
+            setAuthLoading(false);
           }
         }, (error) => {
           handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
@@ -805,6 +840,8 @@ export default function App() {
     const usersQ = query(collection(db, "users"));
     const unsubscribeUsers = onSnapshot(usersQ, (snapshot) => {
       const usersData = snapshot.docs.map(docSnap => ({ uid: docSnap.id, ...docSnap.data() } as UserProfile));
+      const uIds = new Set(snapshot.docs.map(docSnap => docSnap.id));
+      setExistingUserIds(uIds);
       const sellersList = usersData.filter(u => 
         (u.role === "seller" || u.businessName || u.storefrontSettings?.businessName) && 
         u.state !== "Logistics Partner"
@@ -834,6 +871,9 @@ export default function App() {
 
   const filteredProducts = Array.from(new Map<string, Product>(products.filter((p) => {
     if (p.isDeleted || p.isHibernated || (p.stock !== undefined && p.stock <= 0)) return false;
+    
+    // If the seller account has been deleted from Firebase, never show it in the app
+    if (p.sellerId && existingUserIds.size > 0 && !existingUserIds.has(p.sellerId)) return false;
     
     // Services should not be in general marketplace, only on Services tab
     if (p.type === "service") return false;
@@ -1478,6 +1518,7 @@ export default function App() {
                 <AuthPage 
                   initialNeedsProfile={needsProfile} 
                   initialMode={authMode} 
+                  initialRole={authRole}
                   onModeChange={(mode) => {
                     setAuthMode(mode);
                     setActiveTabState(mode === "login" ? "auth" : "signup");
@@ -1564,26 +1605,37 @@ export default function App() {
                         <Carousel 
                           onShopNow={() => {
                             if (currentUser) {
+                              if (activeRole !== "buyer") {
+                                setActiveRole("buyer");
+                              }
                               setActiveTab("market");
                               scrollToTop();
                             } else {
-                              setActiveTab("settings");
+                              setAuthRole("buyer");
+                              setAuthMode("signup");
+                              setActiveTab("signup");
+                              scrollToTop();
                             }
                           }}
                           onStartSelling={() => {
                             if (currentUser) {
                               if (currentUser.state === "Logistics Partner") {
                                 alert("Your account is registered as a Logistics Partner. You can manage your logistics hub directly.");
-                              } else if (currentUser.role === "buyer") {
-                                setActiveTab("settings");
-                                alert("Please switch to a seller account in your profile/sidebar to start selling.");
                               } else {
                                 setActiveRole("seller");
                                 setActiveTab("dashboard");
+                                scrollToTop();
                               }
                             } else {
-                              setActiveTab("dashboard"); // This will trigger AuthPage
+                              setAuthRole("seller");
+                              setAuthMode("signup");
+                              setActiveTab("signup");
+                              scrollToTop();
                             }
+                          }}
+                          onLogistics={() => {
+                            setActiveTab("logistics");
+                            scrollToTop();
                           }}
                           currentUser={currentUser}
                           onOpenReturnPolicy={() => setIsReturnPolicyOpen(true)}

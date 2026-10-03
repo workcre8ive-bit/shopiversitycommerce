@@ -2404,6 +2404,139 @@ const FALLBACK_BANKS = [
   });
 
   // =========================================================================
+  // ACCOUNT PERMANENT PURGE & ORPHANED CONTENT CLEANUP ENDPOINTS
+  // =========================================================================
+
+  // Cascade delete all public and private data when an account is deleted
+  app.post("/api/account/cascade-delete", async (req, res) => {
+    try {
+      const { uid } = req.body;
+      if (!uid) {
+        return res.status(400).json({ error: "Missing uid parameter" });
+      }
+
+      console.log(`[ACCOUNT PURGE] Initiating complete cascade deletion for user: ${uid}`);
+
+      if (!firebaseAdminDb) {
+        return res.status(200).json({ success: true, message: "Admin DB not initialized, processed on client." });
+      }
+
+      const collectionsToPurge = [
+        { name: "products", field: "sellerId" },
+        { name: "event_plans", field: "userId" },
+        { name: "orders", field: "buyerId" },
+        { name: "orders", field: "sellerId" },
+        { name: "reviews", field: "buyerId" },
+        { name: "reports", field: "reporterId" },
+        { name: "reports", field: "vendorId" },
+        { name: "payoutRequests", field: "sellerId" },
+        { name: "notifications", field: "userId" },
+        { name: "logistics_deliveries", field: "senderId" },
+        { name: "product_history", field: "userId" },
+        { name: "disputes", field: "userId" },
+        { name: "supportTickets", field: "userId" }
+      ];
+
+      for (const item of collectionsToPurge) {
+        try {
+          const colRef = firebaseAdminDb.collection(item.name);
+          const snap = await colRef.where(item.field, "==", uid).get();
+          if (snap.size > 0) {
+            const batch = firebaseAdminDb.batch();
+            snap.docs.forEach(docSnap => {
+              batch.delete(docSnap.ref);
+            });
+            await batch.commit();
+            console.log(`[ACCOUNT PURGE] Purged ${snap.size} docs from ${item.name} for ${uid}`);
+          }
+        } catch (colErr) {
+          console.warn(`[ACCOUNT PURGE] Notice cleaning ${item.name}:`, colErr);
+        }
+      }
+
+      // Also delete logistics_companies document if exists
+      try {
+        await firebaseAdminDb.collection("logistics_companies").doc(uid).delete();
+      } catch (e) {}
+
+      // Delete user document
+      try {
+        await firebaseAdminDb.collection("users").doc(uid).delete();
+      } catch (e) {}
+
+      // Attempt to delete user in Firebase Auth
+      try {
+        await admin.auth().deleteUser(uid);
+        console.log(`[ACCOUNT PURGE] Firebase Auth user deleted: ${uid}`);
+      } catch (authErr: any) {
+        // If already deleted, ignore
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: "Account and all created content permanently purged from Firebase."
+      });
+    } catch (err: any) {
+      console.error("[ACCOUNT PURGE] Failed cascade delete:", err);
+      res.status(500).json({ error: err.message || "Failed to purge account data" });
+    }
+  });
+
+  // Clean up any orphaned products or public content whose creator was deleted from Firebase
+  app.post("/api/account/cleanup-orphaned-content", async (req, res) => {
+    try {
+      const { productIds } = req.body;
+
+      if (!firebaseAdminDb) {
+        return res.status(200).json({ success: true, purgedCount: 0 });
+      }
+
+      let purgedCount = 0;
+
+      // 1. If explicit productIds provided, delete them
+      if (Array.isArray(productIds) && productIds.length > 0) {
+        const batch = firebaseAdminDb.batch();
+        for (const pid of productIds) {
+          const pRef = firebaseAdminDb.collection("products").doc(pid);
+          batch.delete(pRef);
+          purgedCount++;
+        }
+        await batch.commit();
+      } else {
+        // Full scan: Find products where sellerId does not exist in users
+        const usersSnap = await firebaseAdminDb.collection("users").get();
+        const validUserIds = new Set(usersSnap.docs.map(d => d.id));
+
+        const productsSnap = await firebaseAdminDb.collection("products").get();
+        const batch = firebaseAdminDb.batch();
+        let inBatch = 0;
+
+        for (const pDoc of productsSnap.docs) {
+          const data = pDoc.data();
+          if (data.sellerId && !validUserIds.has(data.sellerId)) {
+            batch.delete(pDoc.ref);
+            inBatch++;
+            purgedCount++;
+            if (inBatch >= 400) {
+              await batch.commit();
+              inBatch = 0;
+            }
+          }
+        }
+        if (inBatch > 0) {
+          await batch.commit();
+        }
+      }
+
+      console.log(`[ORPHAN CLEANUP] Removed ${purgedCount} orphaned products from Firebase.`);
+      return res.status(200).json({ success: true, purgedCount });
+    } catch (err: any) {
+      console.error("[ORPHAN CLEANUP] Failed:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // =========================================================================
   // REFUND SYSTEM & AUDIT TRAIL ENDPOINTS (SECTIONS 31 - 48)
   // =========================================================================
 

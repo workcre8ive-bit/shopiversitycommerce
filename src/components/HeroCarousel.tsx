@@ -122,11 +122,12 @@ const slides = [
 interface HeroCarouselProps {
   onShopNow: () => void;
   onStartSelling: () => void;
+  onLogistics?: () => void;
   onOpenReturnPolicy?: () => void;
   currentUser: any;
 }
 
-export default function HeroCarousel({ onShopNow, onStartSelling, onOpenReturnPolicy, currentUser }: HeroCarouselProps) {
+export default function HeroCarousel({ onShopNow, onStartSelling, onLogistics, onOpenReturnPolicy, currentUser }: HeroCarouselProps) {
   const [slideIndex, setSlideIndex] = React.useState(0);
   const [charIndex, setCharIndex] = React.useState(0);
   const [isDeleting, setIsDeleting] = React.useState(false);
@@ -423,7 +424,17 @@ export default function HeroCarousel({ onShopNow, onStartSelling, onOpenReturnPo
               <ShoppingBag className="w-3.5 h-3.5 text-white" />
             </motion.button>
 
-            {slideIndex === 7 && onOpenReturnPolicy ? (
+            {slideIndex === 6 && onLogistics ? (
+              <motion.button 
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.97 }}
+                onClick={onLogistics}
+                className="px-4 py-2 sm:px-6 sm:py-3 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white rounded-xl font-black tracking-wider transition-all text-[10px] sm:text-xs uppercase cursor-pointer flex items-center gap-1.5 outline-none shrink-0 shadow-lg shadow-orange-600/20"
+              >
+                <Truck className="w-3.5 h-3.5 text-white" />
+                <span>Logistics Hub</span>
+              </motion.button>
+            ) : slideIndex === 7 && onOpenReturnPolicy ? (
               <motion.button 
                 whileHover={{ scale: 1.03 }}
                 whileTap={{ scale: 0.97 }}

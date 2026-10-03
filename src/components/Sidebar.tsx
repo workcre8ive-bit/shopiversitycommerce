@@ -141,110 +141,100 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
         transition={{ type: "spring", damping: 30, stiffness: 300 }}
         className="fixed top-0 left-0 bottom-0 w-[85vw] max-w-[365px] bg-white dark:bg-slate-900 text-slate-900 dark:text-white z-[210] flex flex-col shadow-2xl overflow-hidden"
       >
-        {/* Header */}
-        <div className="bg-brand-gradient p-6 sm:p-8 flex flex-col gap-4 shrink-0 relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-white/20 rounded-full -mr-16 -mt-16 blur-2xl" />
-          
-          {/* Elegant Close Button Inside Visible Area */}
+        {/* Top Header Bar with prominent Shopiversity Logo & Close Button */}
+        <div className="flex items-center justify-between px-5 py-4 bg-white dark:bg-zinc-900 border-b border-slate-100 dark:border-zinc-800 shrink-0">
+          <Logo 
+            showText={true} 
+            onClick={() => {
+              if (user?.state === "Logistics Partner" || user?.role === "logistics") {
+                setActiveTab("logistics");
+              } else if (!user || activeTab === "auth" || activeTab === "signup") {
+                setActiveTab("market");
+              } else {
+                setActiveTab(activeRole === "seller" ? "dashboard" : "market");
+              }
+              onClose();
+            }}
+          />
           <button 
             onClick={onClose}
-            className="absolute top-4 right-4 p-1.5 text-white/80 hover:text-white hover:bg-white/10 rounded-full transition-all focus:outline-none z-30 cursor-pointer"
+            className="p-2 text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-zinc-800 rounded-xl transition-all focus:outline-none cursor-pointer border-none"
             title="Close menu"
           >
             <X className="w-5 h-5" />
           </button>
+        </div>
 
-          {/* Shopiversity Logo inside Drawer Header */}
-          <div className="relative z-10 pb-1">
-            <Logo 
-              showText={true} 
-              onClick={() => {
-                if (user?.state === "Logistics Partner" || user?.role === "logistics") {
-                  setActiveTab("logistics");
-                } else if (!user || activeTab === "auth" || activeTab === "signup") {
-                  setActiveTab("market");
-                } else {
-                  setActiveTab(activeRole === "seller" ? "dashboard" : "market");
-                }
-                onClose();
-              }}
-              className="text-white"
-            />
-          </div>
-          
-          <div className="flex items-center justify-between relative z-10">
+        {/* User Profile / Greeting Section */}
+        {user ? (
+          <div className="bg-brand-gradient p-5 sm:p-6 text-white relative overflow-hidden shrink-0 shadow-md">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16 blur-2xl pointer-events-none" />
+            
+            <div className="flex items-center justify-between relative z-10 mb-3">
+              <button
+                onClick={() => {
+                  setActiveTab("settings");
+                  onClose();
+                }}
+                className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center border border-white/30 shadow-xl overflow-hidden hover:scale-105 active:scale-95 transition-all cursor-pointer border-none outline-none group touch-manipulation"
+                title="View Profile Settings"
+              >
+                {user?.photoURL ? (
+                  <img src={user.photoURL} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  <User className="w-6 h-6 text-white" />
+                )}
+              </button>
+              
+              <div className="flex items-center gap-2">
+                {(user?.role === "both" || user?.role === "seller" || user?.role === "admin") && user?.state !== "Logistics Partner" && (
+                  <button 
+                    onClick={onToggleRole}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-white/20 backdrop-blur-md rounded-xl border border-white/30 text-white hover:bg-white/30 transition-all active:scale-95 shadow-md group touch-manipulation"
+                  >
+                    <ArrowLeftRight className="w-3.5 h-3.5 group-hover:rotate-180 transition-transform duration-500" />
+                    <span className="text-[10px] font-black uppercase tracking-widest">
+                      Switch to {activeRole === "buyer" ? "Seller" : "Buyer"}
+                    </span>
+                  </button>
+                )}
+              </div>
+            </div>
+            
             <button
               onClick={() => {
-                setActiveTab(user ? "settings" : "auth");
+                setActiveTab("settings");
                 onClose();
               }}
-              className="w-14 h-14 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center border border-white/30 shadow-xl overflow-hidden hover:scale-105 active:scale-95 transition-all cursor-pointer border-none outline-none group touch-manipulation"
-              title={user ? "View Profile Settings" : "Sign In"}
+              className="relative z-10 text-left hover:opacity-90 transition-opacity cursor-pointer border-none outline-none group touch-manipulation block w-full bg-transparent p-0"
+              title="View Profile Settings"
             >
-              {user?.photoURL ? (
-                <img src={user.photoURL} alt="" className="w-full h-full object-cover" />
-              ) : (
-                <User className="w-7 h-7 text-white" />
-              )}
+              <p className="text-white/80 text-[10px] font-extrabold uppercase tracking-widest flex items-center gap-1">
+                <span>{(user?.state === "Logistics Partner" || user?.role === "logistics") ? "Logistics Partner Account" : (activeRole === "buyer" ? "Shopping Account" : "Seller Account")}</span>
+                <ChevronRight className="w-3.5 h-3.5 text-white/70 group-hover:translate-x-0.5 transition-transform" />
+              </p>
+              <h2 className="text-xl font-black !text-white tracking-tight truncate mt-0.5">
+                Hello, {user?.displayName?.split(' ')[0] || "User"}
+              </h2>
             </button>
-            
-            <div className="flex items-center gap-2">
-              {(user?.role === "both" || user?.role === "seller" || user?.role === "admin") && user?.state !== "Logistics Partner" && (
-                <button 
-                  onClick={onToggleRole}
-                  className="flex items-center gap-2 px-3 py-2 bg-white/20 backdrop-blur-md rounded-xl border border-white/30 text-white hover:bg-white/30 transition-all active:scale-95 shadow-lg group touch-manipulation"
-                >
-                  <ArrowLeftRight className="w-3.5 h-3.5 group-hover:rotate-180 transition-transform duration-500" />
-                  <span className="text-[10px] font-black uppercase tracking-widest">
-                    Switch to {activeRole === "buyer" ? "Seller" : "Buyer"}
-                  </span>
-                </button>
-              )}
-            </div>
           </div>
-          
-          <button
-            onClick={() => {
-              setActiveTab(user ? "settings" : "auth");
-              onClose();
-            }}
-            className="relative z-10 text-left hover:opacity-90 transition-opacity cursor-pointer border-none outline-none group touch-manipulation"
-            title={user ? "View Profile Settings" : "Sign In"}
-          >
-            <p className="text-white/70 text-xs font-bold uppercase tracking-widest flex items-center gap-1.5">
-              <span>{(user?.state === "Logistics Partner" || user?.role === "logistics") ? "Logistics Partner Account" : (activeRole === "buyer" ? "Shopping Account" : "Seller Account")}</span>
-              <ChevronRight className="w-3.5 h-3.5 text-white/70 group-hover:translate-x-0.5 transition-transform" />
-            </p>
-            <h2 className="text-2xl font-black !text-white tracking-tight no-underline">Hello, {user?.displayName?.split(' ')[0] || "Guest"}</h2>
-          </button>
-
-          {!user && (
-            <div className="grid grid-cols-2 gap-2.5 pt-1 relative z-10">
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveTab("auth");
-                  onClose();
-                }}
-                className="min-h-[42px] px-3 py-2 bg-white/20 hover:bg-white/30 active:scale-95 backdrop-blur-md border border-white/35 rounded-xl text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer touch-manipulation whitespace-nowrap shadow-sm"
-              >
-                <User className="w-4 h-4 shrink-0" />
-                <span>Sign In</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveTab("signup");
-                  onClose();
-                }}
-                className="min-h-[42px] px-3 py-2 bg-white hover:bg-orange-50 active:scale-95 text-[#ff6b00] rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-all cursor-pointer border-none touch-manipulation whitespace-nowrap shadow-md"
-              >
-                <UserPlus className="w-4 h-4 shrink-0" />
-                <span>Sign Up</span>
-              </button>
+        ) : (
+          <div className="bg-brand-gradient p-5 sm:p-6 text-white relative overflow-hidden shrink-0 shadow-md">
+            <div className="absolute top-0 right-0 w-28 h-28 bg-white/10 rounded-full -mr-12 -mt-12 blur-xl pointer-events-none" />
+            <div className="relative z-10 flex items-center gap-3">
+              <div className="w-11 h-11 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center border border-white/30 text-white shrink-0 shadow-sm">
+                <User className="w-5 h-5 text-white" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-white/80 text-[10px] font-extrabold uppercase tracking-widest">Campus Guest</p>
+                <h2 className="text-xl font-black !text-white tracking-tight truncate">Hello, Guest</h2>
+              </div>
             </div>
-          )}
-        </div>
+            <p className="text-white/90 text-xs font-medium mt-2 leading-relaxed relative z-10">
+              Welcome to Shopiversity! Find verified campus deals, textbooks, and student services.
+            </p>
+          </div>
+        )}
 
         {/* Navigation */}
         <div className="flex-1 overflow-y-auto px-4 py-8 space-y-8">

@@ -20,11 +20,13 @@ import {
   Clock, 
   Award,
   Sparkles,
-  ExternalLink
+  ExternalLink,
+  Trash2
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { UserProfile, Order, Product } from "../types";
 import { cn } from "../lib/utils";
+import { cascadeDeleteUserAccount } from "../utils/accountCleanup";
 
 interface AdminUserDetailModalProps {
   isOpen: boolean;
@@ -46,6 +48,32 @@ export default function AdminUserDetailModal({
   onToggleVerification
 }: AdminUserDetailModalProps) {
   const [copiedCode, setCopiedCode] = React.useState(false);
+  const [isDeleting, setIsDeleting] = React.useState(false);
+
+  const handleAdminCascadeDelete = async () => {
+    if (!user) return;
+    const confirmDelete = window.confirm(
+      `PERMANENT ACTION: Are you sure you want to permanently delete account "${user.displayName}" (@${user.username})?\n\nThis will permanently delete from Firebase:\n- All products and listings created by this account\n- All event tickets and plans\n- All reviews and disputes\n- The user profile document and auth account.`
+    );
+    if (!confirmDelete) return;
+
+    setIsDeleting(true);
+    try {
+      const uid = user.uid || user.id;
+      if (!uid) return;
+      const res = await cascadeDeleteUserAccount(uid);
+      if (res.success) {
+        alert("Account and all created content permanently purged from Firebase.");
+        onClose();
+      } else {
+        alert("Error purging account: " + (res.error || "Unknown error"));
+      }
+    } catch (e: any) {
+      alert("Error: " + e.message);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   if (!isOpen || !user) return null;
 
@@ -392,10 +420,18 @@ export default function AdminUserDetailModal({
           </div>
 
           {/* Footer */}
-          <div className="p-6 sm:p-8 bg-slate-50 dark:bg-slate-850 border-t border-slate-100 dark:border-slate-800 flex justify-end">
+          <div className="p-6 sm:p-8 bg-slate-50 dark:bg-slate-850 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-4">
+            <button
+              onClick={handleAdminCascadeDelete}
+              disabled={isDeleting}
+              className="px-4 py-2.5 rounded-2xl bg-red-50 hover:bg-red-100 dark:bg-red-950/40 dark:hover:bg-red-900/60 text-red-600 dark:text-red-400 font-bold text-xs cursor-pointer border border-red-200 dark:border-red-900/50 flex items-center gap-1.5 active:scale-95 transition-all disabled:opacity-50"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              {isDeleting ? "Purging from Firebase..." : "Delete Account & Purge Content"}
+            </button>
             <button
               onClick={onClose}
-              className="px-6 py-3 rounded-2xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-bold text-xs cursor-pointer"
+              className="px-6 py-3 rounded-2xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-bold text-xs cursor-pointer active:scale-95 transition-all"
             >
               Close Dossier
             </button>
