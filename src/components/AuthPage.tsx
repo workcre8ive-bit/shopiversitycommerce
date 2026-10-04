@@ -13,12 +13,13 @@ import {
   signInWithRedirect,
   getRedirectResult,
   signOut,
+  deleteUser,
   browserPopupRedirectResolver,
   RecaptchaVerifier,
   signInWithPhoneNumber,
   type ConfirmationResult
 } from "firebase/auth";
-import { doc, setDoc, getDoc, updateDoc, collection, addDoc, query, where, getDocs } from "firebase/firestore";
+import { doc, setDoc, getDoc, updateDoc, collection, addDoc, query, where, getDocs, deleteDoc } from "firebase/firestore";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   User, 
@@ -396,14 +397,63 @@ export default function AuthPage({
               return;
             }
           } else {
-            // Account was deleted from Firebase
-            await signOut(auth);
-            fetch("/api/account/cascade-delete", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ uid: user.uid })
-            }).catch(() => {});
-            setError("This account was previously deleted from Firebase. Please sign up to create a new account.");
+            // Firebase Auth succeeded, but the database profile was deleted or missing from Firestore
+            setErrorPopup({
+              isOpen: true,
+              type: "profile_missing",
+              title: "Account Exists but Profile Missing",
+              message: `Your login credentials for "${user.email || cleanEmail}" are valid in Firebase Authentication, but your database profile was deleted. Would you like to restore your marketplace profile, or permanently delete the login credentials to register fresh?`,
+              email: user.email || cleanEmail,
+              primaryActionLabel: "Restore / Recreate Profile",
+              onPrimaryAction: async () => {
+                try {
+                  const defaultProfile: UserProfile = {
+                    uid: user.uid,
+                    displayName: user.displayName || (user.email ? user.email.split("@")[0] : "User"),
+                    username: ((user.displayName || user.email?.split("@")[0] || "user").replace(/[^a-zA-Z0-9]/g, "").toLowerCase() || "user") + Math.floor(100 + Math.random() * 900),
+                    email: (user.email || cleanEmail).toLowerCase(),
+                    phoneNumber: user.phoneNumber || "",
+                    gender: "other",
+                    role: "both",
+                    activeRole: "buyer",
+                    referralCode: generateReferralCode(user.displayName || "USER"),
+                    referredBy: "",
+                    referralEarnings: 0,
+                    referralCount: 0,
+                    schoolType: "",
+                    schoolName: "",
+                    state: "",
+                    city: "",
+                    deliveryAddress: "",
+                    isVerified: user.emailVerified || false,
+                    isSuspended: false,
+                    reportCount: 0,
+                    createdAt: new Date().toISOString(),
+                    verificationIdUrl: "",
+                    profileCompleted: false
+                  };
+                  await setDoc(doc(db, "users", user.uid), defaultProfile);
+                  setErrorPopup(prev => ({ ...prev, isOpen: false }));
+                  setError("Profile restored successfully! Welcome back to SHOPIVERSITY.");
+                } catch (rErr: any) {
+                  console.error("Failed to restore profile:", rErr);
+                  setError("Failed to restore profile. Please check your internet connection.");
+                }
+              },
+              secondaryActionLabel: "Delete Account & Register Fresh",
+              onSecondaryAction: async () => {
+                try {
+                  await deleteUser(user);
+                  setError("Lingering authentication account removed from Firebase. You can now register fresh.");
+                } catch (delErr: any) {
+                  console.warn("User delete notice:", delErr);
+                  await signOut(auth);
+                  setError("Session cleared. Please sign up to create your new account.");
+                }
+                setErrorPopup(prev => ({ ...prev, isOpen: false }));
+                switchAuthMode(false);
+              }
+            });
             setLoading(false);
             return;
           }
@@ -505,24 +555,7 @@ export default function AuthPage({
               return;
             }
 
-            // Check 2: Has this email already been used to sign up as a user?
-            const existingUserQ = query(collection(db, "users"), where("email", "==", cleanEmail));
-            const existingUserSnap = await getDocs(existingUserQ);
-            if (!existingUserSnap.empty) {
-              setErrorPopup({
-                isOpen: true,
-                type: "email_in_use",
-                title: "Email Already Registered",
-                message: `An account with the email address "${cleanEmail}" is already registered on SHOPIVERSITY. You cannot create a duplicate account with this email. Please sign in to your existing account.`,
-                email: cleanEmail,
-                primaryActionLabel: "Switch to Sign In",
-                onPrimaryAction: () => {
-                  switchAuthMode(true);
-                }
-              });
-              setLoading(false);
-              return;
-            }
+            // Check 2: Pre-check logistics conflict only (do not block user signup prematurely)
           } catch (preCheckErr) {
             console.warn("Signup email pre-check notice:", preCheckErr);
           }
@@ -547,37 +580,47 @@ export default function AuthPage({
           } catch (createErr: any) {
             if (createErr.code === "auth/email-already-in-use" || createErr.message?.includes("email-already-in-use")) {
               // Check if account was deleted from Firebase Firestore and lingering in Auth
-              try {
-                const purgeRes = await fetch("/api/account/purge-orphaned-auth", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ email: cleanEmail })
-                });
-                const purgeData = await purgeRes.json();
-                if (purgeData.purged) {
-                  // Lingering auth record was purged, retry account creation immediately!
-                  const retryCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
-                  firebaseUser = retryCredential.user;
-                  await updateProfile(firebaseUser, { displayName: fullName });
-                  try {
-                    await sendEmailVerification(firebaseUser, { url: window.location.origin, handleCodeInApp: false });
-                  } catch (e) {}
-                } else {
+              const existingUserQ = query(collection(db, "users"), where("email", "==", cleanEmail));
+              const existingUserSnap = await getDocs(existingUserQ);
+
+              if (existingUserSnap.empty) {
+                // The profile document is MISSING in Firestore, but account exists in Firebase Auth!
+                // Try to authenticate with the password the user just entered to restore their profile
+                try {
+                  const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
+                  firebaseUser = cred.user;
+                  if (fullName) {
+                    await updateProfile(firebaseUser, { displayName: fullName });
+                  }
+                  console.log(`[AUTH RECOVERY] Authenticated orphaned user ${firebaseUser.uid}. Recreating Firestore profile...`);
+                } catch (pwErr) {
+                  // Password didn't match the existing auth account. Offer sign in or password reset via Firebase.
                   setErrorPopup({
                     isOpen: true,
-                    type: "email_in_use",
-                    title: "Email Already Registered",
-                    message: `The email address "${cleanEmail}" is already registered on SHOPIVERSITY. You cannot create a duplicate account with this email. Please sign in to your existing account.`,
+                    type: "profile_missing",
+                    title: "Account Exists but Profile Missing",
+                    message: `An account with "${cleanEmail}" exists in Firebase Authentication, but its database profile was deleted. Please sign in with your password to restore your profile, or send a password reset link to ${cleanEmail}.`,
                     email: cleanEmail,
-                    primaryActionLabel: "Switch to Sign In",
+                    primaryActionLabel: "Sign In to Restore Profile",
                     onPrimaryAction: () => {
                       switchAuthMode(true);
+                    },
+                    secondaryActionLabel: "Send Reset Link via Firebase",
+                    onSecondaryAction: async () => {
+                      try {
+                        await sendPasswordResetEmail(auth, cleanEmail, { url: window.location.origin, handleCodeInApp: false });
+                        setError(`Password reset link sent to ${cleanEmail} via Firebase! Please check your email.`);
+                      } catch (e: any) {
+                        setError(e.message || "Failed to send reset link via Firebase.");
+                      }
+                      setErrorPopup(prev => ({ ...prev, isOpen: false }));
                     }
                   });
                   setLoading(false);
                   return;
                 }
-              } catch (purgeErr) {
+              } else {
+                // Active profile document exists in Firestore as well. Genuine existing account.
                 setErrorPopup({
                   isOpen: true,
                   type: "email_in_use",
@@ -587,6 +630,16 @@ export default function AuthPage({
                   primaryActionLabel: "Switch to Sign In",
                   onPrimaryAction: () => {
                     switchAuthMode(true);
+                  },
+                  secondaryActionLabel: "Reset Password via Firebase",
+                  onSecondaryAction: async () => {
+                    try {
+                      await sendPasswordResetEmail(auth, cleanEmail, { url: window.location.origin, handleCodeInApp: false });
+                      setError(`Password reset link sent to ${cleanEmail} via Firebase! Please check your email.`);
+                    } catch (e: any) {
+                      setError(e.message || "Failed to send reset link via Firebase.");
+                    }
+                    setErrorPopup(prev => ({ ...prev, isOpen: false }));
                   }
                 });
                 setLoading(false);
@@ -596,6 +649,18 @@ export default function AuthPage({
               throw createErr;
             }
           }
+        }
+
+        // Clean up any stale or orphaned documents matching this email with a different UID
+        try {
+          const staleDocs = await getDocs(query(collection(db, "users"), where("email", "==", cleanEmail)));
+          for (const sDoc of staleDocs.docs) {
+            if (sDoc.id !== firebaseUser.uid) {
+              await deleteDoc(sDoc.ref).catch(() => {});
+            }
+          }
+        } catch (cleanupErr) {
+          console.warn("Stale docs cleanup notice:", cleanupErr);
         }
 
         const referralCode = generateReferralCode(fullName || firebaseUser.displayName || "USER");

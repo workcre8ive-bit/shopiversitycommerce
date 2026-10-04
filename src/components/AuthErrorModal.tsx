@@ -1,12 +1,12 @@
 import React from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
-import { AlertCircle, Truck, ShoppingBag, UserX, X, ArrowRight } from "lucide-react";
+import { AlertCircle, Truck, ShoppingBag, UserX, UserCheck, X, ArrowRight } from "lucide-react";
 
 export interface AuthErrorModalProps {
   isOpen: boolean;
   onClose: () => void;
-  type: "logistics_mismatch" | "buyer_seller_mismatch" | "email_in_use" | "generic";
+  type: "logistics_mismatch" | "buyer_seller_mismatch" | "email_in_use" | "profile_missing" | "generic";
   title: string;
   message: string;
   email?: string;
@@ -44,6 +44,8 @@ export default function AuthErrorModal({
         return <ShoppingBag className="w-7 h-7 sm:w-8 sm:h-8 text-amber-600 dark:text-amber-400" />;
       case "email_in_use":
         return <UserX className="w-7 h-7 sm:w-8 sm:h-8 text-red-600 dark:text-red-400" />;
+      case "profile_missing":
+        return <UserCheck className="w-7 h-7 sm:w-8 sm:h-8 text-blue-600 dark:text-blue-400" />;
       default:
         return <AlertCircle className="w-7 h-7 sm:w-8 sm:h-8 text-orange-600 dark:text-orange-400" />;
     }
@@ -57,6 +59,8 @@ export default function AuthErrorModal({
         return "bg-amber-100 dark:bg-amber-950/60 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300";
       case "email_in_use":
         return "bg-red-100 dark:bg-red-950/60 border-red-200 dark:border-red-800 text-red-700 dark:text-red-300";
+      case "profile_missing":
+        return "bg-blue-100 dark:bg-blue-950/60 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300";
       default:
         return "bg-orange-100 dark:bg-orange-950/60 border-orange-200 dark:border-orange-800 text-orange-700 dark:text-orange-300";
     }
@@ -70,6 +74,8 @@ export default function AuthErrorModal({
         return "BUYER / SELLER CONFLICT";
       case "email_in_use":
         return "DUPLICATE ACCOUNT DETECTED";
+      case "profile_missing":
+        return "ACCOUNT EXISTS • PROFILE MISSING";
       default:
         return "AUTHENTICATION NOTICE";
     }

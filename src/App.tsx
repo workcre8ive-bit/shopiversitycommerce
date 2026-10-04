@@ -8,6 +8,7 @@ import {
   orderBy, 
   onSnapshot, 
   doc,
+  setDoc,
   updateDoc,
   getDocs,
   addDoc,
@@ -777,22 +778,45 @@ export default function App() {
             setAuthLoading(false);
             setNeedsProfile(false);
           } else {
-            // Account was deleted from Firebase or does not exist
-            console.log(`[AUTH SYNC] User document ${user.uid} does not exist in Firebase. Purging deleted session.`);
-            setCurrentUser(null);
-            setNeedsProfile(false);
-            signOut(auth).catch(() => {});
-            localStorage.removeItem("shopiversity_cart");
-            if (user?.uid) {
-              localStorage.removeItem(`shopiversity_bank_details_${user.uid}`);
-              // Ensure lingering Firebase Auth record is permanently purged on backend
-              fetch("/api/account/cascade-delete", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ uid: user.uid })
-              }).catch(() => {});
+            // User document does not exist in Firestore!
+            // If the user is authenticated in Firebase Auth, automatically restore their profile
+            // so they are not abruptly kicked out or caught in an account-exists / profile-missing conflict.
+            if (user && user.uid) {
+              console.log(`[AUTH SYNC] Profile missing in Firestore for authenticated user ${user.uid}. Auto-restoring profile...`);
+              const autoProfile: UserProfile = {
+                uid: user.uid,
+                displayName: user.displayName || (user.email ? user.email.split("@")[0] : "User"),
+                username: ((user.displayName || user.email?.split("@")[0] || "user").replace(/[^a-zA-Z0-9]/g, "").toLowerCase() || "user") + Math.floor(100 + Math.random() * 900),
+                email: user.email?.toLowerCase() || "",
+                phoneNumber: user.phoneNumber || "",
+                gender: "other",
+                role: "both",
+                activeRole: "buyer",
+                referralCode: "SHOP" + Math.random().toString(36).substring(2, 7).toUpperCase(),
+                referredBy: "",
+                referralEarnings: 0,
+                referralCount: 0,
+                schoolType: "",
+                schoolName: "",
+                state: "",
+                city: "",
+                deliveryAddress: "",
+                isVerified: user.emailVerified || false,
+                isSuspended: false,
+                reportCount: 0,
+                createdAt: new Date().toISOString(),
+                verificationIdUrl: "",
+                profileCompleted: false
+              };
+              setDoc(doc(db, "users", user.uid), autoProfile).catch(err => {
+                console.warn("[AUTH SYNC] Failed to auto-restore profile:", err);
+                setCurrentUser(null);
+                setAuthLoading(false);
+              });
+            } else {
+              setCurrentUser(null);
+              setAuthLoading(false);
             }
-            setAuthLoading(false);
           }
         }, (error) => {
           handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);

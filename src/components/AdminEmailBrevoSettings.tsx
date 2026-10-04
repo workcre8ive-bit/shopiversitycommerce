@@ -124,14 +124,7 @@ export default function AdminEmailBrevoSettings() {
         testRecipientEmail: testRecipient.trim()
       };
 
-      if (testType === "verification") {
-        endpoint = "/api/send-verification";
-        payload = {
-          email: testRecipient.trim(),
-          code: Math.floor(100000 + Math.random() * 900000).toString(),
-          userName: "Test User"
-        };
-      } else if (testType === "receipt") {
+      if (testType === "receipt") {
         endpoint = "/api/send-receipt";
         payload = {
           orderId: `ORD-${Math.floor(100000 + Math.random() * 900000)}`,
@@ -146,13 +139,6 @@ export default function AdminEmailBrevoSettings() {
             campus: "Main Campus Hub",
             sellerName: "Campus Tech Store"
           }
-        };
-      } else if (testType === "password_reset") {
-        endpoint = "/api/send-password-reset";
-        payload = {
-          email: testRecipient.trim(),
-          code: Math.floor(100000 + Math.random() * 900000).toString(),
-          userName: "Test Student"
         };
       } else if (testType === "support") {
         endpoint = "/api/send-support-ticket";
@@ -215,7 +201,7 @@ export default function AdminEmailBrevoSettings() {
               Email Dispatch & Brevo API Setup
             </h2>
             <p className="text-slate-300 text-xs sm:text-sm max-w-2xl leading-relaxed">
-              Configure your Brevo API key to power all campus transactional emails: 6-digit OTP verifications, official Escrow receipts, password reset links, student support tickets, and feedback surveys.
+              Configure your Brevo API key to power marketplace transactional emails: official Escrow purchase receipts, student support tickets, logistics dispatch notices, and platform updates.
             </p>
           </div>
 
@@ -263,6 +249,24 @@ export default function AdminEmailBrevoSettings() {
           </button>
         </div>
       )}
+
+      {/* Firebase Authentication Architecture Notice */}
+      <div className="bg-gradient-to-r from-orange-50 to-amber-50 dark:from-zinc-900 dark:to-zinc-800/80 p-4 sm:p-5 rounded-2xl border border-orange-200/80 dark:border-zinc-700 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div className="flex items-start gap-3.5">
+          <div className="w-10 h-10 rounded-xl bg-orange-500 text-white flex items-center justify-center shrink-0 shadow-md">
+            <ShieldCheck className="w-5 h-5" />
+          </div>
+          <div>
+            <h4 className="text-sm font-extrabold text-slate-900 dark:text-zinc-100 flex items-center gap-2">
+              <span>Authentication Managed Exclusively by Firebase</span>
+              <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">Direct Firebase SDK</span>
+            </h4>
+            <p className="text-xs text-slate-600 dark:text-zinc-400 mt-0.5 leading-relaxed">
+              Email verification links, phone SMS OTP codes, and password reset dispatches are handled 100% by Firebase Authentication. Brevo is strictly dedicated to marketplace operations (Escrow receipts, courier dispatch, and support).
+            </p>
+          </div>
+        </div>
+      </div>
 
       {/* Current Operational Status Card */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -464,7 +468,7 @@ export default function AdminEmailBrevoSettings() {
             {/* Email Type Selector */}
             <div>
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-2">
-                Select Transactional Email Template to Test:
+                Select Marketplace Transactional Email Template to Test:
               </label>
               <div className="grid grid-cols-2 gap-2">
                 <button
@@ -478,21 +482,7 @@ export default function AdminEmailBrevoSettings() {
                   )}
                 >
                   <Sparkles className="w-4 h-4 text-blue-600 shrink-0" />
-                  <span>General Test</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setTestType("verification")}
-                  className={cn(
-                    "p-3 rounded-xl text-left border transition-all text-xs font-bold flex items-center gap-2",
-                    testType === "verification"
-                      ? "bg-orange-50 dark:bg-orange-950/60 border-orange-500 text-orange-700 dark:text-orange-300 shadow-sm"
-                      : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
-                  )}
-                >
-                  <ShieldCheck className="w-4 h-4 text-orange-600 shrink-0" />
-                  <span>6-Digit Verification OTP</span>
+                  <span>General Connection Test</span>
                 </button>
 
                 <button
@@ -507,20 +497,6 @@ export default function AdminEmailBrevoSettings() {
                 >
                   <Receipt className="w-4 h-4 text-emerald-600 shrink-0" />
                   <span>Escrow Transaction Receipt</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setTestType("password_reset")}
-                  className={cn(
-                    "p-3 rounded-xl text-left border transition-all text-xs font-bold flex items-center gap-2",
-                    testType === "password_reset"
-                      ? "bg-rose-50 dark:bg-rose-950/60 border-rose-500 text-rose-700 dark:text-rose-300 shadow-sm"
-                      : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
-                  )}
-                >
-                  <Lock className="w-4 h-4 text-rose-600 shrink-0" />
-                  <span>Password Reset Code</span>
                 </button>
 
                 <button
