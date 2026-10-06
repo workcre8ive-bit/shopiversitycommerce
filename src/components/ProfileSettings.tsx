@@ -230,20 +230,35 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
 
   const startCamera = async () => {
     try {
-      setIsCameraActive(true);
       setIdVerificationError("");
+
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        setIsCameraActive(false);
+        setIdVerificationError("Live camera streaming is not supported on this browser or environment. Please upload a selfie photo directly.");
+        return;
+      }
+
+      setIsCameraActive(true);
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }
       });
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        videoRef.current.play();
+        videoRef.current.play().catch((playErr) => {
+          console.warn("[Face ID Video Play Notice]:", playErr);
+        });
       }
     } catch (err: any) {
-      console.error("Camera access error:", err);
+      console.warn("[Face ID Camera Notice] Camera access error:", err?.message || err);
       setIsCameraActive(false);
-      setIdVerificationError("Unable to access camera for Face ID. Please allow camera permissions or upload a facial photo.");
+      if (err?.name === "NotAllowedError" || err?.message?.includes("Permission") || err?.name === "PermissionDeniedError") {
+        setIdVerificationError("Camera permission was denied. Please allow camera access in your browser or tap 'Upload Selfie Photo' below.");
+      } else if (err?.name === "NotFoundError" || err?.name === "DevicesNotFoundError") {
+        setIdVerificationError("No camera device found. Please tap 'Upload Selfie Photo' below to complete Face ID verification.");
+      } else {
+        setIdVerificationError("Unable to access camera for Face ID. Please allow camera permissions or upload a facial photo.");
+      }
     }
   };
 
@@ -1993,6 +2008,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                             <input
                               type="file"
                               accept="image/*"
+                              capture="user"
                               className="hidden"
                               onChange={async (e) => {
                                 const file = e.target.files?.[0];

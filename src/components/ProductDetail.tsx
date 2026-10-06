@@ -2169,6 +2169,7 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
         vendorName={product.sellerName} 
         productId={product.id}
         productName={product.name}
+        hasPurchased={hasPurchased}
       />
 
       <ReviewSuccessModal

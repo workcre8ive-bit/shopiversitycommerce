@@ -264,6 +264,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
         vendorId={product.sellerId} 
         vendorName={product.sellerName} 
         productId={product.id}
+        productName={product.name}
       />
     </>
   );

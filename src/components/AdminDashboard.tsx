@@ -1044,10 +1044,27 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
                     <tr key={`adm-report-${r.id}-${rIdx}`} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
                       {/* Reason */}
                       <td className="px-6 py-5">
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 rounded-lg text-xs font-black">
-                          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                          {r.reason}
-                        </span>
+                        <div className="space-y-1.5">
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 rounded-lg text-xs font-black">
+                            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                            {r.reason}
+                          </span>
+                          {r.isVerifiedBuyer ? (
+                            <div className="flex items-center gap-1">
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                                ✓ Verified Buyer
+                              </span>
+                              {r.orderId && <span className="text-[9px] font-mono text-slate-400">{r.orderId}</span>}
+                            </div>
+                          ) : r.isVerifiedBuyer === false ? (
+                            <span className="block px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-slate-100 text-slate-600 dark:bg-zinc-800 dark:text-zinc-400 w-fit">
+                              Non-Buyer Report
+                            </span>
+                          ) : null}
+                          {r.details && r.details !== r.reason && (
+                            <p className="text-[11px] text-slate-500 dark:text-zinc-400 line-clamp-2 max-w-xs">{r.details}</p>
+                          )}
+                        </div>
                       </td>
 
                       {/* Person that was reported */}

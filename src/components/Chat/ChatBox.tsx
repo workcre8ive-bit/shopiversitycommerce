@@ -404,16 +404,18 @@ export default function ChatBox({ chatId, recipientId, recipientName, onBack }: 
 
       // Try to launch User Camera if video call
       if (activeCall.type === 'video' && !isVideoOff) {
-        navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-          .then((stream) => {
-            setLocalStream(stream);
-            if (localVideoRef.current) {
-              localVideoRef.current.srcObject = stream;
-            }
-          })
-          .catch((err) => {
-            console.warn("Could not start user video stream:", err);
-          });
+        if (navigator?.mediaDevices?.getUserMedia) {
+          navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+            .then((stream) => {
+              setLocalStream(stream);
+              if (localVideoRef.current) {
+                localVideoRef.current.srcObject = stream;
+              }
+            })
+            .catch((err) => {
+              console.warn("Could not start user video stream:", err);
+            });
+        }
       }
     } else {
       if (callTimerRef.current) {
