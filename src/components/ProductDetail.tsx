@@ -9,7 +9,6 @@ import { usePaystackPayment } from "../hooks/usePaystackPayment";
 import { cn, generateSixDigitPin } from "../lib/utils";
 import ReportModal from "./ReportModal";
 import ReviewSuccessModal from "./ReviewSuccessModal";
-import Logo from "./Logo";
 import { AlertTriangle } from "lucide-react";
 import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
 
@@ -102,6 +101,7 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
   const [submitting, setSubmitting] = React.useState(false);
   const [hasPurchased, setHasPurchased] = React.useState(false);
   const [isDelivered, setIsDelivered] = React.useState(false);
+  const [orderTrackingStage, setOrderTrackingStage] = React.useState<"in_transit" | "delivered" | "pending">("pending");
   const [unreviewedOrders, setUnreviewedOrders] = React.useState<any[]>([]);
   const [sellerProfile, setSellerProfile] = React.useState<UserProfile | null>(null);
   const [isReportModalOpen, setIsReportModalOpen] = React.useState(false);
@@ -581,20 +581,35 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
             const completedOrders = matchingOrders.filter(docSnap => isCompletedStatus(docSnap.data().status));
             if (completedOrders.length > 0) {
               setIsDelivered(true);
+              setOrderTrackingStage("delivered");
               const unreviewed = completedOrders.filter(docSnap => docSnap.data().hasReviewed !== true);
               setUnreviewedOrders(unreviewed.map(d => ({ id: d.id, ...d.data() })));
             } else {
               setIsDelivered(false);
               setUnreviewedOrders([]);
+              const isTransitStatus = (data: any) => {
+                const s = String(data.status || "").toLowerCase();
+                const ds = String(data.deliveryStatus || "").toLowerCase();
+                const ls = String(data.logisticsStatus || "").toLowerCase();
+                return s === "transit" || s === "in transit" || s === "in_transit" || s === "out_for_delivery" || s === "out for delivery" || s === "picked_up" || ds === "transit" || ds === "in_transit" || ds === "out_for_delivery" || ls === "transit" || ls === "in_transit" || data.logisticsOfferStatus === "accepted";
+              };
+              const transitOrders = matchingOrders.filter(docSnap => isTransitStatus(docSnap.data()));
+              if (transitOrders.length > 0) {
+                setOrderTrackingStage("in_transit");
+              } else {
+                setOrderTrackingStage("pending");
+              }
             }
           } else {
             setHasPurchased(false);
             setIsDelivered(false);
+            setOrderTrackingStage("pending");
             setUnreviewedOrders([]);
           }
         } else {
           setHasPurchased(false);
           setIsDelivered(false);
+          setOrderTrackingStage("pending");
           setUnreviewedOrders([]);
         }
       } catch (error) {
@@ -837,7 +852,7 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
   return (
     <ContainerWrapper>
       {isPageMode ? (
-        <div className="mb-6 flex items-center justify-between gap-4">
+        <div className="mb-6 flex items-center justify-start gap-4">
           <button
             onClick={onClose}
             className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-750 rounded-xl text-slate-750 dark:text-zinc-300 transition-all font-black text-xs uppercase tracking-wider cursor-pointer border-none flex items-center gap-1.5 shadow-sm"
@@ -849,7 +864,6 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                 : 'Back to marketplace'}
             </span>
           </button>
-          <Logo showText={true} />
         </div>
       ) : (
         <>
@@ -2170,6 +2184,7 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
         productId={product.id}
         productName={product.name}
         hasPurchased={hasPurchased}
+        orderTrackingStage={orderTrackingStage}
       />
 
       <ReviewSuccessModal

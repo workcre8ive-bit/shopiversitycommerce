@@ -82,7 +82,8 @@ export default function AuthPage({
   initialRole,
   onModeChange,
   onGoToMarket,
-  onNavigateToLogistics
+  onNavigateToLogistics,
+  onVerificationScreenChange
 }: { 
   initialNeedsProfile?: boolean;
   initialMode?: "login" | "signup";
@@ -90,8 +91,12 @@ export default function AuthPage({
   onModeChange?: (mode: "login" | "signup") => void;
   onGoToMarket?: () => void;
   onNavigateToLogistics?: () => void;
+  onVerificationScreenChange?: (isVerifying: boolean) => void;
 }) {
   const handleGoToMarket = () => {
+    if (onVerificationScreenChange) {
+      onVerificationScreenChange(false);
+    }
     if (onGoToMarket) {
       onGoToMarket();
     } else {
@@ -358,15 +363,14 @@ export default function AuthPage({
           const userCredential = await signInWithEmailAndPassword(auth, email, password);
           const user = userCredential.user;
           const userDoc = await getDoc(doc(db, "users", user.uid));
-          const logisticsDoc = await getDoc(doc(db, "logistics_companies", user.uid));
+          const isDedicatedLogisticsUser = userDoc.exists() && (userDoc.data()?.role === "logistics" || userDoc.data()?.state === "Logistics Partner") && userDoc.data()?.role !== "buyer" && userDoc.data()?.role !== "seller" && userDoc.data()?.role !== "both";
           
-          if (logisticsDoc.exists() || (userDoc.exists() && (userDoc.data()?.role === "logistics" || userDoc.data()?.state === "Logistics Partner"))) {
-            await signOut(auth);
+          if (isDedicatedLogisticsUser) {
             setErrorPopup({
               isOpen: true,
               type: "logistics_mismatch",
               title: "Logistics Partner Account Detected",
-              message: `The email address "${user.email || cleanEmail}" is registered as an official Campus Logistics Partner account. It cannot be used to sign in as a Buyer or Seller. Please use the Campus Logistics Hub to access your fleet operations.`,
+              message: `The email address "${user.email || cleanEmail}" is registered as a Campus Logistics Partner account. Would you like to proceed to your Logistics Hub operations?`,
               email: user.email || cleanEmail,
               primaryActionLabel: "Go to Campus Logistics Hub",
               onPrimaryAction: () => {
@@ -375,9 +379,14 @@ export default function AuthPage({
                 } else {
                   handleGoToMarket();
                 }
+              },
+              secondaryActionLabel: "Sign Out",
+              onSecondaryAction: async () => {
+                await signOut(auth);
+                setErrorPopup(prev => ({ ...prev, isOpen: false }));
               }
             });
-            setError("This email address is registered as a Logistics Partner account. Please use the Logistics Hub to log in.");
+            setError("This email address is registered as a Logistics Partner account. Please use the Logistics Hub to access your fleet operations.");
             setLoading(false);
             return;
           }
@@ -396,6 +405,10 @@ export default function AuthPage({
               setLoading(false);
               return;
             }
+
+            // Successful authentication: navigate into the platform immediately
+            handleGoToMarket();
+            return;
           } else {
             // Firebase Auth succeeded, but the database profile was deleted or missing from Firestore
             setErrorPopup({
@@ -706,10 +719,30 @@ export default function AuthPage({
 
         localStorage.removeItem('referredBy');
         
-        // Directly transition to Check Email Verification Screen
-        setIsVerifyingEmail(true);
+        // Add welcome notification for new user
+        try {
+          const welcomeNotification: Notification = {
+            id: crypto.randomUUID(),
+            userId: firebaseUser.uid,
+            title: "Welcome to SHOPIVERSITY! 🎉",
+            message: `Hi ${fullName || 'there'}, your account has been successfully created. Welcome to your campus marketplace!`,
+            type: "welcome",
+            isRead: false,
+            createdAt: new Date().toISOString()
+          };
+          await addDoc(collection(db, "notifications"), welcomeNotification);
+        } catch (notifErr) {
+          console.warn("Welcome notification notice:", notifErr);
+        }
+
+        // Cleanly complete registration and transition directly into the platform
+        setIsVerifyingEmail(false);
         setIsVerificationChoice(false);
         setError("");
+        if (onVerificationScreenChange) {
+          onVerificationScreenChange(false);
+        }
+        handleGoToMarket();
         return;
       }
     } catch (err: any) {
@@ -732,10 +765,13 @@ export default function AuthPage({
           } catch (uErr) {
             console.warn("User doc update notice:", uErr);
           }
-          await signOut(auth);
           setIsVerifyingEmail(false);
-          setIsLogin(true);
-          setError("Email verified successfully! Please log in with your credentials to access your dashboard.");
+          if (onVerificationScreenChange) {
+            onVerificationScreenChange(false);
+          }
+          if (onGoToMarket) {
+            onGoToMarket();
+          }
           return;
         }
       }
@@ -891,9 +927,13 @@ export default function AuthPage({
       await setDoc(doc(db, "users", currentAuthUser.uid), userProfile);
 
       setVerificationMethod("email");
-      setIsVerifyingEmail(true);
+      setIsVerifyingEmail(false);
       setIsVerificationChoice(false);
-      setError(`A verification link has been sent directly to ${targetEmail} via Firebase. Please check your inbox and tap 'I Have Verified'.`);
+      if (onVerificationScreenChange) {
+        onVerificationScreenChange(false);
+      }
+      handleGoToMarket();
+      return;
     } catch (err: any) {
       console.error("Firebase sendEmailVerification error:", err);
       setError(getFirestoreErrorMessage(err));
@@ -1027,8 +1067,13 @@ export default function AuthPage({
       };
       await addDoc(collection(db, "notifications"), welcomeNotification);
 
-      setIsVerificationSuccess(true);
+      setIsVerificationSuccess(false);
       setIsVerifyingPhone(false);
+      if (onVerificationScreenChange) {
+        onVerificationScreenChange(false);
+      }
+      handleGoToMarket();
+      return;
     } catch (err: any) {
       console.error("Firebase SMS Verification Error:", err);
       if (err.code === "auth/invalid-verification-code") {
@@ -1072,13 +1117,14 @@ export default function AuthPage({
       }
     }
 
-    if (logisticsCompanyDoc.exists() || isLogisticsEmail || (userDoc.exists() && (userDoc.data()?.role === "logistics" || userDoc.data()?.state === "Logistics Partner"))) {
-      await signOut(auth);
+    const isDedicatedLogisticsUser = userDoc.exists() && (userDoc.data()?.role === "logistics" || userDoc.data()?.state === "Logistics Partner") && userDoc.data()?.role !== "buyer" && userDoc.data()?.role !== "seller" && userDoc.data()?.role !== "both";
+
+    if (isDedicatedLogisticsUser) {
       setErrorPopup({
         isOpen: true,
         type: "logistics_mismatch",
         title: "Logistics Partner Account Detected",
-        message: `This Google account (${user.email}) is registered as a Campus Logistics Fleet Partner. Buyers and Sellers must use a separate personal account. Please access the Campus Logistics Hub to manage your fleet operations.`,
+        message: `This Google account (${user.email}) is registered as a Campus Logistics Fleet Partner. Would you like to proceed to the Campus Logistics Hub?`,
         email: user.email,
         primaryActionLabel: "Go to Campus Logistics Hub",
         onPrimaryAction: () => {
@@ -1087,6 +1133,11 @@ export default function AuthPage({
           } else {
             handleGoToMarket();
           }
+        },
+        secondaryActionLabel: "Sign Out",
+        onSecondaryAction: async () => {
+          await signOut(auth);
+          setErrorPopup(prev => ({ ...prev, isOpen: false }));
         }
       });
       setError("This account is registered as a Logistics Partner. Sellers and Buyers must use a separate account.");
@@ -1147,6 +1198,8 @@ export default function AuthPage({
         setIsVerificationChoice(false);
         setIsVerifyingEmail(false);
         setIsVerifyingPhone(false);
+        handleGoToMarket();
+        return;
       } else {
         // Sellers need verification
         setIsVerificationChoice(false);
@@ -1176,6 +1229,10 @@ export default function AuthPage({
         setLoading(false);
         return;
       }
+
+      // Existing verified user logged in via Google: proceed directly to market
+      handleGoToMarket();
+      return;
     }
   };
 
@@ -1534,17 +1591,15 @@ export default function AuthPage({
                 </div>
                 <button 
                   onClick={() => {
-                    setIsLogin(true);
                     setIsVerificationSuccess(false);
                     setIsVerificationChoice(false);
                     setIsVerifyingEmail(false);
                     setIsVerifyingPhone(false);
-                    setPassword("");
-                    setConfirmPassword("");
+                    handleGoToMarket();
                   }}
-                  className="w-full h-9 bg-purple-600 hover:bg-purple-700 text-white rounded font-medium text-xs shadow transition-all cursor-pointer"
+                  className="w-full h-11 bg-brand-gradient text-white rounded-xl font-bold text-xs shadow-md transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-95 border-none"
                 >
-                  Continue to Login
+                  Continue to Marketplace →
                 </button>
               </motion.div>
             ) : isGoogleSellerVerifying ? (
@@ -1788,6 +1843,18 @@ export default function AuthPage({
                     <span>Resend Verification Email</span>
                   </button>
 
+                  {/* Explore Marketplace Now */}
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      setIsVerifyingEmail(false);
+                      handleGoToMarket();
+                    }}
+                    className="w-full h-11 bg-slate-900 dark:bg-zinc-100 hover:bg-slate-800 dark:hover:bg-zinc-200 text-white dark:text-zinc-900 font-bold rounded-xl transition-all text-xs shadow-md flex items-center justify-center gap-2 cursor-pointer touch-manipulation select-none active:scale-95 border-none"
+                  >
+                    <span>Explore Marketplace Now (Verify Later) →</span>
+                  </button>
+
                   {/* Change Email Toggle / Form */}
                   {!showChangeEmail ? (
                     <button 
@@ -1832,18 +1899,17 @@ export default function AuthPage({
                     </form>
                   )}
 
-                  {/* Go to Login Link */}
+                  {/* Enter Marketplace Link */}
                   <div className="pt-2">
                     <button 
                       type="button"
-                      onClick={async () => {
-                        try { await signOut(auth); } catch (e) {}
+                      onClick={() => {
                         setIsVerifyingEmail(false);
-                        setIsLogin(true);
+                        handleGoToMarket();
                       }}
-                      className="text-xs font-bold text-slate-500 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-100 hover:underline cursor-pointer touch-manipulation"
+                      className="text-xs font-bold text-orange-600 dark:text-orange-400 hover:underline cursor-pointer touch-manipulation"
                     >
-                      Already verified? Go to Log In
+                      Enter Marketplace Now →
                     </button>
                   </div>
                 </div>
@@ -2292,12 +2358,25 @@ export default function AuthPage({
                   </button>
 
                   {auth.currentUser && (
-                    <button 
-                      onClick={() => signOut(auth)}
-                      className="mt-3 block w-full text-[11px] font-bold text-red-500 hover:underline hover:text-red-600 transition-colors cursor-pointer"
-                    >
-                      Trouble logging in? Sign Out & Try Again
-                    </button>
+                    <div className="pt-2 flex flex-col items-center gap-1.5">
+                      <button 
+                        type="button"
+                        onClick={handleGoToMarket}
+                        className="text-xs font-bold text-orange-600 dark:text-orange-400 hover:underline cursor-pointer"
+                      >
+                        You're signed in as {auth.currentUser.email || "current user"} — Enter Marketplace →
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={async () => {
+                          try { await signOut(auth); } catch (e) {}
+                          setIsLogin(true);
+                        }}
+                        className="text-[11px] font-medium text-slate-400 hover:text-slate-600 dark:hover:text-zinc-300 hover:underline cursor-pointer"
+                      >
+                        Sign into a different account
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>

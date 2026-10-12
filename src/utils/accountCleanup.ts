@@ -4,7 +4,8 @@ import {
   where, 
   getDocs, 
   deleteDoc, 
-  doc 
+  doc,
+  setDoc 
 } from "firebase/firestore";
 import { deleteUser } from "firebase/auth";
 import { db } from "../firebase";
@@ -169,11 +170,36 @@ export async function cascadeDeleteUserAccount(
     // 9. Delete logistics company & delivery items
     try {
       const logCompanyDoc = doc(db, "logistics_companies", uid);
+      // Mark inactive/deleted first so queries immediately drop it even before doc removal commits
+      await setDoc(logCompanyDoc, { isActive: false, isDeleted: true, status: "deleted" }, { merge: true }).catch(() => {});
       await deleteDoc(logCompanyDoc).catch(() => {});
+
+      if (authUser?.email) {
+        const cleanEmail = authUser.email.toLowerCase().trim();
+        const emailQ = query(collection(db, "logistics_companies"), where("email", "==", cleanEmail));
+        const emailSnap = await getDocs(emailQ).catch(() => ({ docs: [] }));
+        for (const cDoc of emailSnap.docs) {
+          await setDoc(cDoc.ref, { isActive: false, isDeleted: true, status: "deleted" }, { merge: true }).catch(() => {});
+          await deleteDoc(cDoc.ref).catch(() => {});
+        }
+      }
+
+      const uidQ = query(collection(db, "logistics_companies"), where("userId", "==", uid));
+      const uidSnap = await getDocs(uidQ).catch(() => ({ docs: [] }));
+      for (const cDoc of uidSnap.docs) {
+        await setDoc(cDoc.ref, { isActive: false, isDeleted: true, status: "deleted" }, { merge: true }).catch(() => {});
+        await deleteDoc(cDoc.ref).catch(() => {});
+      }
 
       const deliveriesQ = query(collection(db, "logistics_deliveries"), where("senderId", "==", uid));
       const deliveriesSnap = await getDocs(deliveriesQ).catch(() => ({ docs: [] }));
       for (const dDoc of deliveriesSnap.docs) {
+        await deleteDoc(dDoc.ref).catch(() => {});
+      }
+
+      const logDeliveriesQ = query(collection(db, "logistics_deliveries"), where("logisticsId", "==", uid));
+      const logDeliveriesSnap = await getDocs(logDeliveriesQ).catch(() => ({ docs: [] }));
+      for (const dDoc of logDeliveriesSnap.docs) {
         await deleteDoc(dDoc.ref).catch(() => {});
       }
     } catch (e) {

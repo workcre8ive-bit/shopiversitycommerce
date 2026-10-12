@@ -444,10 +444,12 @@ export default function App() {
   const [connectionError, setConnectionError] = React.useState<string | null>(null);
   const [needsProfile, setNeedsProfile] = React.useState(false);
   const [hibernationMessage, setHibernationMessage] = React.useState<string | null>(null);
+  const [isVerifyingNewSignup, setIsVerifyingNewSignup] = React.useState(false);
 
   React.useEffect(() => {
     if (currentUser && (activeTab === "auth" || activeTab === "signup")) {
-      setActiveTab("market");
+      const nextTab = (currentUser.role === "seller" || currentUser.activeRole === "seller") ? "dashboard" : "market";
+      setActiveTab(nextTab);
     }
   }, [currentUser, activeTab, setActiveTab]);
 
@@ -686,7 +688,7 @@ export default function App() {
 
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        if (!currentUser && !needsProfile) {
+        if (!currentUser && !needsProfile && isInitialSplashActive) {
           setAuthLoading(true);
         }
         unsubscribeProfile = onSnapshot(doc(db, "users", user.uid), (docSnap) => {
@@ -1536,7 +1538,7 @@ export default function App() {
           )}
 
           <AnimatePresence mode="wait">
-            {(!currentUser || !auth.currentUser) && isTabRestricted ? (
+            {((!currentUser || !auth.currentUser) && isTabRestricted) ? (
               <motion.div
                 key="auth"
                 initial={{ opacity: 0, y: 10 }}
@@ -1552,7 +1554,11 @@ export default function App() {
                     setAuthMode(mode);
                     setActiveTabState(mode === "login" ? "auth" : "signup");
                   }}
+                  onVerificationScreenChange={(isVerifying) => {
+                    setIsVerifyingNewSignup(isVerifying);
+                  }}
                   onGoToMarket={() => {
+                    setIsVerifyingNewSignup(false);
                     setActiveRole("buyer");
                     setActiveTab("market");
                     setViewingProduct(null);
@@ -1561,6 +1567,7 @@ export default function App() {
                     setSearchQuery("");
                   }}
                   onNavigateToLogistics={() => {
+                    setIsVerifyingNewSignup(false);
                     setActiveTab("logistics");
                   }}
                 />
@@ -2314,8 +2321,8 @@ export default function App() {
             )}
           </AnimatePresence>
 
-          {/* Clean modern website footer */}
-          <Footer setActiveTab={setActiveTab} activeTab={activeTab} />
+          {/* Clean modern website footer - hidden on product detail view to avoid duplicate logo in product body */}
+          {!viewingProduct && <Footer setActiveTab={setActiveTab} activeTab={activeTab} />}
         </main>
       </div>
 

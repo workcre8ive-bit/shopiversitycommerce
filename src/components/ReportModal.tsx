@@ -28,11 +28,12 @@ interface ReportModalProps {
   productId?: string;
   productName?: string;
   hasPurchased?: boolean;
+  orderTrackingStage?: "in_transit" | "delivered" | "pending";
 }
 
 export interface ReportReasonItem {
   id: string;
-  category: "listing" | "purchase";
+  category: "listing" | "payment" | "transit" | "post_delivery";
   label: string;
   description: string;
   iconType: "alert" | "truck" | "card" | "package";
@@ -83,48 +84,61 @@ const LISTING_REASONS: ReportReasonItem[] = [
   }
 ];
 
-const PURCHASE_REASONS: ReportReasonItem[] = [
-  {
-    id: "non_delivery",
-    category: "purchase",
-    label: "Item not received / Non-delivery after payment",
-    description: "Payment was completed via Escrow, but the seller failed to deliver or provide the goods.",
-    iconType: "truck"
-  },
+const PAYMENT_REASONS: ReportReasonItem[] = [
   {
     id: "payment_escrow_issue",
-    category: "purchase",
+    category: "payment",
     label: "Payment deducted / Escrow fulfillment dispute",
     description: "Payment was processed, but the merchant refused handover or canceled without refund.",
     iconType: "card"
   },
   {
+    id: "handover_refusal",
+    category: "payment",
+    label: "Seller refused physical handover after order payment",
+    description: "Merchant accepted payment but refused to complete the campus handover or meetup.",
+    iconType: "truck"
+  }
+];
+
+const TRANSIT_REASONS: ReportReasonItem[] = [
+  {
+    id: "non_delivery",
+    category: "transit",
+    label: "Item not received / Non-delivery in transit",
+    description: "Order is in transit, but courier or seller has not provided goods or dispatch has stalled.",
+    iconType: "truck"
+  },
+  {
+    id: "courier_transit_tampered",
+    category: "transit",
+    label: "Delivery package tampered with / Courier dispute in transit",
+    description: "The package was visibly opened, tampered with, or stolen in transit by dispatch.",
+    iconType: "truck"
+  }
+];
+
+const POST_DELIVERY_REASONS: ReportReasonItem[] = [
+  {
     id: "damaged_defective",
-    category: "purchase",
+    category: "post_delivery",
     label: "Damaged, defective, or broken item received after delivery",
     description: "The item was received upon delivery, but arrived broken, defective, or non-functional.",
     iconType: "package"
   },
   {
     id: "wrong_item_delivered",
-    category: "purchase",
+    category: "post_delivery",
     label: "Wrong product or missing accessories delivered",
     description: "Delivered package contained an entirely different item or missing essential parts.",
     iconType: "package"
   },
   {
-    id: "handover_refusal",
-    category: "purchase",
-    label: "Seller refused physical handover after order payment",
-    description: "Merchant accepted payment but refused to complete the campus handover or meetup.",
-    iconType: "truck"
-  },
-  {
-    id: "courier_tampered",
-    category: "purchase",
-    label: "Delivery package tampered with / Courier dispute",
-    description: "The package was visibly opened, tampered with, or stolen in transit by dispatch.",
-    iconType: "truck"
+    id: "delivery_tampered_received",
+    category: "post_delivery",
+    label: "Package unsealed or items missing upon post-delivery inspection",
+    description: "Delivered parcel was received, but goods were missing or tampered inside the box.",
+    iconType: "package"
   }
 ];
 
@@ -135,7 +149,8 @@ export default function ReportModal({
   vendorName,
   productId,
   productName,
-  hasPurchased
+  hasPurchased,
+  orderTrackingStage: propTrackingStage
 }: ReportModalProps) {
   const [selectedReason, setSelectedReason] = React.useState<string>("");
   const [customDetails, setCustomDetails] = React.useState<string>("");
@@ -144,7 +159,60 @@ export default function ReportModal({
   const [isBuyerVerified, setIsBuyerVerified] = React.useState<boolean>(hasPurchased ?? false);
   const [checkingPurchase, setCheckingPurchase] = React.useState<boolean>(false);
   const [matchedOrderId, setMatchedOrderId] = React.useState<string | null>(null);
+  const [orderTrackingStage, setOrderTrackingStage] = React.useState<"in_transit" | "delivered" | "pending">(propTrackingStage || "pending");
   const [deactivatedWarning, setDeactivatedWarning] = React.useState<string | null>(null);
+
+  const computeTrackingStage = (orderData: any): "in_transit" | "delivered" | "pending" => {
+    if (!orderData) return "pending";
+    const s = String(orderData.status || "").toLowerCase();
+    const ds = String(orderData.deliveryStatus || "").toLowerCase();
+    const ls = String(orderData.logisticsStatus || "").toLowerCase();
+    const los = String(orderData.logisticsOfferStatus || "").toLowerCase();
+
+    // Check Delivered
+    if (
+      s === "delivered" ||
+      s === "completed" ||
+      s === "acquired" ||
+      s === "order delivered" ||
+      s === "order picked up" ||
+      ds === "delivered" ||
+      ls === "delivered" ||
+      orderData.courierHandedOver
+    ) {
+      return "delivered";
+    }
+
+    // Check In Transit
+    if (
+      s === "in transit" ||
+      s === "transit" ||
+      s === "in_transit" ||
+      s === "out_for_delivery" ||
+      s === "out for delivery" ||
+      s === "picked_up" ||
+      s === "package picked up from merchant" ||
+      s === "package picked up from seller" ||
+      s === "handed over to logistics" ||
+      s === "handed_over" ||
+      ds === "transit" ||
+      ds === "in_transit" ||
+      ds === "out_for_delivery" ||
+      ds === "picked_up" ||
+      ls === "transit" ||
+      ls === "in_transit" ||
+      ls === "out_for_delivery" ||
+      ls === "picked_up" ||
+      los === "accepted" ||
+      Boolean(orderData.logisticsAcceptedAt) ||
+      Boolean(orderData.productHandedOver) ||
+      Boolean(orderData.sellerHandoverVerified)
+    ) {
+      return "in_transit";
+    }
+
+    return "pending";
+  };
 
   // Check if current user has purchased this product
   React.useEffect(() => {
@@ -157,6 +225,9 @@ export default function ReportModal({
 
     if (hasPurchased !== undefined) {
       setIsBuyerVerified(hasPurchased);
+    }
+    if (propTrackingStage) {
+      setOrderTrackingStage(propTrackingStage);
     }
 
     const checkBuyerOrders = async () => {
@@ -183,6 +254,8 @@ export default function ReportModal({
         if (matchingOrder) {
           setIsBuyerVerified(true);
           setMatchedOrderId(matchingOrder.id);
+          const stage = computeTrackingStage(matchingOrder.data());
+          setOrderTrackingStage(propTrackingStage || stage);
         } else if (hasPurchased === undefined) {
           setIsBuyerVerified(false);
           setMatchedOrderId(null);
@@ -195,13 +268,68 @@ export default function ReportModal({
     };
 
     checkBuyerOrders();
-  }, [isOpen, productId, hasPurchased]);
+  }, [isOpen, productId, hasPurchased, propTrackingStage]);
+
+  const getReasonStatus = (item: ReportReasonItem): { isActivated: boolean; message: string | null } => {
+    if (item.category === "listing") {
+      return { isActivated: true, message: null };
+    }
+
+    if (item.category === "payment") {
+      if (!isBuyerVerified) {
+        return {
+          isActivated: false,
+          message: `"${item.label}" is deactivated because you have not bought this product. Payment and escrow disputes are exclusively for buyers who purchased this product.`
+        };
+      }
+      return { isActivated: true, message: null };
+    }
+
+    if (item.category === "transit") {
+      if (!isBuyerVerified) {
+        return {
+          isActivated: false,
+          message: `"${item.label}" is deactivated because you have not bought this product. In-transit shipping reports are exclusively for buyers.`
+        };
+      }
+      if (orderTrackingStage !== "in_transit") {
+        const stageLabel = orderTrackingStage === "delivered" 
+          ? "Delivered" 
+          : "Pending Dispatch / Packaging";
+        const msg = orderTrackingStage === "delivered"
+          ? `Order is already delivered. For issues with goods received, please select a Post-Delivery Dispute reason below.`
+          : `Item not received report is activated during the time the order tracking stage is In Transit (Current tracking stage: ${stageLabel}).`;
+        return { isActivated: false, message: msg };
+      }
+      return { isActivated: true, message: null };
+    }
+
+    if (item.category === "post_delivery") {
+      if (!isBuyerVerified) {
+        return {
+          isActivated: false,
+          message: `"${item.label}" is deactivated because you have not bought this product. Post-delivery disputes are exclusively for buyers who purchased this product.`
+        };
+      }
+      if (orderTrackingStage !== "delivered") {
+        const stageLabel = orderTrackingStage === "in_transit"
+          ? "In Transit (En Route)"
+          : "Pending Dispatch";
+        return {
+          isActivated: false,
+          message: `Post-delivery dispute reasons are only activated after the product has been delivered (Current tracking stage: ${stageLabel}). If you have not received your item yet, please use In-Transit report.`
+        };
+      }
+      return { isActivated: true, message: null };
+    }
+
+    return { isActivated: true, message: null };
+  };
 
   const handleSelectReason = (item: ReportReasonItem) => {
-    if (item.category === "purchase" && !isBuyerVerified) {
-      setDeactivatedWarning(
-        `"${item.label}" is deactivated because you have not bought this product. Payment, escrow, and after-delivery reports are exclusively for buyers who completed an order.`
-      );
+    const status = getReasonStatus(item);
+    if (!status.isActivated) {
+      setDeactivatedWarning(status.message);
       return;
     }
 
@@ -222,14 +350,26 @@ export default function ReportModal({
       return;
     }
 
-    const isPurchaseCategory = PURCHASE_REASONS.some(r => r.label === selectedReason);
-    if (isPurchaseCategory && !isBuyerVerified) {
-      setDeactivatedWarning("Payment and delivery reasons are deactivated for non-buyers. Please choose an active listing violation reason.");
-      return;
+    const allReasons = [...LISTING_REASONS, ...PAYMENT_REASONS, ...TRANSIT_REASONS, ...POST_DELIVERY_REASONS];
+    const targetItem = allReasons.find(r => r.label === selectedReason);
+    if (targetItem) {
+      const status = getReasonStatus(targetItem);
+      if (!status.isActivated) {
+        setDeactivatedWarning(status.message || "This report reason is currently deactivated.");
+        return;
+      }
     }
 
     setLoading(true);
     try {
+      const reportCategory = targetItem?.category === "listing"
+        ? "listing_violation"
+        : targetItem?.category === "payment"
+        ? "payment_and_escrow_dispute"
+        : targetItem?.category === "transit"
+        ? "in_transit_non_delivery"
+        : "post_delivery_dispute";
+
       await addDoc(collection(db, "reports"), {
         // Reporter information
         reporterId: currentUser.uid,
@@ -251,7 +391,8 @@ export default function ReportModal({
         details: customDetails.trim() || selectedReason.trim(),
         isVerifiedBuyer: isBuyerVerified,
         orderId: matchedOrderId || null,
-        reportCategory: isPurchaseCategory ? "purchase_and_delivery_dispute" : "listing_violation",
+        orderTrackingStage: isBuyerVerified ? orderTrackingStage : null,
+        reportCategory,
 
         status: "pending",
         createdAt: new Date().toISOString(),
@@ -342,17 +483,32 @@ export default function ReportModal({
                       <div className="w-7 h-7 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 mt-0.5 shadow-sm">
                         <ShieldCheck className="w-4 h-4" />
                       </div>
-                      <div className="space-y-0.5">
+                      <div className="space-y-1 w-full">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-xs font-black text-emerald-900 dark:text-emerald-300">
                             Verified Buyer of this Product
                           </span>
                           <span className="text-[10px] bg-emerald-200/80 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200 px-2 py-0.5 rounded-full font-extrabold uppercase tracking-wider">
-                            Purchase Confirmed
+                            Order {matchedOrderId ? `#${matchedOrderId.substring(0, 8)}` : "Confirmed"}
+                          </span>
+                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-extrabold uppercase tracking-wider ${
+                            orderTrackingStage === "in_transit"
+                              ? "bg-purple-100 text-purple-800 dark:bg-purple-900/60 dark:text-purple-200"
+                              : orderTrackingStage === "delivered"
+                              ? "bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-200"
+                              : "bg-slate-200 text-slate-800 dark:bg-zinc-800 dark:text-zinc-200"
+                          }`}>
+                            Tracking: {orderTrackingStage === "in_transit" ? "🚚 In Transit" : orderTrackingStage === "delivered" ? "📦 Delivered" : "⏳ Processing"}
                           </span>
                         </div>
                         <p className="text-[11px] text-emerald-700 dark:text-emerald-400 leading-snug">
-                          All payment, non-delivery, damaged goods, and post-delivery dispute options are <strong>activated</strong>.
+                          {orderTrackingStage === "in_transit" ? (
+                            <>Payment disputes and In-Transit <strong>"Item not received"</strong> reports are currently <strong>ACTIVATED</strong>.</>
+                          ) : orderTrackingStage === "delivered" ? (
+                            <>Payment disputes and <strong>Post-Delivery</strong> (damaged/wrong item) dispute options are <strong>ACTIVATED</strong>.</>
+                          ) : (
+                            <>Payment disputes are <strong>ACTIVATED</strong>. In-transit & delivery options activate once dispatched.</>
+                          )}
                         </p>
                       </div>
                     </div>
@@ -371,7 +527,7 @@ export default function ReportModal({
                           </span>
                         </div>
                         <p className="text-[11px] text-amber-800 dark:text-amber-400 leading-snug">
-                          You have not bought this product. Reasons regarding <strong>payment or after-delivery reports are deactivated</strong>. You can still report listing & content violations below.
+                          You have not bought this product. Reasons regarding <strong>payment, in-transit non-delivery, or post-delivery reports are deactivated</strong>. You can report listing & policy violations below.
                         </p>
                       </div>
                     </div>
@@ -394,10 +550,14 @@ export default function ReportModal({
                       value={selectedReason}
                       onChange={(e) => {
                         const val = e.target.value;
-                        const isPurchase = PURCHASE_REASONS.some(pr => pr.label === val);
-                        if (isPurchase && !isBuyerVerified) {
-                          setDeactivatedWarning(`"${val}" is deactivated for non-buyers. Payment and delivery issues require a verified purchase record.`);
-                          return;
+                        const allReasons = [...LISTING_REASONS, ...PAYMENT_REASONS, ...TRANSIT_REASONS, ...POST_DELIVERY_REASONS];
+                        const found = allReasons.find(r => r.label === val);
+                        if (found) {
+                          const status = getReasonStatus(found);
+                          if (!status.isActivated) {
+                            setDeactivatedWarning(status.message);
+                            return;
+                          }
                         }
                         setDeactivatedWarning(null);
                         setSelectedReason(val);
@@ -414,29 +574,64 @@ export default function ReportModal({
                         ))}
                       </optgroup>
 
-                      <optgroup label={isBuyerVerified ? "📦 Payment, Delivery & Fulfillment (Active for Verified Buyer)" : "🔒 Payment & After-Delivery (DEACTIVATED - Requires Purchase)"}>
-                        {PURCHASE_REASONS.map(r => (
-                          <option 
-                            key={r.id} 
-                            value={r.label}
-                            disabled={!isBuyerVerified}
-                            className={!isBuyerVerified ? "text-slate-400 italic bg-slate-100 dark:bg-zinc-800" : ""}
-                          >
-                            {!isBuyerVerified ? `🔒 [DEACTIVATED] ${r.label}` : `✓ ${r.label}`}
-                          </option>
-                        ))}
+                      <optgroup label={isBuyerVerified ? "💳 Payment & Escrow Disputes (Active for Buyer)" : "💳 Payment & Escrow Disputes (DEACTIVATED - Requires Purchase)"}>
+                        {PAYMENT_REASONS.map(r => {
+                          const status = getReasonStatus(r);
+                          return (
+                            <option 
+                              key={r.id} 
+                              value={r.label}
+                              disabled={!status.isActivated}
+                              className={!status.isActivated ? "text-slate-400 italic bg-slate-100 dark:bg-zinc-800" : ""}
+                            >
+                              {!status.isActivated ? `🔒 [DEACTIVATED] ${r.label}` : `✓ ${r.label}`}
+                            </option>
+                          );
+                        })}
+                      </optgroup>
+
+                      <optgroup label={isBuyerVerified && orderTrackingStage === "in_transit" ? "🚚 In-Transit Delivery Reports (ACTIVATED - En Route)" : "🚚 In-Transit Delivery Reports (DEACTIVATED - Requires Order In Transit)"}>
+                        {TRANSIT_REASONS.map(r => {
+                          const status = getReasonStatus(r);
+                          return (
+                            <option 
+                              key={r.id} 
+                              value={r.label}
+                              disabled={!status.isActivated}
+                              className={!status.isActivated ? "text-slate-400 italic bg-slate-100 dark:bg-zinc-800" : ""}
+                            >
+                              {!status.isActivated ? `🔒 [DEACTIVATED] ${r.label}` : `✓ ${r.label}`}
+                            </option>
+                          );
+                        })}
+                      </optgroup>
+
+                      <optgroup label={isBuyerVerified && orderTrackingStage === "delivered" ? "📦 Post-Delivery Disputes (ACTIVATED - Delivered)" : "📦 Post-Delivery Disputes (DEACTIVATED - Requires Delivered Order)"}>
+                        {POST_DELIVERY_REASONS.map(r => {
+                          const status = getReasonStatus(r);
+                          return (
+                            <option 
+                              key={r.id} 
+                              value={r.label}
+                              disabled={!status.isActivated}
+                              className={!status.isActivated ? "text-slate-400 italic bg-slate-100 dark:bg-zinc-800" : ""}
+                            >
+                              {!status.isActivated ? `🔒 [DEACTIVATED] ${r.label}` : `✓ ${r.label}`}
+                            </option>
+                          );
+                        })}
                       </optgroup>
                     </select>
                   </div>
 
                   {/* Categorized Visual Reason Options Cards */}
-                  <div className="space-y-4 pt-1">
+                  <div className="space-y-5 pt-1">
                     {/* SECTION 1: Listing & Content Options (Always Active) */}
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-black text-slate-800 dark:text-zinc-200 flex items-center gap-1.5">
                           <AlertTriangle className="w-3.5 h-3.5 text-orange-500" />
-                          Listing & Policy Violations
+                          1. Listing & Policy Violations
                         </span>
                         <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-extrabold uppercase">
                           Active for all
@@ -475,12 +670,12 @@ export default function ReportModal({
                       </div>
                     </div>
 
-                    {/* SECTION 2: Payment & Delivery Options (Activated for buyers, Deactivated for non-buyers) */}
+                    {/* SECTION 2: Payment & Escrow Disputes */}
                     <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-zinc-800">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-black text-slate-800 dark:text-zinc-200 flex items-center gap-1.5">
-                          <Truck className="w-3.5 h-3.5 text-blue-500" />
-                          Payment & Post-Delivery Disputes
+                          <CreditCard className="w-3.5 h-3.5 text-blue-500" />
+                          2. Payment & Escrow Disputes
                         </span>
                         {isBuyerVerified ? (
                           <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-extrabold uppercase bg-emerald-100 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full">
@@ -494,22 +689,22 @@ export default function ReportModal({
                       </div>
 
                       <div className="grid grid-cols-1 gap-2">
-                        {PURCHASE_REASONS.map((item) => {
+                        {PAYMENT_REASONS.map((item) => {
+                          const status = getReasonStatus(item);
                           const isSelected = selectedReason === item.label;
-                          const isDeactivated = !isBuyerVerified;
+                          const isDeactivated = !status.isActivated;
 
                           return (
                             <button
                               key={item.id}
                               type="button"
                               onClick={() => handleSelectReason(item)}
-                              disabled={isDeactivated}
-                              className={`w-full p-3 rounded-xl border text-left transition-all flex items-start gap-3 ${
+                              className={`w-full p-3 rounded-xl border text-left transition-all flex items-start gap-3 cursor-pointer ${
                                 isDeactivated
-                                  ? "bg-slate-100/60 dark:bg-zinc-850/40 border-slate-200/60 dark:border-zinc-800 opacity-60 cursor-not-allowed select-none"
+                                  ? "bg-slate-100/60 dark:bg-zinc-850/40 border-slate-200/60 dark:border-zinc-800 opacity-60"
                                   : isSelected
-                                  ? "bg-blue-50 dark:bg-blue-950/40 border-blue-500 ring-1 ring-blue-500 shadow-sm cursor-pointer"
-                                  : "bg-slate-50/70 dark:bg-zinc-800/60 border-slate-200 dark:border-zinc-700/80 hover:border-slate-300 dark:hover:border-zinc-600 cursor-pointer"
+                                  ? "bg-blue-50 dark:bg-blue-950/40 border-blue-500 ring-1 ring-blue-500 shadow-sm"
+                                  : "bg-slate-50/70 dark:bg-zinc-800/60 border-slate-200 dark:border-zinc-700/80 hover:border-slate-300 dark:hover:border-zinc-600"
                               }`}
                             >
                               <div className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
@@ -536,6 +731,154 @@ export default function ReportModal({
                                   {isDeactivated && (
                                     <span className="text-[9px] font-black uppercase text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-950 px-1.5 py-0.5 rounded">
                                       Buyers Only
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 leading-snug">
+                                  {item.description}
+                                </p>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* SECTION 3: In-Transit Delivery Reports */}
+                    <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-zinc-800">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-black text-slate-800 dark:text-zinc-200 flex items-center gap-1.5">
+                          <Truck className="w-3.5 h-3.5 text-purple-500" />
+                          3. In-Transit Shipping & Delivery
+                        </span>
+                        {isBuyerVerified && orderTrackingStage === "in_transit" ? (
+                          <span className="text-[10px] text-purple-700 dark:text-purple-300 font-extrabold uppercase bg-purple-100 dark:bg-purple-950/60 px-2 py-0.5 rounded-full">
+                            ✓ Activated (In Transit)
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-amber-700 dark:text-amber-300 font-extrabold uppercase bg-amber-100 dark:bg-amber-950/60 px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <Lock className="w-2.5 h-2.5" /> Deactivated ({!isBuyerVerified ? "Non-Buyer" : orderTrackingStage === "delivered" ? "Delivered" : "Pending Transit"})
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-2">
+                        {TRANSIT_REASONS.map((item) => {
+                          const status = getReasonStatus(item);
+                          const isSelected = selectedReason === item.label;
+                          const isDeactivated = !status.isActivated;
+
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              onClick={() => handleSelectReason(item)}
+                              className={`w-full p-3 rounded-xl border text-left transition-all flex items-start gap-3 cursor-pointer ${
+                                isDeactivated
+                                  ? "bg-slate-100/60 dark:bg-zinc-850/40 border-slate-200/60 dark:border-zinc-800 opacity-60"
+                                  : isSelected
+                                  ? "bg-purple-50 dark:bg-purple-950/40 border-purple-500 ring-1 ring-purple-500 shadow-sm"
+                                  : "bg-slate-50/70 dark:bg-zinc-800/60 border-slate-200 dark:border-zinc-700/80 hover:border-slate-300 dark:hover:border-zinc-600"
+                              }`}
+                            >
+                              <div className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
+                                isDeactivated
+                                  ? "border-slate-300 dark:border-zinc-700 bg-slate-200/50 dark:bg-zinc-800 text-slate-400"
+                                  : isSelected
+                                  ? "border-purple-600 bg-purple-600 text-white"
+                                  : "border-slate-300 dark:border-zinc-600 bg-white dark:bg-zinc-900"
+                              }`}>
+                                {isDeactivated ? (
+                                  <Lock className="w-2.5 h-2.5" />
+                                ) : isSelected ? (
+                                  <div className="w-1.5 h-1.5 rounded-full bg-white" />
+                                ) : null}
+                              </div>
+
+                              <div className="flex-1">
+                                <div className="flex items-center justify-between gap-2 flex-wrap">
+                                  <p className={`text-xs font-bold leading-tight ${
+                                    isDeactivated ? "text-slate-500 dark:text-zinc-500" : "text-slate-900 dark:text-zinc-100"
+                                  }`}>
+                                    {item.label}
+                                  </p>
+                                  {isDeactivated && (
+                                    <span className="text-[9px] font-black uppercase text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-950 px-1.5 py-0.5 rounded">
+                                      {!isBuyerVerified ? "Buyers Only" : "Requires In Transit"}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 leading-snug">
+                                  {item.description}
+                                </p>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* SECTION 4: Post-Delivery Disputes */}
+                    <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-zinc-800">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-black text-slate-800 dark:text-zinc-200 flex items-center gap-1.5">
+                          <PackageX className="w-3.5 h-3.5 text-rose-500" />
+                          4. Post-Delivery Disputes
+                        </span>
+                        {isBuyerVerified && orderTrackingStage === "delivered" ? (
+                          <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-extrabold uppercase bg-emerald-100 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full">
+                            ✓ Activated (Delivered)
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-amber-700 dark:text-amber-300 font-extrabold uppercase bg-amber-100 dark:bg-amber-950/60 px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <Lock className="w-2.5 h-2.5" /> Deactivated ({!isBuyerVerified ? "Non-Buyer" : "Pending Delivery"})
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-2">
+                        {POST_DELIVERY_REASONS.map((item) => {
+                          const status = getReasonStatus(item);
+                          const isSelected = selectedReason === item.label;
+                          const isDeactivated = !status.isActivated;
+
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              onClick={() => handleSelectReason(item)}
+                              className={`w-full p-3 rounded-xl border text-left transition-all flex items-start gap-3 cursor-pointer ${
+                                isDeactivated
+                                  ? "bg-slate-100/60 dark:bg-zinc-850/40 border-slate-200/60 dark:border-zinc-800 opacity-60"
+                                  : isSelected
+                                  ? "bg-rose-50 dark:bg-rose-950/40 border-rose-500 ring-1 ring-rose-500 shadow-sm"
+                                  : "bg-slate-50/70 dark:bg-zinc-800/60 border-slate-200 dark:border-zinc-700/80 hover:border-slate-300 dark:hover:border-zinc-600"
+                              }`}
+                            >
+                              <div className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
+                                isDeactivated
+                                  ? "border-slate-300 dark:border-zinc-700 bg-slate-200/50 dark:bg-zinc-800 text-slate-400"
+                                  : isSelected
+                                  ? "border-rose-600 bg-rose-600 text-white"
+                                  : "border-slate-300 dark:border-zinc-600 bg-white dark:bg-zinc-900"
+                              }`}>
+                                {isDeactivated ? (
+                                  <Lock className="w-2.5 h-2.5" />
+                                ) : isSelected ? (
+                                  <div className="w-1.5 h-1.5 rounded-full bg-white" />
+                                ) : null}
+                              </div>
+
+                              <div className="flex-1">
+                                <div className="flex items-center justify-between gap-2 flex-wrap">
+                                  <p className={`text-xs font-bold leading-tight ${
+                                    isDeactivated ? "text-slate-500 dark:text-zinc-500" : "text-slate-900 dark:text-zinc-100"
+                                  }`}>
+                                    {item.label}
+                                  </p>
+                                  {isDeactivated && (
+                                    <span className="text-[9px] font-black uppercase text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-950 px-1.5 py-0.5 rounded">
+                                      {!isBuyerVerified ? "Buyers Only" : "Requires Delivery"}
                                     </span>
                                   )}
                                 </div>

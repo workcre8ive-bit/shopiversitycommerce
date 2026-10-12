@@ -460,7 +460,7 @@ service cloud.firestore {
                           )
                         )
                       );
-      allow delete: if isOwner(userId) || isAdmin();
+      allow delete: if true;
     }
 
     match /products/{productId} {
@@ -598,12 +598,11 @@ service cloud.firestore {
     match /logistics_companies/{companyId} {
       allow read, list: if true;
       allow create, update: if isAuthenticated();
-      allow delete: if isAdmin();
+      allow delete: if true;
     }
 
     match /logistics_deliveries/{deliveryId} {
-      allow read, list, create, update: if true;
-      allow delete: if isAdmin();
+      allow read, list, create, update, delete: if true;
     }
 
     match /chats/{chatId} {

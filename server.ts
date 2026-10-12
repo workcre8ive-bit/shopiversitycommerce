@@ -2457,6 +2457,10 @@ const FALLBACK_BANKS = [
       // Also delete logistics_companies document if exists
       try {
         await firebaseAdminDb.collection("logistics_companies").doc(uid).delete();
+        const compSnap = await firebaseAdminDb.collection("logistics_companies").where("userId", "==", uid).get();
+        for (const cDoc of compSnap.docs) {
+          await cDoc.ref.delete().catch(() => {});
+        }
       } catch (e) {}
 
       // Delete user document

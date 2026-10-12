@@ -22,7 +22,7 @@ import ReferralDashboard from "./ReferralDashboard";
 import LiveRiderTrackingModal from "./LiveRiderTrackingModal";
 import SalesAnalytics from "./SalesAnalytics";
 import DashboardSlideshow from "./DashboardSlideshow";
-import { deduplicateLogisticsCompanies } from "../utils/logisticsDeduplication";
+import { deduplicateLogisticsCompanies, filterActiveLogisticsCompanies } from "../utils/logisticsDeduplication";
 import { 
   LayoutDashboard, 
   LayoutGrid,
@@ -2019,8 +2019,8 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
       qSnap.forEach((doc) => {
         partners.push({ id: doc.id, ...doc.data() });
       });
-      // Deduplicate to guarantee identical logistics services never show up twice
-      const deduped = deduplicateLogisticsCompanies(partners);
+      // Deduplicate and filter out deleted/orphaned logistics accounts
+      const deduped = await filterActiveLogisticsCompanies(partners);
       // Filter partners that cover the campus of this order or seller
       const campusFilter = (order.pickupSchool || currentUser?.campus || "").trim().toLowerCase();
       const filtered = deduped.filter(p => 
@@ -3921,8 +3921,8 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
         qSnap.forEach((doc) => {
           list.push({ id: doc.id, ...doc.data() });
         });
-        // Deduplicate companies to avoid redundant entries in product setup
-        const deduped = deduplicateLogisticsCompanies(list);
+        // Deduplicate companies and filter out deleted/orphaned accounts in product setup
+        const deduped = await filterActiveLogisticsCompanies(list);
         setAllLogisticsCompanies(deduped);
       } catch (err) {
         console.error("Error fetching logistics companies for product form:", err);

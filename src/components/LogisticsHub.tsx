@@ -73,8 +73,11 @@ import {
   ListFilter,
   LayoutGrid,
   List,
-  Filter
+  Filter,
+  Trash2,
+  AlertTriangle
 } from "lucide-react";
+import { cascadeDeleteUserAccount } from "../utils/accountCleanup";
 import { motion, AnimatePresence } from "motion/react";
 import { NIGERIAN_CAMPUSES } from "../constants/campuses";
 import DashboardSlideshow from "./DashboardSlideshow";
@@ -257,6 +260,35 @@ export default function LogisticsHub({
   const [savingProfile, setSavingProfile] = React.useState(false);
   const [profileSuccessMsg, setProfileSuccessMsg] = React.useState("");
 
+  // Company account permanent deletion states
+  const [showDeleteCompanyModal, setShowDeleteCompanyModal] = React.useState(false);
+  const [deleteCompanyLoading, setDeleteCompanyLoading] = React.useState(false);
+  const [deleteCompanyError, setDeleteCompanyError] = React.useState("");
+
+  const handleDeleteCompanyAccount = async () => {
+    if (!auth.currentUser) return;
+    setDeleteCompanyLoading(true);
+    setDeleteCompanyError("");
+    try {
+      const uid = auth.currentUser.uid;
+      const res = await cascadeDeleteUserAccount(uid, auth.currentUser);
+      if (!res.success && res.error) {
+        setDeleteCompanyError(res.error);
+        return;
+      }
+      setCompanyProfile(null);
+      setShowDeleteCompanyModal(false);
+      setView("splash");
+      alert("Your logistics company account has been permanently deleted from Firebase.");
+      window.location.reload();
+    } catch (err: any) {
+      console.error("Failed to delete company account:", err);
+      setDeleteCompanyError(err.message || "Failed to delete account. Please try again.");
+    } finally {
+      setDeleteCompanyLoading(false);
+    }
+  };
+
   // Quick accept & filter states
   const [jobAcceptingId, setJobAcceptingId] = React.useState<string | null>(null);
   const [jobEtaInput, setJobEtaInput] = React.useState<string>("");
@@ -350,14 +382,8 @@ export default function LogisticsHub({
           const docSnap = await getDoc(doc(db, "logistics_companies", user.uid));
           if (docSnap.exists()) {
             const data = docSnap.data() as LogisticsCompany;
-            if (data.isVerified) {
-              setCompanyProfile(data);
-              setView("dashboard");
-            } else {
-              // Sign out if not verified yet
-              await signOut(auth);
-              setView("login");
-            }
+            setCompanyProfile(data);
+            setView("dashboard");
           } else {
             // Not a logistics user, wait and let them login or do nothing
           }
@@ -378,7 +404,7 @@ export default function LogisticsHub({
 
   // Guard view when signed in as Buyer/Seller
   React.useEffect(() => {
-    if (auth.currentUser && !companyProfile && view !== "splash") {
+    if (auth.currentUser && !companyProfile && view !== "splash" && view !== "register" && view !== "verify" && !loading) {
       setView("splash");
     }
 
@@ -948,13 +974,6 @@ export default function LogisticsHub({
       }
 
       const profile = docSnap.data() as LogisticsCompany;
-      if (!profile.isVerified) {
-        await signOut(auth);
-        setError("Please register again and complete your email/phone number verification.");
-        setLoading(false);
-        return;
-      }
-
       setCompanyProfile(profile);
       setView("dashboard");
     } catch (err: any) {
@@ -1143,11 +1162,10 @@ export default function LogisticsHub({
       }
       localStorage.removeItem('referredBy');
 
-      // Explicitly sign out the newly created user so they can log in cleanly on the Login screen
-      await signOut(auth);
-
-      setSuccessMsg("Account verified and created successfully! Please log in.");
-      setView("login");
+      // Keep the newly created user logged in and navigate them directly to their Logistics Dashboard
+      setCompanyProfile(profile);
+      setSuccessMsg("Account verified and created successfully! Welcome to your Logistics Hub.");
+      setView("dashboard");
       
       // Clear forms
       setCompanyName("");
@@ -2919,6 +2937,29 @@ export default function LogisticsHub({
                       </div>
                     </form>
                   )}
+
+                  {/* Danger Zone: Permanent Company Deletion */}
+                  <div className="mt-8 pt-6 border-t border-red-100 dark:border-red-950/40">
+                    <div className="p-5 bg-red-50/60 dark:bg-red-950/20 border border-red-200/80 dark:border-red-900/40 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div>
+                        <h4 className="text-sm font-black text-red-600 dark:text-red-400 flex items-center gap-1.5">
+                          <AlertTriangle className="w-4 h-4" />
+                          Delete Logistics Company Account
+                        </h4>
+                        <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1">
+                          Permanently removes this company profile, active delivery routes, and fleet credentials from Shopiversity.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowDeleteCompanyModal(true)}
+                        className="px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer shadow-md shadow-red-500/15 shrink-0 border-none"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        Delete Company Account
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -3125,6 +3166,76 @@ export default function LogisticsHub({
                     className="w-full h-10 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-600 dark:text-zinc-400 rounded-xl font-semibold text-xs transition-all cursor-pointer"
                   >
                     {otpModalType === "seller" ? "Seller Device Unavailable (Bypass & Collect)" : "Buyer Phone Unavailable (Bypass & Deliver)"}
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+          {/* Delete Company Confirmation Modal */}
+          {showDeleteCompanyModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 15 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 15 }}
+                className="bg-white dark:bg-zinc-900 border border-red-200 dark:border-red-900/50 rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl space-y-5"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-2xl bg-red-100 dark:bg-red-950/60 text-red-600 dark:text-red-400 flex items-center justify-center shrink-0">
+                    <AlertTriangle className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black text-slate-900 dark:text-white">
+                      Delete Logistics Company?
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-zinc-400">
+                      This action cannot be undone.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="p-3.5 bg-red-50 dark:bg-red-950/30 rounded-2xl border border-red-200/80 dark:border-red-900/40 text-xs text-red-700 dark:text-red-300 leading-relaxed space-y-2">
+                  <p>
+                    Are you sure you want to delete <strong>{companyProfile?.companyName || "your logistics company"}</strong>?
+                  </p>
+                  <p>
+                    All company profiles, active routes, pricing configurations, and delivery credentials will be permanently purged from the platform and removed from merchant logistics options.
+                  </p>
+                </div>
+
+                {deleteCompanyError && (
+                  <div className="p-3 bg-red-100 dark:bg-red-950/60 rounded-xl text-red-700 dark:text-red-300 text-xs font-semibold">
+                    {deleteCompanyError}
+                  </div>
+                )}
+
+                <div className="flex items-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    disabled={deleteCompanyLoading}
+                    onClick={() => {
+                      setShowDeleteCompanyModal(false);
+                      setDeleteCompanyError("");
+                    }}
+                    className="flex-1 h-11 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300 rounded-xl font-bold text-xs transition-all cursor-pointer border-none"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={deleteCompanyLoading}
+                    onClick={handleDeleteCompanyAccount}
+                    className="flex-1 h-11 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md shadow-red-600/20 border-none"
+                  >
+                    {deleteCompanyLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" /> Deleting...
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 className="w-4 h-4" /> Yes, Delete
+                      </>
+                    )}
                   </button>
                 </div>
               </motion.div>
