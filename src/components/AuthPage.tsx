@@ -259,8 +259,6 @@ export default function AuthPage({
   const [schoolName, setSchoolName] = React.useState("");
   const [schoolSearch, setSchoolSearch] = React.useState("");
   const [isSchoolDropdownOpen, setIsSchoolDropdownOpen] = React.useState(false);
-  const [detectedLocation, setDetectedLocation] = React.useState<string | null>(null);
-  const [isDetectingLocation, setIsDetectingLocation] = React.useState(false);
 
   // Vendor specific
   const [sellerType, setSellerType] = React.useState<"goods" | "services" | "both">("goods");
@@ -1453,35 +1451,6 @@ export default function AuthPage({
         setIsVerifyingId(false);
       }
     }
-  };
-
-  const detectLocation = () => {
-    if (!navigator.geolocation) {
-      setError("Geolocation is not supported by your browser");
-      return;
-    }
-
-    setIsDetectingLocation(true);
-    navigator.geolocation.getCurrentPosition(async (position) => {
-      const { latitude, longitude } = position.coords;
-      try {
-        const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`);
-        const data = await response.json();
-        if (data.display_name) {
-          setDetectedLocation(data.display_name);
-        } else {
-          setDetectedLocation(`${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
-        }
-      } catch (error) {
-        setDetectedLocation(`${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
-      } finally {
-        setIsDetectingLocation(false);
-      }
-    }, (error) => {
-      console.error("Geolocation error:", error);
-      setError("Unable to retrieve your location. Please ensure location permissions are granted for school verification.");
-      setIsDetectingLocation(false);
-    });
   };
 
   const filteredSchools = NIGERIAN_SCHOOLS.filter(s => 

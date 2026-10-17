@@ -1564,11 +1564,14 @@ const FALLBACK_BANKS = [
     { name: "Lotus Bank", code: "303" },
     { name: "Mayfair Microfinance Bank", code: "50586" },
     { name: "Mint MFB", code: "50304" },
+    { name: "Moniepoint MFB", code: "50515" },
     { name: "Moniepoint Microfinance Bank", code: "50515" },
     { name: "MTN Momo PSB", code: "120003" },
     { name: "Nova Merchant Bank", code: "111" },
     { name: "One Finance", code: "565" },
+    { name: "OPay Digital Services Limited (OPay)", code: "999992" },
     { name: "OPay Digital Services (OPay)", code: "999992" },
+    { name: "OPay", code: "999992" },
     { name: "Optimus Bank", code: "107" },
     { name: "Paga", code: "100002" },
     { name: "PalmPay", code: "999991" },
@@ -1634,6 +1637,14 @@ const FALLBACK_BANKS = [
 
   app.get("/api/paystack/resolve-bank/:bankCode/:accountNumber", async (req, res) => {
     const { bankCode, accountNumber } = req.params;
+    const cleanAccount = String(accountNumber).trim().replace(/\D/g, "");
+
+    if (!cleanAccount || cleanAccount.length < 10) {
+      return res.status(400).json({
+        status: false,
+        message: "Account number must be at least 10 digits."
+      });
+    }
 
     if (!PAYSTACK_SECRET_KEY) {
       console.log(`[SIMULATED BANK RESOLVE] PAYSTACK_SECRET_KEY missing. Simulating sandbox name resolve.`);
@@ -1641,19 +1652,21 @@ const FALLBACK_BANKS = [
         status: true,
         message: "Account resolved (Simulated)",
         data: {
-          account_number: accountNumber,
+          account_number: cleanAccount,
           account_name: "VERIFIED BANK ACCOUNT"
         }
       });
     }
 
     try {
+      // Direct call to Paystack resolve endpoint
       const response = await axios.get(
-        `https://api.paystack.co/bank/resolve?account_number=${accountNumber}&bank_code=${bankCode}`,
+        `https://api.paystack.co/bank/resolve?account_number=${cleanAccount}&bank_code=${bankCode}`,
         {
           headers: {
             Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
           },
+          timeout: 12000,
         }
       );
 
@@ -1661,24 +1674,19 @@ const FALLBACK_BANKS = [
         return res.status(200).json(response.data);
       }
 
-      // If Paystack returned status false (e.g. Test Key / Unresolved NUBAN in sandbox), return smooth fallback
-      return res.status(200).json({
-        status: true,
-        message: "Account verified (Fallback)",
-        data: {
-          account_number: accountNumber,
-          account_name: "VERIFIED BANK ACCOUNT"
-        }
+      return res.status(422).json({
+        status: false,
+        message: response.data?.message || "Could not resolve account name. Please verify the bank and account number."
       });
     } catch (error: any) {
-      console.log("[SIMULATED BANK RESOLVE] Paystack API resolve error, returning fallback resolution.");
-      return res.status(200).json({
-        status: true,
-        message: "Account resolved (Fallback)",
-        data: {
-          account_number: accountNumber,
-          account_name: "VERIFIED BANK ACCOUNT"
-        }
+      const errData = error.response?.data;
+      const statusCode = error.response?.status || 500;
+      console.error("[PAYSTACK RESOLVE ERROR]", statusCode, errData || error.message);
+
+      // Return meaningful error message from Paystack (e.g. Could not resolve account name)
+      return res.status(statusCode >= 400 && statusCode < 500 ? statusCode : 422).json({
+        status: false,
+        message: errData?.message || "Could not resolve account name. Please double-check your account number and selected bank."
       });
     }
   });
@@ -2267,7 +2275,7 @@ const FALLBACK_BANKS = [
   }, 5 * 60 * 1000);
 
   app.post("/api/paystack/connect-recipient", async (req, res) => {
-    const { userId, bankName, accountNumber, accountName, businessName, email, percentageCharge } = req.body;
+    const { userId, bankName, accountNumber, accountName, businessName, email, percentageCharge, bankCode: providedBankCode } = req.body;
     
     if (!userId || !bankName || !accountNumber || !accountName) {
       return res.status(400).json({ error: "Missing required banking fields (bankName, accountNumber, accountName)" });
@@ -2275,18 +2283,91 @@ const FALLBACK_BANKS = [
 
     try {
       const cleanAccount = String(accountNumber).trim().replace(/\D/g, '');
-      const bankMatches = FALLBACK_BANKS.find(
-        b => b.name.toLowerCase() === bankName.toLowerCase() ||
-             bankName.toLowerCase().includes(b.name.toLowerCase()) ||
-             b.name.toLowerCase().includes(bankName.toLowerCase())
-      );
-      const bankCode = bankMatches ? bankMatches.code : "057";
+      
+      // Determine bank code: use provided, or query live Paystack bank list, or match in FALLBACK_BANKS / Aliases
+      let bankCode = providedBankCode;
 
-      let recipientCode = "RCP_sim_" + Math.random().toString(36).substring(2, 10);
-      let subaccountCode = "ACCT_sim_" + Math.random().toString(36).substring(2, 10);
+      const BANK_ALIASES: Record<string, string> = {
+        opay: "999992",
+        palmpay: "999991",
+        moniepoint: "50515",
+        kuda: "50211",
+        gtbank: "058",
+        guaranty: "058",
+        zenith: "057",
+        access: "044",
+        uba: "033",
+        firstbank: "011",
+        wema: "035",
+        alat: "035A",
+        stanbic: "221",
+        sterling: "232",
+        fcmb: "214",
+        fidelity: "070",
+        polaris: "076",
+        union: "032",
+        keystone: "082",
+        ecobank: "050",
+        providus: "101",
+        vfd: "566",
+        rubies: "125",
+        taj: "302",
+        jaiz: "301",
+        lotus: "303"
+      };
+
+      if (!bankCode) {
+        const cleanName = bankName.toLowerCase().replace(/[^a-z0-9]/g, "");
+        for (const [key, code] of Object.entries(BANK_ALIASES)) {
+          if (cleanName.includes(key)) {
+            bankCode = code;
+            break;
+          }
+        }
+      }
+
+      if (!bankCode) {
+        // Try to fetch live bank list for exact code
+        try {
+          if (PAYSTACK_SECRET_KEY) {
+            const liveBanksRes = await axios.get("https://api.paystack.co/bank", {
+              headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` },
+              timeout: 6000
+            });
+            if (liveBanksRes.data?.data) {
+              const bNorm = bankName.toLowerCase().replace(/[^a-z0-9]/g, "");
+              const bMatch = liveBanksRes.data.data.find((b: any) => {
+                const liveNorm = b.name.toLowerCase().replace(/[^a-z0-9]/g, "");
+                return liveNorm === bNorm || liveNorm.includes(bNorm) || bNorm.includes(liveNorm);
+              });
+              if (bMatch) {
+                bankCode = bMatch.code;
+              }
+            }
+          }
+        } catch (fetchErr) {
+          console.warn("[PAYSTACK] Live bank fetch during connect notice:", fetchErr);
+        }
+      }
+
+      if (!bankCode) {
+        const bNorm = bankName.toLowerCase().replace(/[^a-z0-9]/g, "");
+        const bankMatches = FALLBACK_BANKS.find(
+          b => {
+            const fNorm = b.name.toLowerCase().replace(/[^a-z0-9]/g, "");
+            return fNorm === bNorm || fNorm.includes(bNorm) || bNorm.includes(fNorm);
+          }
+        );
+        bankCode = bankMatches ? bankMatches.code : "057";
+      }
+
+      let recipientCode = "";
+      let subaccountCode = "";
+      let subErrMessage = "";
+      let recErrMessage = "";
 
       if (PAYSTACK_SECRET_KEY) {
-        // 1. Create / Update Transfer Recipient (for instant payouts & withdrawals)
+        // 1. Create or retrieve Paystack Transfer Recipient
         try {
           const recipientResponse = await axios.post(
             "https://api.paystack.co/transferrecipient",
@@ -2314,16 +2395,30 @@ const FALLBACK_BANKS = [
             recipientCode = recipientResponse.data.data.recipient_code;
           }
         } catch (err: any) {
-          console.error("[PAYSTACK] Recipient Creation Error:", err.response?.data || err.message);
-          recipientCode = "RCP_sim_" + Math.random().toString(36).substring(2, 10);
+          recErrMessage = err.response?.data?.message || err.message;
+          console.warn("[PAYSTACK] Recipient Creation Notice:", recErrMessage);
+          // Look up existing recipient if already exists on Paystack
+          try {
+            const listRecipients = await axios.get("https://api.paystack.co/transferrecipient?perPage=100", {
+              headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` },
+            });
+            const existingR = listRecipients.data?.data?.find(
+              (r: any) => r.details?.account_number === cleanAccount
+            );
+            if (existingR?.recipient_code) {
+              recipientCode = existingR.recipient_code;
+            }
+          } catch (rLookupErr) {
+            console.warn("[PAYSTACK] Recipient lookup error:", rLookupErr);
+          }
         }
 
-        // 2. Create Paystack Subaccount (for transaction split routing & dedicated merchant subaccounts)
+        // 2. Create or retrieve Paystack Subaccount (for transaction split routing & dedicated merchant settlements)
         try {
           const subaccountResponse = await axios.post(
             "https://api.paystack.co/subaccount",
             {
-              business_name: businessName || accountName || "Shopiversity Merchant",
+              business_name: (businessName || accountName || "Shopiversity Merchant").slice(0, 100),
               settlement_bank: bankCode,
               account_number: cleanAccount,
               percentage_charge: percentageCharge !== undefined ? Number(percentageCharge) : 5, // 5% default marketplace fee
@@ -2346,10 +2441,31 @@ const FALLBACK_BANKS = [
             subaccountCode = subaccountResponse.data.data.subaccount_code;
           }
         } catch (subErr: any) {
-          console.warn("[PAYSTACK] Subaccount Creation Notice:", subErr.response?.data?.message || subErr.message);
-          // If subaccount already exists with this account number, use simulated/fallback or handle gracefully
-          subaccountCode = "ACCT_" + Math.random().toString(36).substring(2, 10);
+          subErrMessage = subErr.response?.data?.message || subErr.message;
+          console.warn("[PAYSTACK] Subaccount Creation Notice:", subErrMessage);
+          // If subaccount already exists with this account number, fetch existing subaccount from Paystack
+          try {
+            const subRes = await axios.get("https://api.paystack.co/subaccount?perPage=100", {
+              headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` },
+            });
+            const foundSub = subRes.data?.data?.find((s: any) => s.account_number === cleanAccount);
+            if (foundSub?.subaccount_code) {
+              subaccountCode = foundSub.subaccount_code;
+            }
+          } catch (lookupErr) {
+            console.warn("[PAYSTACK] Existing subaccount lookup notice:", lookupErr);
+          }
         }
+
+        if (!subaccountCode) {
+          return res.status(422).json({
+            success: false,
+            error: subErrMessage || "Paystack could not create or link the subaccount. Please ensure the bank and 10-digit account number are correct."
+          });
+        }
+      } else {
+        recipientCode = "RCP_sim_" + Math.random().toString(36).substring(2, 10);
+        subaccountCode = "ACCT_sim_" + Math.random().toString(36).substring(2, 10);
       }
 
       const bankDetails = {
@@ -3635,6 +3751,9 @@ const FALLBACK_BANKS = [
     }
   });
 
+
+  // Serve static assets from public directory
+  app.use(express.static(path.join(process.cwd(), "public")));
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {

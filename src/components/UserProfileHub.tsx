@@ -47,7 +47,7 @@ export default function UserProfileHub({
   isDarkMode,
   toggleDarkMode
 }: UserProfileHubProps) {
-  const isProfileComplete = !!user?.displayName && !!user?.username && !!user?.schoolName && !!user?.location && (user?.role === "seller" || !!user?.deliveryAddress);
+  const isProfileComplete = !!user?.displayName && !!user?.username && !!user?.schoolName && (user?.role === "seller" || !!user?.deliveryAddress);
 
   const menuGroups = [
     {

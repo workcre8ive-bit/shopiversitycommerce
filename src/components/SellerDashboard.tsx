@@ -6037,49 +6037,6 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                     <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest block ml-1">
                       {type === "service" ? "Requested Service Location for Google Map Pinpoint" : "Campus Pickup / Delivery Location (Instant 1-Click Select)"}
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if ("geolocation" in navigator) {
-                          setIsVerifyingAddress(true);
-                          navigator.geolocation.getCurrentPosition(
-                            async (position) => {
-                              const coords = {
-                                lat: position.coords.latitude,
-                                lng: position.coords.longitude
-                              };
-                              setPickupCoordinates(coords);
-                              setMapCenter(coords);
-                              try {
-                                const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${coords.lat}&lon=${coords.lng}`);
-                                const data = await res.json();
-                                if (data && data.display_name) {
-                                  setLocation(data.display_name);
-                                } else {
-                                  setLocation(`${addrSchool || "Campus"} GPS Pickup (${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)})`);
-                                }
-                              } catch (e) {
-                                setLocation(`${addrSchool || "Campus"} GPS Location (${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)})`);
-                              } finally {
-                                setIsVerifyingAddress(false);
-                              }
-                            },
-                            (err) => {
-                              console.error("GPS error:", err);
-                              alert("Unable to fetch live GPS. Please choose a landmark hotspot chip or select on map.");
-                              setIsVerifyingAddress(false);
-                            },
-                            { timeout: 10000, enableHighAccuracy: true }
-                          );
-                        } else {
-                          alert("Geolocation is not supported by your browser.");
-                        }
-                      }}
-                      className="px-3 py-1.5 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-100 rounded-xl font-black text-[11px] transition-all flex items-center gap-1.5 border border-indigo-200 dark:border-indigo-800 cursor-pointer"
-                    >
-                      <Navigation className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 animate-pulse" />
-                      <span>🎯 Auto-Detect My Live Location</span>
-                    </button>
                   </div>
 
                   {/* Campus Quick Landmark Hotspots */}

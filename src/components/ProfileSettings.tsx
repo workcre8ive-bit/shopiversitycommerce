@@ -67,9 +67,11 @@ const FALLBACK_BANKS = [
   { name: "Providus Bank", code: "101" },
   { name: "TAJ Bank", code: "302" },
   { name: "Globus Bank", code: "103" },
+  { name: "OPay Digital Services Limited (OPay)", code: "999992" },
   { name: "OPay Digital Services (OPay)", code: "999992" },
   { name: "PalmPay", code: "999991" },
   { name: "Kuda Bank", code: "50211" },
+  { name: "Moniepoint MFB", code: "50515" },
   { name: "Moniepoint Microfinance Bank", code: "50515" },
   { name: "VFD Microfinance Bank", code: "566" },
   { name: "Other", code: "other" }
@@ -143,6 +145,11 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
       setBankName(initialBank?.bankName || "");
       setAccountNumber(initialBank?.accountNumber || "");
       setAccountName(initialBank?.accountName || "");
+      setBankCode(initialBank?.bankCode || "");
+      setSubaccountCode(user.subaccountCode || initialBank?.subaccountCode || "");
+      setRecipientCode(user.recipientCode || initialBank?.recipientCode || "");
+      setIsAccountVerified(!!initialBank?.accountName && !!(user.subaccountCode || initialBank?.subaccountCode));
+      setBankVerificationError("");
     } else {
       if (user.displayName !== prev.displayName) setFullName(user.displayName);
       if (user.username !== prev.username) setUsername(user.username || "");
@@ -170,6 +177,9 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
       if (user.bankDetails?.bankName !== prev.bankDetails?.bankName) setBankName(user.bankDetails?.bankName || "");
       if (user.bankDetails?.accountNumber !== prev.bankDetails?.accountNumber) setAccountNumber(user.bankDetails?.accountNumber || "");
       if (user.bankDetails?.accountName !== prev.bankDetails?.accountName) setAccountName(user.bankDetails?.accountName || "");
+      if (user.bankDetails?.bankCode !== prev.bankDetails?.bankCode) setBankCode(user.bankDetails?.bankCode || "");
+      if (user.subaccountCode !== prev.subaccountCode) setSubaccountCode(user.subaccountCode || "");
+      if (user.recipientCode !== prev.recipientCode) setRecipientCode(user.recipientCode || "");
     }
     
     prevUserRef.current = user;
@@ -183,6 +193,11 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
   const [customBankName, setCustomBankName] = React.useState("");
   const [accountNumber, setAccountNumber] = React.useState(user.bankDetails?.accountNumber || "");
   const [accountName, setAccountName] = React.useState(user.bankDetails?.accountName || "");
+  const [bankCode, setBankCode] = React.useState(user.bankDetails?.bankCode || "");
+  const [subaccountCode, setSubaccountCode] = React.useState(user.subaccountCode || user.bankDetails?.subaccountCode || "");
+  const [recipientCode, setRecipientCode] = React.useState(user.recipientCode || user.bankDetails?.recipientCode || "");
+  const [isAccountVerified, setIsAccountVerified] = React.useState(!!user.bankDetails?.accountName && !!(user.subaccountCode || user.bankDetails?.subaccountCode));
+  const [bankVerificationError, setBankVerificationError] = React.useState("");
 
   const [showPaystackInfo, setShowPaystackInfo] = React.useState(false);
   const [banks, setBanks] = React.useState<{ name: string; code: string }[]>(FALLBACK_BANKS);
@@ -400,65 +415,88 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
   const handleSaveBankDetailsDirectly = async () => {
     const selectedBankName = bankName === "Other" ? customBankName : bankName;
     if (!selectedBankName) {
+      setBankVerificationError("Please select or enter your bank name.");
       alert("Please select or enter your bank name.");
       return;
     }
     const cleanAccount = accountNumber.trim().replace(/\D/g, '');
-    if (cleanAccount.length < 10 || cleanAccount.length > 15) {
-      alert("Please enter a valid 10-15 digit account number.");
+    if (cleanAccount.length !== 10) {
+      setBankVerificationError("Nigerian bank account number must be exactly 10 digits.");
+      alert("Nigerian bank account number must be exactly 10 digits.");
       return;
     }
-    if (!accountName.trim()) {
-      alert("Please enter or verify your account name.");
+    if (!accountName || !accountName.trim()) {
+      setBankVerificationError("Please verify your account number first to get your verified account name.");
+      alert("Please verify your account number first to get your verified account name.");
       return;
     }
 
     setIsSavingBank(true);
+    setBankVerificationError("");
     try {
-      let recipientCode = user.recipientCode || user.bankDetails?.recipientCode || "";
-      let subaccountCode = user.subaccountCode || user.bankDetails?.subaccountCode || "";
+      let effectiveCode = bankCode;
+      if (!effectiveCode || effectiveCode === "other") {
+        const found = banks.find(b => b.name.toLowerCase() === selectedBankName.toLowerCase());
+        effectiveCode = found?.code || "";
+      }
+      if (!effectiveCode) {
+        const bNorm = selectedBankName.toLowerCase().replace(/[^a-z0-9]/g, "");
+        if (bNorm.includes("opay")) effectiveCode = "999992";
+        else if (bNorm.includes("palmpay")) effectiveCode = "999991";
+        else if (bNorm.includes("moniepoint")) effectiveCode = "50515";
+        else if (bNorm.includes("kuda")) effectiveCode = "50211";
+        else if (bNorm.includes("gtbank") || bNorm.includes("guaranty")) effectiveCode = "058";
+        else if (bNorm.includes("zenith")) effectiveCode = "057";
+        else if (bNorm.includes("access")) effectiveCode = "044";
+        else if (bNorm.includes("uba")) effectiveCode = "033";
+        else if (bNorm.includes("firstbank")) effectiveCode = "011";
+      }
 
       // 1. Call Backend to create/link Subaccount and Recipient on Paystack
-      try {
-        const connectRes = await fetch("/api/paystack/connect-recipient", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            userId: user?.uid,
-            bankName: selectedBankName,
-            accountNumber: cleanAccount,
-            accountName: accountName.trim(),
-            businessName: businessName || user.businessName || accountName.trim(),
-            email: user.email || auth.currentUser?.email || "",
-            percentageCharge: 5
-          })
-        });
-        const connectData = await connectRes.json();
-        if (connectData.success) {
-          recipientCode = connectData.recipientCode || recipientCode;
-          subaccountCode = connectData.subaccountCode || subaccountCode;
-        }
-      } catch (subErr) {
-        console.warn("Paystack subaccount auto-link notification:", subErr);
+      const connectRes = await fetch("/api/paystack/connect-recipient", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: user?.uid,
+          bankName: selectedBankName,
+          bankCode: effectiveCode,
+          accountNumber: cleanAccount,
+          accountName: accountName.trim(),
+          businessName: businessName || user.businessName || accountName.trim(),
+          email: user.email || auth.currentUser?.email || "",
+          percentageCharge: 5
+        })
+      });
+      const connectData = await connectRes.json();
+      
+      if (!connectRes.ok || !connectData.success) {
+        throw new Error(connectData.error || connectData.message || "Failed to link Paystack subaccount. Please ensure bank and account number are correct.");
       }
+
+      const newRecipientCode = connectData.recipientCode;
+      const newSubaccountCode = connectData.subaccountCode;
+      setSubaccountCode(newSubaccountCode);
+      setRecipientCode(newRecipientCode);
+      if (effectiveCode) setBankCode(effectiveCode);
 
       const bankDetailsData = {
         bankName: selectedBankName,
+        bankCode: effectiveCode || connectData.bankDetails?.bankCode || "",
         accountNumber: cleanAccount,
         accountName: accountName.trim(),
-        recipientCode: recipientCode || `RCP_${user?.uid?.substring(0, 8)}`,
-        subaccountCode: subaccountCode || `ACCT_${user?.uid?.substring(0, 8)}`,
+        recipientCode: newRecipientCode,
+        subaccountCode: newSubaccountCode,
         verifiedAt: new Date().toISOString()
       };
 
       if (user?.uid) {
-        // 2. Save to Firestore
+        // 2. Save directly to Firestore
         const userRef = doc(db, "users", user.uid);
         await updateDoc(userRef, {
           bankDetails: bankDetailsData,
           paystackConnected: true,
-          recipientCode: bankDetailsData.recipientCode,
-          subaccountCode: bankDetailsData.subaccountCode,
+          recipientCode: newRecipientCode,
+          subaccountCode: newSubaccountCode,
           updatedAt: new Date().toISOString()
         });
 
@@ -470,82 +508,78 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
         }
       }
 
+      setIsAccountVerified(true);
       setBankSaveSuccess(true);
-      setTimeout(() => setBankSaveSuccess(false), 3500);
-    } catch (err) {
+      setTimeout(() => setBankSaveSuccess(false), 4000);
+    } catch (err: any) {
       console.error("Error saving bank details:", err);
-      alert("Failed to save bank details. Please try again.");
+      setBankVerificationError(err.message || "Failed to save bank details and link Paystack subaccount.");
+      alert(err.message || "Failed to save bank details. Please check your bank and account number.");
     } finally {
       setIsSavingBank(false);
     }
   };
 
   const handleVerifyAccount = async () => {
-    if (!bankName) {
+    const selectedBank = bankName === "Other" ? customBankName : bankName;
+    if (!selectedBank) {
+      setBankVerificationError("Please select a bank first.");
       alert("Please select a bank first.");
       return;
     }
 
     const cleanAccount = accountNumber.trim().replace(/\D/g, '');
-    if (cleanAccount.length < 10 || cleanAccount.length > 15) {
-      alert("Account number must be between 10 and 15 digits.");
+    if (cleanAccount.length !== 10) {
+      setBankVerificationError("Nigerian bank account number must be exactly 10 digits.");
+      alert("Nigerian bank account number must be exactly 10 digits.");
       return;
     }
     
     setIsVerifying(true);
+    setBankVerificationError("");
     try {
-      const bankCode = banks.find(b => b.name === bankName)?.code || "057";
+      let effectiveCode = bankCode;
+      if (!effectiveCode || effectiveCode === "other") {
+        const found = banks.find(b => b.name.toLowerCase() === selectedBank.toLowerCase());
+        effectiveCode = found?.code || "";
+      }
+      if (!effectiveCode) {
+        const bNorm = selectedBank.toLowerCase().replace(/[^a-z0-9]/g, "");
+        if (bNorm.includes("opay")) effectiveCode = "999992";
+        else if (bNorm.includes("palmpay")) effectiveCode = "999991";
+        else if (bNorm.includes("moniepoint")) effectiveCode = "50515";
+        else if (bNorm.includes("kuda")) effectiveCode = "50211";
+        else if (bNorm.includes("gtbank") || bNorm.includes("guaranty")) effectiveCode = "058";
+        else if (bNorm.includes("zenith")) effectiveCode = "057";
+        else if (bNorm.includes("access")) effectiveCode = "044";
+        else if (bNorm.includes("uba")) effectiveCode = "033";
+        else if (bNorm.includes("firstbank")) effectiveCode = "011";
+      }
 
-      const res = await fetch(`/api/paystack/resolve-bank/${bankCode}/${cleanAccount}`);
+      if (!effectiveCode) {
+        setBankVerificationError("Could not determine bank code. Please select your bank from the list.");
+        return;
+      }
+
+      setBankCode(effectiveCode);
+
+      const res = await fetch(`/api/paystack/resolve-bank/${effectiveCode}/${cleanAccount}`);
       const data = await res.json();
       
-      const resolvedName = (data.status && data.data?.account_name) 
-        ? data.data.account_name 
-        : (fullName || "VERIFIED BANK ACCOUNT");
-
-      setAccountName(resolvedName);
-
-      // Auto-connect to Paystack Subaccount & Recipient in background
-      if (user?.uid) {
-        try {
-          const connectRes = await fetch("/api/paystack/connect-recipient", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              userId: user.uid,
-              bankName: bankName === "Other" ? customBankName : bankName,
-              accountNumber: cleanAccount,
-              accountName: resolvedName,
-              businessName: businessName || user.businessName || resolvedName,
-              email: user.email || auth.currentUser?.email || "",
-              percentageCharge: 5
-            })
-          });
-          const connectData = await connectRes.json();
-          
-          const bankDetailsData = {
-            bankName: bankName === "Other" ? customBankName : bankName,
-            accountNumber: cleanAccount,
-            accountName: resolvedName,
-            recipientCode: connectData.recipientCode || `RCP_${user.uid.substring(0, 8)}`,
-            subaccountCode: connectData.subaccountCode || `ACCT_${user.uid.substring(0, 8)}`,
-            verifiedAt: new Date().toISOString()
-          };
-
-          localStorage.setItem(`shopiversity_bank_details_${user.uid}`, JSON.stringify(bankDetailsData));
-          updateDoc(doc(db, "users", user.uid), { 
-            bankDetails: bankDetailsData,
-            paystackConnected: true,
-            recipientCode: bankDetailsData.recipientCode,
-            subaccountCode: bankDetailsData.subaccountCode
-          }).catch(() => {});
-        } catch (e) {
-          console.warn("Auto-link error during verify:", e);
-        }
+      if (res.ok && data.status && data.data?.account_name) {
+        setAccountName(data.data.account_name);
+        setIsAccountVerified(true);
+        setBankVerificationError("");
+      } else {
+        setAccountName("");
+        setIsAccountVerified(false);
+        const errMsg = data.message || "Could not resolve account name. Please verify that your account number matches the selected bank.";
+        setBankVerificationError(errMsg);
       }
     } catch (err: any) {
-      const fallbackName = fullName || "VERIFIED BANK ACCOUNT";
-      setAccountName(fallbackName);
+      setAccountName("");
+      setIsAccountVerified(false);
+      setBankVerificationError("Network error while verifying account. Please check your internet connection.");
     } finally {
       setIsVerifying(false);
     }
@@ -588,37 +622,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
   const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false);
   const [showHibernateConfirm, setShowHibernateConfirm] = React.useState(false);
   const [deleteError, setDeleteError] = React.useState("");
-  const [isDetectingLocation, setIsDetectingLocation] = React.useState(false);
   const [hibernateDuration, setHibernateDuration] = React.useState("0");
-
-  const handleGetLocation = () => {
-    if (!navigator.geolocation) {
-      alert("Geolocation is not supported by your browser");
-      return;
-    }
-
-    setIsDetectingLocation(true);
-    navigator.geolocation.getCurrentPosition(async (position) => {
-      const { latitude, longitude } = position.coords;
-      try {
-        const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`);
-        const data = await response.json();
-        if (data.display_name) {
-          setLocation(data.display_name);
-        } else {
-          setLocation(`${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
-        }
-      } catch (error) {
-        setLocation(`${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
-      } finally {
-        setIsDetectingLocation(false);
-      }
-    }, (error) => {
-      console.error("Geolocation error:", error);
-      alert("Unable to retrieve your location. Please ensure location permissions are granted.");
-      setIsDetectingLocation(false);
-    });
-  };
 
   const handlePhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -796,12 +800,56 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
 
       const chosenBank = bankName === "Other" ? customBankName : bankName;
       if (chosenBank || accountNumber || accountName) {
-        const bankData = {
+        const cleanAccount = accountNumber.trim().replace(/\D/g, '');
+        let currentSubCode = subaccountCode || user.subaccountCode || user.bankDetails?.subaccountCode || "";
+        let currentRecCode = recipientCode || user.recipientCode || user.bankDetails?.recipientCode || "";
+        let currentBankCode = bankCode || user.bankDetails?.bankCode || "";
+
+        if (cleanAccount.length === 10 && accountName.trim() && !currentSubCode) {
+          try {
+            const connectRes = await fetch("/api/paystack/connect-recipient", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                userId: user.uid,
+                bankName: chosenBank,
+                bankCode: currentBankCode,
+                accountNumber: cleanAccount,
+                accountName: accountName.trim(),
+                businessName: businessName || user.businessName || accountName.trim(),
+                email: user.email || auth.currentUser?.email || "",
+                percentageCharge: 5
+              })
+            });
+            const connectData = await connectRes.json();
+            if (connectData.success) {
+              currentSubCode = connectData.subaccountCode || currentSubCode;
+              currentRecCode = connectData.recipientCode || currentRecCode;
+              if (connectData.bankDetails?.bankCode) {
+                currentBankCode = connectData.bankDetails.bankCode;
+              }
+              setSubaccountCode(currentSubCode);
+              setRecipientCode(currentRecCode);
+            }
+          } catch (autoSubErr) {
+            console.warn("Subaccount auto-link on full save notice:", autoSubErr);
+          }
+        }
+
+        const bankData: any = {
           bankName: chosenBank,
-          accountNumber: accountNumber.trim().replace(/\D/g, ''),
-          accountName: accountName.trim()
+          bankCode: currentBankCode,
+          accountNumber: cleanAccount,
+          accountName: accountName.trim(),
+          verifiedAt: user.bankDetails?.verifiedAt || new Date().toISOString()
         };
+        if (currentSubCode) bankData.subaccountCode = currentSubCode;
+        if (currentRecCode) bankData.recipientCode = currentRecCode;
+
         updateData.bankDetails = bankData;
+        if (currentSubCode) updateData.subaccountCode = currentSubCode;
+        if (currentRecCode) updateData.recipientCode = currentRecCode;
+        if (currentSubCode && currentRecCode) updateData.paystackConnected = true;
 
         if (user.uid) {
           try {
@@ -898,19 +946,19 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
 
   const importantFields = [
     fullName, user.username, user.email, user.phoneNumber, 
-    schoolName, location, 
-    country, city, businessPhone, photoURL
+    schoolName, state, city,
+    country, businessPhone, photoURL
   ];
   const filledCount = importantFields.filter(f => !!f).length;
   const totalFields = importantFields.length;
 
   const getVerificationStatus = () => {
-    const isProfileEmpty = !fullName && !user.username && !schoolName && !location && !deliveryAddress;
+    const isProfileEmpty = !fullName && !user.username && !schoolName && !deliveryAddress;
     
     if (user.isVerified) return { label: "Verified", color: "text-emerald-600 bg-emerald-50", icon: ShieldCheck, tag: "verified" };
     if (idVerificationSuccess && !user.isVerified) return { label: "Verification Pending Save", color: "text-amber-600 bg-amber-50", icon: ShieldAlert, tag: "pending_save" };
     
-    const isComplete = !!fullName && !!user.username && !!schoolName && !!location && (user.role === "seller" || !!deliveryAddress) && (user.role !== "buyer" ? !!verificationIdUrl : true);
+    const isComplete = !!fullName && !!user.username && !!schoolName && !!state && !!city && (user.role === "seller" || !!deliveryAddress) && (user.role !== "buyer" ? !!verificationIdUrl : true);
     
     if (isProfileEmpty) return { label: "Unverified", color: "text-red-600 bg-red-50", icon: Shield, tag: "unverified" };
     if (!isComplete) return { label: "Pending Verification", color: "text-amber-600 bg-amber-50", icon: ShieldAlert, tag: "incomplete" };
@@ -1353,28 +1401,6 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
               </AnimatePresence>
             </div>
           </div>
-
-          <div className="space-y-2">
-            <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Location</label>
-            <div className="relative">
-              <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-              <input 
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                className="w-full h-14 pl-12 pr-16 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-purple-500 outline-none transition-all text-slate-900 dark:text-white"
-                placeholder="Your city or specific location"
-              />
-              <button
-                type="button"
-                onClick={handleGetLocation}
-                disabled={isDetectingLocation}
-                className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl flex items-center justify-center text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950/20 transition-all shadow-sm disabled:opacity-50"
-                title="Get current location"
-              >
-                {isDetectingLocation ? <Loader2 className="w-4 h-4 animate-spin" /> : <Navigation className="w-4 h-4" />}
-              </button>
-            </div>
-          </div>
         </div>
       )}
 
@@ -1594,9 +1620,12 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                                     key={`${bank.code}-${index}`}
                                     onClick={() => {
                                       setBankName(bank.name);
+                                      setBankCode(bank.code);
                                       setIsBankDropdownOpen(false);
                                       setBankSearchQuery("");
                                       setAccountName("");
+                                      setIsAccountVerified(false);
+                                      setBankVerificationError("");
                                     }}
                                     className="px-4 py-3 hover:bg-purple-50 dark:hover:bg-purple-950/20 cursor-pointer text-sm font-bold text-slate-700 dark:text-slate-300 transition-colors"
                                   >
@@ -1629,14 +1658,21 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                         type="text"
                         inputMode="numeric"
                         value={accountNumber}
-                        onChange={(e) => setAccountNumber(e.target.value.replace(/\D/g, '').slice(0, 15))}
+                        onChange={(e) => {
+                          const val = e.target.value.replace(/\D/g, '').slice(0, 10);
+                          setAccountNumber(val);
+                          setAccountName("");
+                          setIsAccountVerified(false);
+                          setBankVerificationError("");
+                        }}
                         className={cn(
-                          "w-full h-14 pl-12 pr-6 bg-slate-50 dark:bg-slate-800 border rounded-2xl focus:bg-white dark:focus:bg-slate-900 outline-none transition-all text-slate-900 dark:text-white",
-                          accountNumber.length > 0 && (accountNumber.length < 10 || accountNumber.length > 15) && bankName !== "Other" ? "border-red-500" : "border-slate-200 dark:border-slate-700 focus:border-purple-500"
+                          "w-full h-14 pl-12 pr-6 bg-slate-50 dark:bg-slate-800 border rounded-2xl focus:bg-white dark:focus:bg-slate-900 outline-none transition-all text-slate-900 dark:text-white font-mono font-bold tracking-wider",
+                          accountNumber.length > 0 && accountNumber.length !== 10 && bankName !== "Other" ? "border-amber-400" : "border-slate-200 dark:border-slate-700 focus:border-purple-500"
                         )}
-                        placeholder="10-15 digits"
+                        placeholder="10-digit NUBAN number"
                       />
                     </div>
+                    <p className="text-[11px] text-slate-400 ml-1 font-medium">Standard 10-digit Nigerian NUBAN account number</p>
                   </div>
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Account Name</label>
@@ -1646,55 +1682,73 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                         <input 
                           type="text"
                           value={accountName}
-                          onChange={(e) => setAccountName(e.target.value)}
+                          onChange={(e) => {
+                            setAccountName(e.target.value);
+                            setBankVerificationError("");
+                          }}
                           className="w-full h-14 pl-12 pr-6 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-2xl outline-none text-slate-900 dark:text-white font-bold focus:border-purple-500"
-                          placeholder="Account Name (e.g. John Doe)"
+                          placeholder="Verified Account Name"
                         />
                       </div>
                       <button
                         type="button"
                         onClick={handleVerifyAccount}
-                        disabled={isVerifying || accountNumber.length < 10 || accountNumber.length > 15 || !bankName}
-                        className="px-6 h-14 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl font-bold text-xs text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950/20 transition-all disabled:opacity-50 cursor-pointer"
+                        disabled={isVerifying || accountNumber.length !== 10 || !bankName}
+                        className="px-6 h-14 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl font-bold text-xs text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950/20 transition-all disabled:opacity-50 cursor-pointer shrink-0 shadow-sm"
                       >
                         {isVerifying ? <Loader2 className="w-4 h-4 animate-spin" /> : "Verify"}
                       </button>
                     </div>
+                    {bankVerificationError && (
+                      <p className="text-xs text-red-500 font-bold mt-1.5 flex items-center gap-1.5">
+                        <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
+                        <span>{bankVerificationError}</span>
+                      </p>
+                    )}
+                    {isAccountVerified && accountName && (
+                      <p className="text-xs text-emerald-600 dark:text-emerald-400 font-bold mt-1.5 flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 shrink-0" />
+                        <span>Official Name: {accountName}</span>
+                      </p>
+                    )}
                   </div>
                 </div>
 
                 {/* Save Bank Details Row */}
                 <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-purple-50/50 dark:bg-purple-950/20 p-4 rounded-2xl border border-purple-100 dark:border-purple-900/40">
                   <div className="text-xs text-slate-600 dark:text-slate-300 font-medium flex flex-col sm:flex-row sm:items-center gap-2">
-                    {accountName ? (
+                    {accountName && (subaccountCode || user.subaccountCode) ? (
                       <div className="space-y-1">
                         <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1.5">
                           <CheckCircle2 className="w-4 h-4 shrink-0" />
-                          <span>Account Verified & Linked</span>
+                          <span>Paystack Subaccount Linked & Active</span>
                         </span>
-                        {(user.subaccountCode || user.recipientCode) && (
-                          <div className="flex flex-wrap gap-2 text-[10px] font-mono text-slate-500 dark:text-slate-400">
-                            {user.subaccountCode && (
-                              <span className="px-2 py-0.5 bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 rounded font-semibold">
-                                Subaccount: {user.subaccountCode}
-                              </span>
-                            )}
-                            {user.recipientCode && (
-                              <span className="px-2 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded font-semibold">
-                                Recipient: {user.recipientCode}
-                              </span>
-                            )}
-                          </div>
-                        )}
+                        <div className="flex flex-wrap gap-2 text-[10px] font-mono text-slate-500 dark:text-slate-400">
+                          {(subaccountCode || user.subaccountCode) && (
+                            <span className="px-2 py-0.5 bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 rounded font-semibold">
+                              Subaccount: {subaccountCode || user.subaccountCode}
+                            </span>
+                          )}
+                          {(recipientCode || user.recipientCode) && (
+                            <span className="px-2 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded font-semibold">
+                              Recipient: {recipientCode || user.recipientCode}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ) : isAccountVerified && accountName ? (
+                      <div className="space-y-0.5">
+                        <span className="text-purple-700 dark:text-purple-300 font-bold block">Account verified as: {accountName}</span>
+                        <span className="text-[11px] text-slate-500">Click "Save & Link Subaccount" to connect directly to Paystack.</span>
                       </div>
                     ) : (
-                      <span>Select bank and enter account details to link Paystack subaccount</span>
+                      <span>Select bank, enter 10-digit account number, click "Verify", then "Save & Link Subaccount".</span>
                     )}
                   </div>
                   <button
                     type="button"
                     onClick={handleSaveBankDetailsDirectly}
-                    disabled={isSavingBank || !bankName || accountNumber.length < 10 || !accountName}
+                    disabled={isSavingBank || !bankName || accountNumber.length !== 10 || !accountName}
                     className="px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer border-none shrink-0"
                   >
                     {isSavingBank ? (
@@ -1702,7 +1756,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                     ) : bankSaveSuccess ? (
                       <>
                         <CheckCircle2 className="w-4 h-4" />
-                        <span>Subaccount Linked!</span>
+                        <span>Subaccount Linked & Saved!</span>
                       </>
                     ) : (
                       <>
