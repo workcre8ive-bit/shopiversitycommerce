@@ -15,6 +15,8 @@ export default function Logo({ className, showText = true, onClick, variant = "d
     <div className={cn("flex items-center gap-1.5 sm:gap-2 select-none min-w-0", className)}>
       {/* Precision Vector Re-creation of the Custom Shopiversity Cart in standard square 24x24 */}
       <svg
+        role="img"
+        aria-label="Shopiversity Official Logo"
         viewBox="0 0 24 24"
         className={cn(
           "h-[26px] w-[26px] sm:h-[36px] sm:w-[36px] fill-none shrink-0 transition-all",

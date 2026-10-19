@@ -955,7 +955,7 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                       >
                         <img 
                           src={img} 
-                          alt={`Thumbnail ${index}`} 
+                          alt={`${product.name} photo thumbnail ${index + 1}`} 
                           className="w-full h-full object-cover" 
                           referrerPolicy="no-referrer"
                         />
@@ -2072,13 +2072,21 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
               )}
 
               {/* Reviews Section */}
-              <div className="border-t border-slate-100 dark:border-slate-800 pt-10 space-y-8">
+              <div className="border-t border-slate-100 dark:border-slate-800 pt-10 space-y-6">
                 <div className="flex items-center justify-between">
                   <h3 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
                     <MessageSquare className="w-5 h-5 text-purple-500" />
-                    Reviews
+                    Reviews & Ratings
                   </h3>
                   <span className="text-sm font-bold text-slate-400 dark:text-slate-500">{reviews.length} Total</span>
+                </div>
+
+                {/* Anti-Fake Review Standard Notice */}
+                <div className="p-3.5 bg-emerald-50/70 dark:bg-emerald-950/30 rounded-2xl border border-emerald-200/60 dark:border-emerald-800/40 flex items-start gap-2.5 text-xs text-emerald-900 dark:text-emerald-200">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                  <p className="font-medium leading-relaxed">
+                    <strong>Verified Escrow Purchases Only:</strong> To protect campus trust and prevent fake reviews, only students who completed an escrow-secured transaction for this product can leave a review.
+                  </p>
                 </div>
 
                 {/* Add Review Form */}
@@ -2131,7 +2139,7 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                         <button
                           type="submit"
                           disabled={submitting || !newReview.trim()}
-                          className="w-full py-3.5 bg-slate-900 hover:bg-slate-800 dark:bg-indigo-600 dark:hover:bg-indigo-700 text-white rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer shadow-md"
+                          className="w-full py-3.5 bg-slate-900 hover:bg-slate-800 dark:bg-indigo-600 dark:hover:bg-indigo-700 text-white rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer shadow-md focus-visible:ring-2 focus-visible:ring-[#ff6b00] outline-none"
                         >
                           {submitting ? <Clock className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                           Post Review
@@ -2156,8 +2164,14 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                               <UserIcon className="w-4 h-4 text-slate-400" />
                             </div>
                             <div>
-                              <p className="text-sm font-bold text-slate-900 dark:text-white">{review.buyerName}</p>
-                              <div className="flex text-amber-400">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <p className="text-sm font-bold text-slate-900 dark:text-white">{review.buyerName}</p>
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 text-[10px] font-black uppercase tracking-wider">
+                                  <ShieldCheck className="w-3 h-3" />
+                                  Verified Student Purchase
+                                </span>
+                              </div>
+                              <div className="flex text-amber-400 mt-0.5">
                                 {[1, 2, 3, 4, 5].map((s) => (
                                   <Star key={`rev-star-${review.id || rIdx}-${rIdx}-${s}`} className={cn("w-3 h-3 fill-current", s > review.rating && "text-slate-200 dark:text-slate-700 fill-none")} />
                                 ))}
@@ -2273,7 +2287,7 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                     >
                       <img 
                         src={img} 
-                        alt={`Thumbnail ${index}`} 
+                        alt={`${product.name} photo preview ${index + 1}`} 
                         className="w-full h-full object-cover" 
                         referrerPolicy="no-referrer"
                       />

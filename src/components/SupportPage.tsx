@@ -42,7 +42,7 @@ export default function SupportPage({ user, onBack, mode = "support" }: SupportP
   const [error, setError] = React.useState<string | null>(null);
   const [expandedFaq, setExpandedFaq] = React.useState<number | null>(null);
 
-  const supportEmail = "shopiversitycommerce@gmail.com";
+  const supportEmail = "tommzypolaris@gmail.com";
 
   React.useEffect(() => {
     if (user?.displayName) {

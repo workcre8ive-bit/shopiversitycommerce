@@ -6498,13 +6498,24 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
               Continue
             </button>
           ) : (
-            <motion.button 
-              whileHover={{ scale: isUserProductSuspended(currentUser).isSuspended ? 1 : 1.02, boxShadow: "0px 10px 30px rgba(249, 115, 22, 0.35)" }}
-              whileTap={{ scale: isUserProductSuspended(currentUser).isSuspended ? 1 : 0.98 }}
-              type="submit"
-              disabled={loading || isUserProductSuspended(currentUser).isSuspended}
-              className="flex-1 h-14 bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 text-white rounded-2xl font-black text-xs sm:text-sm uppercase tracking-widest transition-all flex items-center justify-center gap-2.5 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer border-none outline-none"
-            >
+            <div className="flex-1 flex flex-col gap-3">
+              <div className="p-3.5 bg-orange-50/50 dark:bg-orange-950/20 rounded-2xl border border-orange-200/50 dark:border-orange-900/30 text-left space-y-1">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-orange-900 dark:text-orange-200">
+                  <ShieldCheck className="w-4 h-4 text-[#ff6b00] shrink-0" />
+                  <span>Merchant Authenticity & Copyright Warranty</span>
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed font-medium">
+                  By publishing, you certify that all listing descriptions are accurate, product photos belong to you or are legally authorized, and this item complies with campus rules and consumer protection standards.
+                </p>
+              </div>
+
+              <motion.button 
+                whileHover={{ scale: isUserProductSuspended(currentUser).isSuspended ? 1 : 1.02, boxShadow: "0px 10px 30px rgba(249, 115, 22, 0.35)" }}
+                whileTap={{ scale: isUserProductSuspended(currentUser).isSuspended ? 1 : 0.98 }}
+                type="submit"
+                disabled={loading || isUserProductSuspended(currentUser).isSuspended}
+                className="w-full h-14 bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 text-white rounded-2xl font-black text-xs sm:text-sm uppercase tracking-widest transition-all flex items-center justify-center gap-2.5 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer border-none outline-none focus-visible:ring-2 focus-visible:ring-[#ff6b00]"
+              >
               {loading ? (
                 <div className="flex items-center gap-2 text-white">
                   <Loader2 className="w-5 h-5 animate-spin" />
@@ -6518,8 +6529,9 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                 editingProduct ? "Update Listing" : "Publish Product"
               )}
             </motion.button>
-          )}
-        </div>
+          </div>
+        )}
+      </div>
       </form>
     </div>
   );

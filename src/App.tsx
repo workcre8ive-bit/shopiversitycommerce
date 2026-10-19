@@ -38,6 +38,9 @@ import SecretAdminGatewayModal from "./components/SecretAdminGatewayModal";
 import ChatView from "./components/Chat/ChatView";
 import TermsAndConditions from "./components/TermsAndConditions";
 import PrivacyPolicy from "./components/PrivacyPolicy";
+import CookiesPolicy from "./components/CookiesPolicy";
+import RefundPolicy from "./components/RefundPolicy";
+import CookieConsentBanner from "./components/CookieConsentBanner";
 import ReturnPolicyModal from "./components/ReturnPolicyModal";
 import Carousel from "./components/HeroCarousel";
 import Logo from "./components/Logo";
@@ -438,6 +441,7 @@ export default function App() {
   const [chatWithUserId, setChatWithUserId] = React.useState<string | null>(null);
   const [isCartOpen, setIsCartOpen] = React.useState(false);
   const [isReturnPolicyOpen, setIsReturnPolicyOpen] = React.useState(false);
+  const [isCookieSettingsOpen, setIsCookieSettingsOpen] = React.useState(false);
   const [isSecretAdminModalOpen, setIsSecretAdminModalOpen] = React.useState(false);
   const [secretAdminPasskey, setSecretAdminPasskey] = React.useState("");
   const [notificationView, setNotificationView] = React.useState<"unread" | "read">("unread");
@@ -1336,6 +1340,14 @@ export default function App() {
 
       {/* Main Viewport Workspace */}
       <div className="flex-1 flex flex-col h-full overflow-hidden relative">
+        {/* WCAG Accessibility Skip Link */}
+        <a 
+          href="#main-content" 
+          className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[999999] focus:px-4 focus:py-2.5 focus:bg-[#ff6b00] focus:text-white focus:rounded-xl focus:font-bold focus:shadow-2xl focus:outline-none"
+        >
+          Skip to main content
+        </a>
+
         {/* Mobile-optimized Header (minimal/hidden components on desktop) */}
         <motion.header
           initial={{ y: -15, opacity: 0 }}
@@ -1502,7 +1514,7 @@ export default function App() {
 
 
         {/* Content Area */}
-        <main ref={mainContentRef} className="flex-1 overflow-y-auto bg-white dark:bg-zinc-950 scroll-smooth">
+        <main ref={mainContentRef} id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto bg-white dark:bg-zinc-950 scroll-smooth outline-none">
           {auth.currentUser && !auth.currentUser.emailVerified && (
             <div className="bg-amber-500/10 dark:bg-amber-950/40 border-b border-amber-500/30 px-4 py-3 text-xs text-amber-900 dark:text-amber-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 font-medium select-none animate-in fade-in slide-in-from-top-1 duration-300">
               <div className="flex items-start sm:items-center gap-2.5">
@@ -2251,6 +2263,8 @@ export default function App() {
                 <TermsAndConditions 
                   onBack={handleGoBack} 
                   onNavigatePrivacy={() => setActiveTab("privacy")}
+                  onNavigateRefund={() => setActiveTab("refund-policy")}
+                  onNavigateCookies={() => setActiveTab("cookies")}
                 />
               </motion.div>
             ) : activeTab === "privacy" ? (
@@ -2261,7 +2275,37 @@ export default function App() {
                 exit={{ opacity: 0, y: -10 }}
                 className="p-6"
               >
-                <PrivacyPolicy onBack={handleGoBack} />
+                <PrivacyPolicy 
+                  onBack={handleGoBack} 
+                  onNavigateTerms={() => setActiveTab("terms")}
+                  onNavigateCookies={() => setActiveTab("cookies")}
+                />
+              </motion.div>
+            ) : activeTab === "cookies" ? (
+              <motion.div 
+                key="cookies"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="p-6"
+              >
+                <CookiesPolicy 
+                  onBack={handleGoBack} 
+                  onOpenCookieSettings={() => setIsCookieSettingsOpen(true)}
+                />
+              </motion.div>
+            ) : activeTab === "refund-policy" ? (
+              <motion.div 
+                key="refund-policy"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="p-6"
+              >
+                <RefundPolicy 
+                  onBack={handleGoBack} 
+                  onNavigateSupport={() => setActiveTab("support")}
+                />
               </motion.div>
             ) : activeTab === "cart" ? (
               <motion.div 
@@ -2322,7 +2366,13 @@ export default function App() {
           </AnimatePresence>
 
           {/* Clean modern website footer - hidden on product detail view to avoid duplicate logo in product body */}
-          {!viewingProduct && <Footer setActiveTab={setActiveTab} activeTab={activeTab} />}
+          {!viewingProduct && (
+            <Footer 
+              setActiveTab={setActiveTab} 
+              activeTab={activeTab} 
+              onOpenCookieSettings={() => setIsCookieSettingsOpen(true)}
+            />
+          )}
         </main>
       </div>
 
@@ -2343,6 +2393,19 @@ export default function App() {
         isOpen={isReturnPolicyOpen}
         onClose={() => setIsReturnPolicyOpen(false)}
         onViewOrders={() => setActiveTab("orders")}
+      />
+
+      <CookieConsentBanner
+        onNavigateCookies={() => {
+          setActiveTab("cookies");
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        }}
+        onNavigatePrivacy={() => {
+          setActiveTab("privacy");
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        }}
+        isOpenModalExplicitly={isCookieSettingsOpen}
+        onCloseModalExplicitly={() => setIsCookieSettingsOpen(false)}
       />
 
       {/* Floating Support Button */}

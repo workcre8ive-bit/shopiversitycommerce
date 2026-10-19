@@ -844,12 +844,38 @@ export default function CartPage({
               </div>
             </div>
 
+            {/* Escrow & Refund Consent Notice */}
+            <div className="p-3 bg-slate-50 dark:bg-zinc-900/60 rounded-xl border border-slate-200/60 dark:border-zinc-800 text-left space-y-1">
+              <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-700 dark:text-zinc-200">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                <span>Protected by 72-Hour Campus Escrow</span>
+              </div>
+              <p className="text-[10px] text-slate-500 dark:text-zinc-400 leading-normal">
+                By completing this order, you agree to the{" "}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("terms")}
+                  className="text-[#ff6b00] hover:underline font-bold bg-transparent border-none p-0 cursor-pointer"
+                >
+                  Conditions of Use
+                </button>{" "}
+                and acknowledge the{" "}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("refund-policy")}
+                  className="text-[#ff6b00] hover:underline font-bold bg-transparent border-none p-0 cursor-pointer"
+                >
+                  72-Hour Refund Policy
+                </button>.
+              </p>
+            </div>
+
             {/* Checkout Action Button */}
             <button
               onClick={handleCheckout}
               disabled={loading || selectedItems.length === 0}
               className={cn(
-                "w-full py-4 bg-[#ff6b00] hover:bg-[#e05e00] active:scale-[0.98] text-white rounded-2xl font-bold text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2 shadow-xl shadow-orange-500/20 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer",
+                "w-full py-4 bg-[#ff6b00] hover:bg-[#e05e00] active:scale-[0.98] text-white rounded-2xl font-bold text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2 shadow-xl shadow-orange-500/20 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer focus-visible:ring-2 focus-visible:ring-[#ff6b00] outline-none",
                 loading && "animate-pulse"
               )}
             >
@@ -861,7 +887,11 @@ export default function CartPage({
               ) : (
                 <>
                   <ShieldCheck className="w-4 h-4" />
-                  <span>Place Order & Checkout</span>
+                  <span>
+                    {paymentMethod === "online" 
+                      ? `Pay ₦${total.toLocaleString()} (Escrow Protected)` 
+                      : `Place Order (₦${total.toLocaleString()} POD)`}
+                  </span>
                 </>
               )}
             </button>

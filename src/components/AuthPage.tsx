@@ -195,6 +195,7 @@ export default function AuthPage({
   const [showTerms, setShowTerms] = React.useState(false);
   const [showTermsPage, setShowTermsPage] = React.useState(false);
   const [showPrivacyPage, setShowPrivacyPage] = React.useState(false);
+  const [agreedToTerms, setAgreedToTerms] = React.useState(false);
   const [isVerifyingId, setIsVerifyingId] = React.useState(false);
   const [idVerificationError, setIdVerificationError] = React.useState("");
 
@@ -531,6 +532,11 @@ export default function AuthPage({
           const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#^()_+\-=\[\]{};':"\\|,.<>\/?]).{6,}$/;
           if (password && !passwordRegex.test(password)) {
             errors.password = "Password must be at least 6 characters long and contain uppercase, lowercase, number, and special character.";
+          }
+
+          // Validate terms agreement
+          if (!agreedToTerms) {
+            errors.terms = "Please read and accept the Conditions of Use & Terms and Privacy Policy to continue.";
           }
 
           if (Object.keys(errors).length > 0) {
@@ -2259,16 +2265,61 @@ export default function AuthPage({
                     </div>
                   )}
 
+                  {!isLogin && (
+                    <div className="pt-2 text-left">
+                      <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={agreedToTerms}
+                          onChange={(e) => {
+                            setAgreedToTerms(e.target.checked);
+                            if (fieldErrors.terms) {
+                              setFieldErrors(prev => {
+                                const next = { ...prev };
+                                delete next.terms;
+                                return next;
+                              });
+                            }
+                          }}
+                          className="mt-0.5 w-4 h-4 rounded border-slate-300 dark:border-zinc-700 text-[#ff6b00] focus:ring-[#ff6b00] cursor-pointer shrink-0"
+                          required
+                        />
+                        <span className="text-[11px] text-slate-600 dark:text-zinc-300 leading-normal font-medium">
+                          I agree to the{" "}
+                          <button 
+                            type="button"
+                            onClick={() => setShowTermsPage(true)}
+                            className="text-[#ff6b00] dark:text-[#ff7f1a] hover:underline font-bold border-none bg-transparent cursor-pointer p-0"
+                          >
+                            Conditions of Use & Terms
+                          </button>
+                          , 72-Hour Escrow Protection Rules, and acknowledge the{" "}
+                          <button 
+                            type="button"
+                            onClick={() => setShowPrivacyPage(true)}
+                            className="text-[#ff6b00] dark:text-[#ff7f1a] hover:underline font-bold border-none bg-transparent cursor-pointer p-0"
+                          >
+                            Privacy Policy
+                          </button>
+                          . <span className="text-red-500 font-bold">*</span>
+                        </span>
+                      </label>
+                      {fieldErrors.terms && (
+                        <p className="text-[10px] font-bold text-red-500 mt-1 pl-6.5">{fieldErrors.terms}</p>
+                      )}
+                    </div>
+                  )}
+
                   <div className="pt-2">
                     <button 
                       type="submit"
                       disabled={loading || isVerifyingId}
-                      className="w-full min-h-[44px] sm:min-h-[42px] py-2.5 px-4 bg-gradient-to-b from-[#ffd814] to-[#f7ca00] hover:brightness-95 active:scale-[0.98] text-zinc-950 font-bold rounded-xl border border-[#a88734] transition-all text-xs sm:text-sm shadow-sm flex items-center justify-center gap-2 cursor-pointer touch-manipulation select-none whitespace-nowrap disabled:opacity-50"
+                      className="w-full min-h-[44px] sm:min-h-[42px] py-2.5 px-4 bg-gradient-to-b from-[#ffd814] to-[#f7ca00] hover:brightness-95 active:scale-[0.98] text-zinc-950 font-bold rounded-xl border border-[#a88734] transition-all text-xs sm:text-sm shadow-sm flex items-center justify-center gap-2 cursor-pointer touch-manipulation select-none whitespace-nowrap disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-[#ff6b00] outline-none"
                     >
                       {loading ? (
                         <div className="w-4 h-4 border-2 border-zinc-950 border-t-transparent rounded-full animate-spin" />
                       ) : (
-                        <span>{isLogin ? "Sign-In" : "Create Account"}</span>
+                        <span>{isLogin ? "Sign In Securely" : "Agree & Create Account"}</span>
                       )}
                     </button>
                   </div>
