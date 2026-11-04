@@ -1,6 +1,6 @@
 import React from "react";
 import { Product } from "../types";
-import { ShoppingCart, Tag, User as UserIcon, Package, AlertTriangle, Truck, MapPin, Star, Layout, Zap, Globe, Store, MessageSquare, Trash2, ChevronLeft, ChevronRight } from "lucide-react";
+import { ShoppingCart, Tag, User as UserIcon, Package, AlertTriangle, Truck, MapPin, Star, Layout, Zap, Globe, Store, MessageSquare, Trash2, ChevronLeft, ChevronRight, Heart } from "lucide-react";
 import { motion } from "motion/react";
 import { cn } from "../lib/utils";
 import ReportModal from "./ReportModal";
@@ -8,6 +8,7 @@ import ProductDetail from "./ProductDetail";
 import { db } from "../firebase";
 import { collection, query, where, onSnapshot, deleteDoc, doc, getDocs } from "firebase/firestore";
 import { Review, UserProfile } from "../types";
+import { toggleWishlist, isProductInWishlist, WISHLIST_UPDATED_EVENT } from "../utils/wishlist";
 
 interface ProductCardProps {
   product: Product;
@@ -41,6 +42,40 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
     : (product.priceBefore && product.priceBefore > product.price
         ? Math.round(((product.priceBefore - product.price) / product.priceBefore) * 100)
         : 0);
+
+  const [isInWishlist, setIsInWishlist] = React.useState<boolean>(() => {
+    return isProductInWishlist(product.id, currentUser?.wishlistProductIds);
+  });
+  const [isWishlistLoading, setIsWishlistLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    setIsInWishlist(isProductInWishlist(product.id, currentUser?.wishlistProductIds));
+  }, [currentUser?.wishlistProductIds, product.id]);
+
+  React.useEffect(() => {
+    const handleWishlistUpdated = (e: any) => {
+      if (e.detail?.productId === product.id) {
+        setIsInWishlist(!!e.detail.added);
+      }
+    };
+    window.addEventListener(WISHLIST_UPDATED_EVENT, handleWishlistUpdated);
+    return () => window.removeEventListener(WISHLIST_UPDATED_EVENT, handleWishlistUpdated);
+  }, [product.id]);
+
+  const handleWishlistToggle = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!currentUser) {
+      window.dispatchEvent(new CustomEvent('open-auth-modal', { detail: { mode: 'login' } }));
+      return;
+    }
+    setIsWishlistLoading(true);
+    setIsInWishlist(prev => !prev);
+    const result = await toggleWishlist(product, currentUser);
+    if (result.error) {
+      setIsInWishlist(prev => !prev);
+    }
+    setIsWishlistLoading(false);
+  };
 
   return (
     <>
@@ -103,6 +138,28 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                   Low Stock
                 </div>
               ) : null}
+
+              {/* Wishlist Button (Heart) */}
+              <button
+                type="button"
+                onClick={handleWishlistToggle}
+                disabled={isWishlistLoading}
+                aria-label={isInWishlist ? "Remove from wishlist" : "Save to wishlist"}
+                title={isInWishlist ? "Saved to Wishlist" : "Save to Wishlist"}
+                className={cn(
+                  "absolute bottom-2.5 right-2.5 z-20 w-8 h-8 rounded-full flex items-center justify-center transition-all shadow-md active:scale-90 border cursor-pointer",
+                  isInWishlist
+                    ? "bg-rose-500 text-white border-rose-400 shadow-rose-500/30 scale-105"
+                    : "bg-white/90 dark:bg-zinc-900/90 text-slate-600 dark:text-zinc-300 hover:text-rose-500 dark:hover:text-rose-400 border-white/60 dark:border-zinc-700/80 hover:scale-105"
+                )}
+              >
+                <Heart 
+                  className={cn(
+                    "w-4 h-4 transition-transform",
+                    isInWishlist ? "fill-current scale-110 text-white" : ""
+                  )} 
+                />
+              </button>
             </div>
 
             {/* Product info details */}

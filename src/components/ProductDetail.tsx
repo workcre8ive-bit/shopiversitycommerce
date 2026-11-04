@@ -1,10 +1,11 @@
 import React from "react";
 import { Product, Review, UserProfile } from "../types";
-import { X, ArrowLeft, Star, ShoppingCart, Truck, MapPin, Send, MessageSquare, Clock, User as UserIcon, ShieldCheck, ShieldAlert, Shield, CheckCircle, CheckCircle2, ShoppingBag, Sparkles, Layout, Minus, Plus, Hash, Trash2, RotateCcw, CalendarCheck, Store, ExternalLink, Loader2, Edit2, Tag, ChevronLeft, ChevronRight, Maximize2, Share2 } from "lucide-react";
+import { X, ArrowLeft, Star, ShoppingCart, Truck, MapPin, Send, MessageSquare, Clock, User as UserIcon, ShieldCheck, ShieldAlert, Shield, CheckCircle, CheckCircle2, ShoppingBag, Sparkles, Layout, Minus, Plus, Hash, Trash2, RotateCcw, CalendarCheck, Store, ExternalLink, Loader2, Edit2, Tag, ChevronLeft, ChevronRight, Maximize2, Share2, Heart } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { auth, db } from "../firebase";
 import { collection, query, where, orderBy, onSnapshot, addDoc, doc, getDoc, setDoc, getDocs, updateDoc, deleteDoc } from "firebase/firestore";
 import { usePaystackPayment } from "../hooks/usePaystackPayment";
+import { toggleWishlist, isProductInWishlist, WISHLIST_UPDATED_EVENT } from "../utils/wishlist";
 
 import { cn, generateSixDigitPin } from "../lib/utils";
 import ReportModal from "./ReportModal";
@@ -123,6 +124,40 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
 
   // Web Share API implementation and clipboard fallback
   const [shareFeedback, setShareFeedback] = React.useState<string | null>(null);
+
+  const [isInWishlist, setIsInWishlist] = React.useState<boolean>(() => {
+    return isProductInWishlist(product.id, currentUser?.wishlistProductIds);
+  });
+  const [isWishlistLoading, setIsWishlistLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    setIsInWishlist(isProductInWishlist(product.id, currentUser?.wishlistProductIds));
+  }, [currentUser?.wishlistProductIds, product.id]);
+
+  React.useEffect(() => {
+    const handleWishlistUpdated = (e: any) => {
+      if (e.detail?.productId === product.id) {
+        setIsInWishlist(!!e.detail.added);
+      }
+    };
+    window.addEventListener(WISHLIST_UPDATED_EVENT, handleWishlistUpdated);
+    return () => window.removeEventListener(WISHLIST_UPDATED_EVENT, handleWishlistUpdated);
+  }, [product.id]);
+
+  const handleWishlistToggle = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!currentUser) {
+      window.dispatchEvent(new CustomEvent('open-auth-modal', { detail: { mode: 'login' } }));
+      return;
+    }
+    setIsWishlistLoading(true);
+    setIsInWishlist(prev => !prev);
+    const result = await toggleWishlist(product, currentUser);
+    if (result.error) {
+      setIsInWishlist(prev => !prev);
+    }
+    setIsWishlistLoading(false);
+  };
 
   const fallbackCopyToClipboard = (url: string) => {
     navigator.clipboard.writeText(url)
@@ -1016,6 +1051,21 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                            </span>
                          )}
                        </button>
+                        <button 
+                          type="button"
+                          onClick={handleWishlistToggle}
+                          disabled={isWishlistLoading}
+                          className={cn(
+                            "flex items-center gap-1.5 px-3 py-1 rounded-lg transition-all font-black text-[10px] uppercase tracking-widest cursor-pointer",
+                            isInWishlist 
+                              ? "bg-rose-500 text-white shadow-sm"
+                              : "bg-rose-50 dark:bg-rose-950/20 text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-900/30"
+                          )}
+                          title={isInWishlist ? "Saved in Wishlist" : "Save to Wishlist"}
+                        >
+                          <Heart className={cn("w-3.5 h-3.5", isInWishlist && "fill-current text-white")} />
+                          {isInWishlist ? "Saved" : "Wishlist"}
+                        </button>
                     </div>
                     {product.location && (
                       <div className="flex items-center gap-2 px-2 py-0.5 bg-slate-100 dark:bg-slate-800 rounded-lg text-[9px] font-black text-slate-500 uppercase tracking-widest">

@@ -11,10 +11,14 @@ import {
   Sparkles,
   MapPin,
   Building2,
-  Calendar
+  Calendar,
+  AlertTriangle,
+  Lock,
+  ArrowRight
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { DeliveryJob, LogisticsCompany } from "./types";
+import { isLogisticsCompanyProfileComplete, getLogisticsCompanyProfileChecklist } from "../../utils/logisticsDeduplication";
 
 interface AvailableJobsViewProps {
   companyProfile: LogisticsCompany;
@@ -38,6 +42,7 @@ interface AvailableJobsViewProps {
   handleDeclineJob: (jobId: string) => Promise<void>;
   loading: boolean;
   formatJobTime: (timestamp?: string) => string;
+  onNavigateToProfile?: () => void;
 }
 
 export const AvailableJobsView: React.FC<AvailableJobsViewProps> = ({
@@ -62,7 +67,11 @@ export const AvailableJobsView: React.FC<AvailableJobsViewProps> = ({
   handleDeclineJob,
   loading,
   formatJobTime,
+  onNavigateToProfile,
 }) => {
+  const isProfileComplete = isLogisticsCompanyProfileComplete(companyProfile);
+  const profileChecklist = getLogisticsCompanyProfileChecklist(companyProfile);
+  const missingItems = profileChecklist.filter(item => !item.complete);
   return (
     <div className="space-y-6">
       {/* Top Header & Campus Scope Toggle */}
@@ -113,6 +122,62 @@ export const AvailableJobsView: React.FC<AvailableJobsViewProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Incomplete Profile Warning & Checklist Banner */}
+      {!isProfileComplete && (
+        <div className="p-5 sm:p-6 bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-950/40 dark:to-orange-950/30 border-2 border-amber-300 dark:border-amber-700/60 rounded-3xl shadow-sm space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-amber-500/10 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-black text-slate-800 dark:text-zinc-100 flex items-center gap-2">
+                  <span>Logistics Company Profile Incomplete</span>
+                  <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-200 dark:bg-amber-900/60 text-amber-900 dark:text-amber-200">
+                    Gigs Locked
+                  </span>
+                </h4>
+                <p className="text-xs text-slate-600 dark:text-zinc-400 mt-0.5">
+                  You must complete all required fleet, campus, and settlement details before you can accept gigs or receive merchant dispatch requests.
+                </p>
+              </div>
+            </div>
+            {onNavigateToProfile && (
+              <button
+                type="button"
+                onClick={onNavigateToProfile}
+                className="px-4 py-2.5 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-1.5 shrink-0 self-start sm:self-center shadow-xs cursor-pointer border-none"
+              >
+                <span>Complete Profile Now</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          {/* Checklist grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 pt-2 border-t border-amber-200/60 dark:border-amber-800/40">
+            {profileChecklist.map((item) => (
+              <div
+                key={`check-${item.id}`}
+                className={cn(
+                  "p-2.5 rounded-xl border text-xs flex items-center gap-2 font-medium transition-all",
+                  item.complete
+                    ? "bg-emerald-50/60 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-900 text-emerald-800 dark:text-emerald-300"
+                    : "bg-white/80 dark:bg-zinc-900/80 border-amber-200 dark:border-amber-900/40 text-amber-900 dark:text-amber-300 font-semibold"
+                )}
+              >
+                {item.complete ? (
+                  <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                ) : (
+                  <Lock className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                )}
+                <span className="truncate">{item.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Arrangement & Controls Toolbar */}
       <div className="bg-white dark:bg-zinc-900 border border-slate-200/70 dark:border-zinc-800/70 p-3.5 sm:p-4 rounded-3xl shadow-xs space-y-3">
@@ -427,13 +492,20 @@ export const AvailableJobsView: React.FC<AvailableJobsViewProps> = ({
                       <button
                         type="button"
                         onClick={() => {
+                          if (!isProfileComplete) {
+                            if (onNavigateToProfile) onNavigateToProfile();
+                            return;
+                          }
                           setJobAcceptingId(job.id);
                           setJobEtaInput("1-2 Hours (Standard)");
                         }}
-                        className="flex-1 h-11 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs border-none"
+                        className={cn(
+                          "flex-1 h-11 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs border-none",
+                          isProfileComplete ? "bg-emerald-600 hover:bg-emerald-700" : "bg-amber-600 hover:bg-amber-700"
+                        )}
                       >
-                        <Check className="w-4 h-4" />
-                        Accept Offer
+                        {isProfileComplete ? <Check className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
+                        {isProfileComplete ? "Accept Offer" : "Complete Profile to Accept"}
                       </button>
                       <button
                         type="button"
@@ -449,13 +521,22 @@ export const AvailableJobsView: React.FC<AvailableJobsViewProps> = ({
                     <button
                       type="button"
                       onClick={() => {
+                        if (!isProfileComplete) {
+                          if (onNavigateToProfile) onNavigateToProfile();
+                          return;
+                        }
                         setJobAcceptingId(job.id);
                         setJobEtaInput("1-2 Hours (Standard)");
                       }}
-                      className="w-full h-11 bg-slate-900 dark:bg-zinc-800 hover:bg-orange-600 hover:dark:bg-orange-600 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs border-none"
+                      className={cn(
+                        "w-full h-11 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs border-none",
+                        isProfileComplete 
+                          ? "bg-slate-900 dark:bg-zinc-800 hover:bg-orange-600 hover:dark:bg-orange-600" 
+                          : "bg-amber-600 hover:bg-amber-700"
+                      )}
                     >
-                      <Truck className="w-4 h-4" />
-                      Accept Delivery Contract
+                      {isProfileComplete ? <Truck className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
+                      {isProfileComplete ? "Accept Delivery Contract" : "Complete Profile to Accept Delivery"}
                     </button>
                   )}
                 </div>

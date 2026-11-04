@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { 
   User, 
   MapPin, 
@@ -21,15 +21,18 @@ import {
   Settings, 
   Activity, 
   ShieldAlert as AlertIcon,
-  Sparkles
+  Sparkles,
+  Mail,
+  Store
 } from "lucide-react";
 import { motion } from "motion/react";
 import { cn } from "../lib/utils";
+import BrevoConnectionModal from "./BrevoConnectionModal";
 
 interface UserProfileHubProps {
   user: any;
   activeRole: "buyer" | "seller";
-  onToggleRole: () => void;
+  onToggleRole?: () => void;
   onNavigateToEdit: (section?: string) => void;
   onNavigateTab: (tabId: string) => void;
   onLogout: () => void;
@@ -47,6 +50,7 @@ export default function UserProfileHub({
   isDarkMode,
   toggleDarkMode
 }: UserProfileHubProps) {
+  const [showBrevoModal, setShowBrevoModal] = useState(false);
   const isProfileComplete = !!user?.displayName && !!user?.username && !!user?.schoolName && (user?.role === "seller" || !!user?.deliveryAddress);
 
   const menuGroups = [
@@ -194,39 +198,25 @@ export default function UserProfileHub({
         </button>
       </div>
 
-      {/* Modern iOS-Style Segmented Role Switcher */}
-      {user && (user.role === "both" || user.role === "seller" || user.role === "admin") && (
-        <div className="p-1.5 bg-slate-100 dark:bg-zinc-900 rounded-2xl flex items-center relative border border-slate-200/50 dark:border-zinc-800/80">
-          <button
-            onClick={() => {
-              if (activeRole !== "buyer") onToggleRole();
-            }}
-            className={cn(
-              "flex-1 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer z-10",
-              activeRole === "buyer" 
-                ? "bg-white dark:bg-zinc-800 text-[#ff6b00] shadow-md font-black" 
-                : "text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-zinc-300"
-            )}
-          >
-            <User className="w-3.5 h-3.5" />
-            Buyer Hub
-          </button>
-          <button
-            onClick={() => {
-              if (activeRole !== "seller") onToggleRole();
-            }}
-            className={cn(
-              "flex-1 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer z-10",
-              activeRole === "seller" 
-                ? "bg-white dark:bg-zinc-800 text-[#ff6b00] shadow-md font-black" 
-                : "text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-zinc-300"
-            )}
-          >
-            <Sparkles className="w-3.5 h-3.5 text-orange-450" />
-            Seller Hub
-          </button>
+      {/* Registered Account Status Banner */}
+      <div className="p-3 bg-slate-50 dark:bg-zinc-900/60 rounded-2xl flex items-center justify-between border border-slate-200/60 dark:border-zinc-800/80">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-orange-500/10 dark:bg-orange-500/20 flex items-center justify-center text-[#ff6b00]">
+            {activeRole === "seller" ? <Store className="w-4 h-4" /> : <ShoppingBag className="w-4 h-4" />}
+          </div>
+          <div>
+            <p className="text-xs font-black text-slate-800 dark:text-zinc-100">
+              {activeRole === "seller" ? "Merchant / Seller Account" : "Customer / Buyer Account"}
+            </p>
+            <p className="text-[10px] text-slate-500 dark:text-zinc-400 font-medium">
+              Fixed Account Role
+            </p>
+          </div>
         </div>
-      )}
+        <span className="text-[10px] font-bold text-slate-500 dark:text-zinc-400 bg-white dark:bg-zinc-800 px-2 py-1 rounded-lg border border-slate-200/80 dark:border-zinc-700/60 uppercase tracking-wider select-none">
+          Permanent Role
+        </span>
+      </div>
 
       {/* Quick Stats Dashboard Banner */}
       <div className="grid grid-cols-3 gap-3">
@@ -334,6 +324,27 @@ export default function UserProfileHub({
                 )} />
               </div>
             </button>
+
+            {/* Brevo Email & SMS Gateway Settings */}
+            <button
+              onClick={() => setShowBrevoModal(true)}
+              className="w-full px-4 py-3.5 hover:bg-orange-50/20 dark:hover:bg-zinc-800/45 transition-colors flex items-center justify-between text-left group cursor-pointer"
+            >
+              <div className="flex items-center gap-3.5">
+                <div className="w-9 h-9 rounded-2xl bg-orange-500/10 text-orange-500 flex items-center justify-center shrink-0">
+                  <Mail className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="font-bold text-slate-800 dark:text-white text-sm block tracking-tight">
+                    Brevo Email &amp; SMS Gateway
+                  </span>
+                  <span className="text-xs text-slate-500 dark:text-zinc-400 font-medium block">
+                    Connect Brevo account for OTP, email &amp; SMS auth
+                  </span>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-350 dark:text-zinc-650 group-hover:translate-x-0.5 transition-transform shrink-0 ml-2" />
+            </button>
           </div>
         </div>
 
@@ -348,6 +359,12 @@ export default function UserProfileHub({
           </button>
         </div>
       </div>
+
+      {/* Brevo Connection Modal */}
+      <BrevoConnectionModal
+        isOpen={showBrevoModal}
+        onClose={() => setShowBrevoModal(false)}
+      />
     </div>
   );
 }

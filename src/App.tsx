@@ -333,7 +333,24 @@ export default function App() {
         handleCodeInApp: false
       };
       await sendEmailVerification(auth.currentUser, actionCodeSettings);
-      setVerificationBannerNotice(`Verification email sent to ${auth.currentUser.email}. Please check your inbox and spam folder.`);
+      
+      // Also dispatch via Brevo verification API
+      try {
+        const vCode = Math.floor(100000 + Math.random() * 900000).toString();
+        await fetch("/api/send-verification", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: auth.currentUser.email,
+            code: vCode,
+            userName: auth.currentUser.displayName || currentUser?.displayName || "Student"
+          })
+        });
+      } catch (bErr) {
+        console.warn("Brevo banner verification resend notice:", bErr);
+      }
+
+      setVerificationBannerNotice(`Verification email dispatched to ${auth.currentUser.email} via Brevo & Firebase. Check your inbox!`);
       triggerDynamicIsland("Verification email sent! ✉️");
     } catch (err: any) {
       console.error("Error resending verification email:", err);
@@ -452,6 +469,11 @@ export default function App() {
 
   React.useEffect(() => {
     if (currentUser && (activeTab === "auth" || activeTab === "signup")) {
+      // If user is unverified, don't automatically redirect them away from verification!
+      if (!currentUser.isVerified && !auth.currentUser?.emailVerified && currentUser.role !== "admin") {
+        setIsVerifyingNewSignup(true);
+        return;
+      }
       const nextTab = (currentUser.role === "seller" || currentUser.activeRole === "seller") ? "dashboard" : "market";
       setActiveTab(nextTab);
     }
@@ -660,24 +682,38 @@ export default function App() {
     };
     window.addEventListener('open-chat', handleOpenChat);
 
+    const handleAddToCartEvent = (e: any) => {
+      const { product, menuItem, ticketTier, formResponses } = e.detail || {};
+      if (product) {
+        handleAddToCart(product, menuItem, ticketTier, formResponses);
+      }
+    };
+    window.addEventListener('add-to-cart', handleAddToCartEvent);
+
     const handleSwitchRole = (e: any) => {
-      setActiveRole(e.detail);
-      setActiveTab("dashboard");
+      // Role switching is strictly disabled for registered accounts
+      if (!currentUser) {
+        setActiveRole(e.detail);
+      }
     };
     window.addEventListener('switch-active-role', handleSwitchRole);
 
     const handleEditSellerProduct = (e: any) => {
-      setPendingEditProduct(e.detail);
-      setActiveRole("seller");
-      setActiveTab("add-product");
+      if (currentUser?.role === "seller" || activeRole === "seller") {
+        setPendingEditProduct(e.detail);
+        setActiveRole("seller");
+        setActiveTab("add-product");
+      }
     };
     window.addEventListener('edit-seller-product', handleEditSellerProduct);
 
     const handleSwitchSellerTab = (e: any) => {
-      if (e.detail === "settings") {
-        setActiveRole("seller");
-        setActiveTab("settings");
-        setSettingsSubView("edit");
+      if (currentUser?.role === "seller" || activeRole === "seller") {
+        if (e.detail === "settings") {
+          setActiveRole("seller");
+          setActiveTab("settings");
+          setSettingsSubView("edit");
+        }
       }
     };
     window.addEventListener('switch-seller-tab', handleSwitchSellerTab);
@@ -695,7 +731,7 @@ export default function App() {
         if (!currentUser && !needsProfile && isInitialSplashActive) {
           setAuthLoading(true);
         }
-        unsubscribeProfile = onSnapshot(doc(db, "users", user.uid), (docSnap) => {
+        unsubscribeProfile = onSnapshot(doc(db, "users", user.uid), async (docSnap) => {
           if (docSnap.exists()) {
             let profile = docSnap.data() as UserProfile;
             
@@ -755,39 +791,84 @@ export default function App() {
             
             if (profile.state === "Logistics Partner" || profile.role === "logistics") {
               setActiveTab("logistics");
-            } else if (profile.role === "admin") {
-              setActiveRole(profile.activeRole || "buyer");
-            } else if (profile.role === "both") {
-              setActiveRole(profile.activeRole || "buyer");
             } else if (profile.role === "seller") {
-              setActiveRole(profile.activeRole || "seller");
+              setActiveRole("seller");
             } else {
-              setActiveRole(profile.activeRole || "buyer");
+              setActiveRole("buyer");
             }
 
             if (!initialTabSet.current) {
-              if (profile.state === "Logistics Partner" || profile.role === "logistics") {
+              if (isVerifyingNewSignup) {
+                // Keep signup verification screen active
+              } else if (profile.state === "Logistics Partner" || profile.role === "logistics" || activeTab === "logistics") {
                 setActiveTab("logistics");
+                initialTabSet.current = true;
               } else {
-                const startRole = profile.activeRole || (profile.role === "seller" ? "seller" : "buyer");
+                const startRole = profile.role === "seller" ? "seller" : "buyer";
                 if (startRole === "seller") {
                   setActiveTab("dashboard");
                 } else {
                   setActiveTab("market");
                 }
+                initialTabSet.current = true;
               }
               if (profile.theme) {
                 setIsDarkMode(profile.theme === "dark");
               }
-              initialTabSet.current = true;
             }
             setAuthLoading(false);
             setNeedsProfile(false);
           } else {
             // User document does not exist in Firestore!
-            // If the user is authenticated in Firebase Auth, automatically restore their profile
-            // so they are not abruptly kicked out or caught in an account-exists / profile-missing conflict.
+            // If the user is authenticated in Firebase Auth, check if they are a logistics partner first
             if (user && user.uid) {
+              let isLogistics = activeTab === "logistics";
+              try {
+                const logCompSnap = await getDoc(doc(db, "logistics_companies", user.uid));
+                if (logCompSnap.exists()) {
+                  isLogistics = true;
+                  const logData = logCompSnap.data();
+                  const autoLogisticsProfile: UserProfile = {
+                    uid: user.uid,
+                    displayName: logData.companyName || user.displayName || "Logistics Partner",
+                    username: ((logData.companyName || user.displayName || "logistics").replace(/[^a-zA-Z0-9]/g, "").toLowerCase() || "logistics") + "_logistics",
+                    email: user.email?.toLowerCase() || logData.email || "",
+                    phoneNumber: logData.phoneNumber || user.phoneNumber || "",
+                    gender: "other",
+                    role: "logistics" as any,
+                    activeRole: "logistics" as any,
+                    referralCode: "LOG" + Math.random().toString(36).substring(2, 7).toUpperCase(),
+                    referredBy: "",
+                    referralEarnings: 0,
+                    referralCount: 0,
+                    schoolType: "",
+                    schoolName: "",
+                    state: "Logistics Partner",
+                    city: "",
+                    deliveryAddress: logData.officeAddress || "",
+                    isVerified: true,
+                    isSuspended: false,
+                    reportCount: 0,
+                    createdAt: new Date().toISOString(),
+                    verificationIdUrl: "",
+                    profileCompleted: true
+                  };
+                  await setDoc(doc(db, "users", user.uid), autoLogisticsProfile);
+                  setCurrentUser(autoLogisticsProfile);
+                  setActiveTab("logistics");
+                  setAuthLoading(false);
+                  return;
+                }
+              } catch (logErr) {
+                console.warn("Logistics check in autoProfile notice:", logErr);
+              }
+
+              // If currently signing up on the logistics tab, wait for LogisticsHub to write the profile
+              if (isLogistics) {
+                setAuthLoading(false);
+                return;
+              }
+
               console.log(`[AUTH SYNC] Profile missing in Firestore for authenticated user ${user.uid}. Auto-restoring profile...`);
               const autoProfile: UserProfile = {
                 uid: user.uid,
@@ -892,6 +973,7 @@ export default function App() {
       window.removeEventListener('view-product-detail', handleViewProductDetail);
       window.removeEventListener('view-seller-store', handleViewSellerStore);
       window.removeEventListener('open-chat', handleOpenChat);
+      window.removeEventListener('add-to-cart', handleAddToCartEvent);
       window.removeEventListener('switch-active-role', handleSwitchRole);
       window.removeEventListener('edit-seller-product', handleEditSellerProduct);
       window.removeEventListener('switch-tab', handleSwitchTabEvent);
@@ -971,24 +1053,8 @@ export default function App() {
   };
 
   const toggleRole = async () => {
-    if (!currentUser) return;
-    const newRole = activeRole === "buyer" ? "seller" : "buyer";
-    
-    // Update local state first for immediate UI response
-    setActiveRole(newRole);
-    setActiveTab(newRole === "seller" ? "dashboard" : "market");
-    triggerDynamicIsland(newRole === "seller" ? "Merchant Mode Active 💼" : "Shopping Mode Active 🛍️");
-    
-    // Persist to Firestore if user has 'both', 'admin', or 'seller' role
-    if (currentUser.role === "both" || currentUser.role === "admin" || currentUser.role === "seller") {
-      try {
-        await updateDoc(doc(db, "users", currentUser.uid), {
-          activeRole: newRole
-        });
-      } catch (error) {
-        console.error("Failed to update active role:", error);
-      }
-    }
+    // Role switching is strictly disabled. Buyer and Seller accounts are separate.
+    return;
   };
 
   React.useEffect(() => {
@@ -1528,7 +1594,18 @@ export default function App() {
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+              <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto flex-wrap">
+                <button
+                  onClick={() => {
+                    setIsVerifyingNewSignup(true);
+                    setAuthMode("signup");
+                    setActiveTab("signup");
+                  }}
+                  className="px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs transition-all cursor-pointer flex items-center gap-1.5 shadow-sm active:scale-95"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  Enter 6-Digit Verification Code
+                </button>
                 <button
                   onClick={handleResendFirebaseVerification}
                   disabled={isResendingFirebaseEmail}
@@ -1550,7 +1627,7 @@ export default function App() {
           )}
 
           <AnimatePresence mode="wait">
-            {((!currentUser || !auth.currentUser) && isTabRestricted) ? (
+            {(((!currentUser || !auth.currentUser) && isTabRestricted) || isVerifyingNewSignup || (currentUser && !currentUser.isVerified && !auth.currentUser?.emailVerified && currentUser.role !== "admin")) ? (
               <motion.div
                 key="auth"
                 initial={{ opacity: 0, y: 10 }}
@@ -1667,10 +1744,11 @@ export default function App() {
                           }}
                           onStartSelling={() => {
                             if (currentUser) {
-                              if (currentUser.state === "Logistics Partner") {
-                                alert("Your account is registered as a Logistics Partner. You can manage your logistics hub directly.");
+                              if (currentUser.state === "Logistics Partner" || currentUser.role === "logistics") {
+                                alert("Your account is registered as a Logistics Partner. Fleet operations are managed in your logistics hub.");
+                              } else if (currentUser.role === "buyer" || activeRole === "buyer") {
+                                alert("This account is registered as a Customer. To sell on SHOPIVERSITY, please sign out and register a separate Vendor account using another email address.");
                               } else {
-                                setActiveRole("seller");
                                 setActiveTab("dashboard");
                                 scrollToTop();
                               }
@@ -2121,14 +2199,19 @@ export default function App() {
                   })()}
                 </div>
               </motion.div>
-            ) : activeTab === "dashboard" && activeRole === "buyer" && currentUser?.state !== "Logistics Partner" && currentUser?.role !== "logistics" ? (
+            ) : (activeTab === "dashboard" || activeTab === "wishlist") && activeRole === "buyer" && currentUser?.state !== "Logistics Partner" && currentUser?.role !== "logistics" ? (
               <motion.div
                 key="buyer-dashboard"
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
               >
-                <BuyerDashboard user={currentUser} setActiveTab={setActiveTab} onBack={handleGoBack} />
+                <BuyerDashboard 
+                  user={currentUser} 
+                  setActiveTab={setActiveTab} 
+                  onBack={handleGoBack} 
+                  initialSection={activeTab === "wishlist" ? "wishlist" : undefined}
+                />
               </motion.div>
             ) : (activeTab === "dashboard" || activeTab === "overview" || activeTab === "analytics" || activeTab === "add-product" || activeTab === "my-products" || (activeTab === "orders" && activeRole === "seller") || activeTab === "storefront" || activeTab === "referrals" || activeTab === "payouts") && activeRole === "seller" ? (
               <motion.div
@@ -2679,25 +2762,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Role selector */}
-      <div className="space-y-3">
-        <h3 className="text-[10px] font-black uppercase tracking-widest text-[#ff6b00]">Quick Role Switch</h3>
-        <button
-          onClick={toggleRole}
-          disabled={!currentUser}
-          className="w-full h-11 bg-white/5 hover:bg-white/10 active:scale-[0.98] border border-white/10 hover:border-[#ff6b00]/30 rounded-xl flex items-center justify-between px-4 transition-all disabled:opacity-40 disabled:pointer-events-none cursor-pointer group"
-        >
-          <div className="flex items-center gap-2">
-            <ArrowLeftRight className="w-3.5 h-3.5 text-orange-450 group-hover:rotate-180 transition-transform duration-500" />
-            <span className="text-[11px] font-bold text-zinc-300 font-sans">
-              Active: {activeRole === "buyer" ? "Buyer" : "Seller"}
-            </span>
-          </div>
-          <span className="text-[9px] font-black uppercase tracking-widest text-[#ff6b00]">
-            Toggle
-          </span>
-        </button>
-      </div>
 
       {/* Trigger alert */}
       <div className="space-y-3">

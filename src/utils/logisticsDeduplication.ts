@@ -84,6 +84,77 @@ export function deduplicateLogisticsCompanies<T extends LogisticsPartnerLike>(co
 }
 
 /**
+ * Checks whether a logistics partner has completed all required profile information
+ * before they can receive gigs from merchants or accept jobs.
+ */
+export function isLogisticsCompanyProfileComplete(company: LogisticsPartnerLike | null | undefined): boolean {
+  if (!company) return false;
+  
+  const name = String(company.companyName || "").trim();
+  const phone = String(company.phoneNumber || "").replace(/[^0-9]/g, "");
+  const rc = String(company.rcNumber || "").trim();
+  const office = String(company.officeAddress || "").trim();
+  const vehicles = Array.isArray(company.vehicleTypes) ? company.vehicleTypes : [];
+  const campuses = Array.isArray(company.coveredCampuses) ? company.coveredCampuses : [];
+  const basePrice = Number(company.baseDeliveryPrice) || 0;
+  
+  // Bank details check (either top-level bankName/accountNumber or bankDetails map)
+  const bankName = String(company.bankName || company.bankDetails?.bankName || "").trim();
+  const accountNumber = String(company.accountNumber || company.bankDetails?.accountNumber || "").replace(/[^0-9]/g, "");
+
+  const hasName = name.length >= 2;
+  const hasPhone = phone.length >= 7;
+  // A realistic RC number is not a placeholder
+  const hasRc = rc.length >= 3 && !rc.toUpperCase().startsWith("RC-00") && rc.toUpperCase() !== "RC-PENDING";
+  const hasOffice = office.length >= 3 && office !== "Main Campus Office";
+  const hasVehicles = vehicles.length > 0;
+  const hasCampuses = campuses.length > 0;
+  const hasBasePrice = basePrice > 0;
+  const hasBank = bankName.length >= 2 && accountNumber.length >= 7;
+
+  return hasName && hasPhone && hasRc && hasOffice && hasVehicles && hasCampuses && hasBasePrice && hasBank;
+}
+
+/**
+ * Helper to get the list of missing profile requirements for a logistics company
+ */
+export function getLogisticsCompanyProfileChecklist(company: LogisticsPartnerLike | null | undefined) {
+  if (!company) {
+    return [
+      { id: "name", label: "Business Name", complete: false },
+      { id: "phone", label: "Contact Phone Number", complete: false },
+      { id: "rc", label: "CAC / RC Registration Number", complete: false },
+      { id: "office", label: "Physical Dispatch Office Address", complete: false },
+      { id: "vehicles", label: "Fleet / Vehicle Types Configured", complete: false },
+      { id: "campuses", label: "Covered Campus Zones Selected", complete: false },
+      { id: "pricing", label: "Base Delivery Pricing Set", complete: false },
+      { id: "bank", label: "Settlement Bank Account Details", complete: false },
+    ];
+  }
+
+  const name = String(company.companyName || "").trim();
+  const phone = String(company.phoneNumber || "").replace(/[^0-9]/g, "");
+  const rc = String(company.rcNumber || "").trim();
+  const office = String(company.officeAddress || "").trim();
+  const vehicles = Array.isArray(company.vehicleTypes) ? company.vehicleTypes : [];
+  const campuses = Array.isArray(company.coveredCampuses) ? company.coveredCampuses : [];
+  const basePrice = Number(company.baseDeliveryPrice) || 0;
+  const bankName = String(company.bankName || company.bankDetails?.bankName || "").trim();
+  const accountNumber = String(company.accountNumber || company.bankDetails?.accountNumber || "").replace(/[^0-9]/g, "");
+
+  return [
+    { id: "name", label: "Business Name", complete: name.length >= 2 },
+    { id: "phone", label: "Contact Phone Number", complete: phone.length >= 7 },
+    { id: "rc", label: "CAC / RC Registration Number", complete: rc.length >= 3 && !rc.toUpperCase().startsWith("RC-00") && rc.toUpperCase() !== "RC-PENDING" },
+    { id: "office", label: "Physical Dispatch Office Address", complete: office.length >= 3 && office !== "Main Campus Office" },
+    { id: "vehicles", label: "Fleet / Vehicle Types Configured", complete: vehicles.length > 0 },
+    { id: "campuses", label: "Covered Campus Zones Selected", complete: campuses.length > 0 },
+    { id: "pricing", label: "Base Delivery Pricing Set", complete: basePrice > 0 },
+    { id: "bank", label: "Settlement Bank Account Details", complete: bankName.length >= 2 && accountNumber.length >= 7 },
+  ];
+}
+
+/**
  * Validates and purges deleted or orphaned logistics company records before
  * presenting them in delivery options across the platform.
  * If the registered company user account was deleted from Firestore `users`,
@@ -119,8 +190,6 @@ export async function filterActiveLogisticsCompanies<T extends LogisticsPartnerL
       try {
         const userSnap = await getDoc(doc(db, "users", ownerUid));
         if (!userSnap.exists()) {
-          // Account was deleted! This company is an orphan from a deleted account.
-          // Clean it up from Firestore if possible so it never appears in the options again.
           const targetId = company.id || ownerUid;
           deleteDoc(doc(db, "logistics_companies", targetId)).catch(() => {});
           updateDoc(doc(db, "logistics_companies", targetId), {
@@ -136,12 +205,14 @@ export async function filterActiveLogisticsCompanies<T extends LogisticsPartnerL
           continue;
         }
       } catch (err) {
-        // If Firestore read fails and name matches deleted account like workcreative, exclude it
         if (name.includes("workcreative")) {
           continue;
         }
       }
-    } else if (name.includes("workcreative")) {
+    }
+
+    // 3. Exclude logistics companies that have not completed their profile
+    if (!isLogisticsCompanyProfileComplete(company)) {
       continue;
     }
 

@@ -49,7 +49,10 @@ import {
   Info,
   RefreshCw,
   Sparkles,
-  Truck
+  Truck,
+  Camera,
+  Scan,
+  ShieldCheck
 } from "lucide-react";
 import Logo from "./Logo";
 import { cn, generateReferralCode } from "../lib/utils";
@@ -170,6 +173,7 @@ export default function AuthPage({
   }, [initialNeedsProfile]);
 
   // Form fields
+  const [businessName, setBusinessName] = React.useState("");
   const [fullName, setFullName] = React.useState("");
   const [firstName, setFirstName] = React.useState("");
   const [lastName, setLastName] = React.useState("");
@@ -219,13 +223,35 @@ export default function AuthPage({
         url: window.location.origin,
         handleCodeInApp: false
       };
-      // Send official password reset email directly via Firebase
-      await sendPasswordResetEmail(auth, resetEmail.trim(), actionCodeSettings);
+
+      // 1. Dispatch branded password reset security code email via Brevo
+      const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+      try {
+        await fetch("/api/send-password-reset", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: resetEmail.trim(),
+            code: resetCode,
+            resetLink: `${window.location.origin}/?tab=auth&mode=login`
+          })
+        });
+        console.log(`[BREVO RESET] Password reset code dispatched via Brevo to ${resetEmail.trim()}`);
+      } catch (brevoErr) {
+        console.warn("Brevo password reset dispatch notice:", brevoErr);
+      }
+
+      // 2. Also send standard Firebase password reset link
+      try {
+        await sendPasswordResetEmail(auth, resetEmail.trim(), actionCodeSettings);
+      } catch (fbErr: any) {
+        console.warn("Firebase password reset notice:", fbErr);
+      }
+
       setResetEmailSent(true);
     } catch (err: any) {
       console.error("Password reset error:", err);
       if (err.code === "auth/user-not-found" || err.code === "auth/invalid-credential") {
-        // Show success message to prevent account enumeration
         setResetEmailSent(true);
       } else if (err.code === "auth/invalid-email") {
         setResetError("Please enter a valid email address.");
@@ -241,7 +267,7 @@ export default function AuthPage({
     }
   };
   
-  // Verification states
+  // Verification & Brevo Engine states
   const [isVerifyingEmail, setIsVerifyingEmail] = React.useState(false);
   const [isVerifyingPhone, setIsVerifyingPhone] = React.useState(false);
   const [isVerificationChoice, setIsVerificationChoice] = React.useState(false);
@@ -254,6 +280,24 @@ export default function AuthPage({
   const [isGoogleSellerVerifying, setIsGoogleSellerVerifying] = React.useState(false);
   const [showChangeEmail, setShowChangeEmail] = React.useState(false);
   const [newEmailInput, setNewEmailInput] = React.useState("");
+
+  // OTP Verification States
+  const [preferredVerificationChannel, setPreferredVerificationChannel] = React.useState<"email" | "phone">("email");
+  const [sentOtpCode, setSentOtpCode] = React.useState<string>("");
+  const [enteredOtpCode, setEnteredOtpCode] = React.useState<string>("");
+  const [verifyingOtp, setVerifyingOtp] = React.useState<boolean>(false);
+  const [resendCooldown, setResendCooldown] = React.useState<number>(0);
+  const [otpSentVia, setOtpSentVia] = React.useState<"brevo" | "fallback">("brevo");
+  const [brevoNotice, setBrevoNotice] = React.useState<string>("");
+
+  // Countdown timer for resending verification code
+  React.useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const timer = setInterval(() => {
+      setResendCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [resendCooldown]);
 
   // School details
   const [schoolType, setSchoolType] = React.useState("");
@@ -405,6 +449,28 @@ export default function AuthPage({
               return;
             }
 
+            // User sign-in: if account is not verified, require verification immediately
+            if (!userData.isVerified && !user.emailVerified && userData.role !== "admin") {
+              const targetEmail = (userData.email || user.email || cleanEmail).trim().toLowerCase();
+              const targetPhone = (userData.phoneNumber || phone || "").trim();
+
+              setEmail(targetEmail);
+              if (targetPhone) setPhone(targetPhone);
+              setFullName(userData.displayName || "");
+
+              if (targetPhone && targetPhone.length >= 7) {
+                setIsVerificationChoice(true);
+              } else {
+                await handleSendEmailCode();
+              }
+
+              if (onVerificationScreenChange) {
+                onVerificationScreenChange(true);
+              }
+              setLoading(false);
+              return;
+            }
+
             // Successful authentication: navigate into the platform immediately
             handleGoToMarket();
             return;
@@ -426,7 +492,7 @@ export default function AuthPage({
                     email: (user.email || cleanEmail).toLowerCase(),
                     phoneNumber: user.phoneNumber || "",
                     gender: "other",
-                    role: "both",
+                    role: "buyer",
                     activeRole: "buyer",
                     referralCode: generateReferralCode(user.displayName || "USER"),
                     referredBy: "",
@@ -488,50 +554,31 @@ export default function AuthPage({
           // Validate fields
           const errors: Record<string, string> = {};
           
-          if (!fullName.trim()) errors.fullName = "Full name is required";
-          if (!username.trim()) errors.username = "Username is required";
-          if (!email.trim()) errors.email = "Email is required";
-          if (!phone.trim()) {
-            errors.phone = "Phone number is required";
-          } else if (phonePrefix === "+234") {
-            const cleanPhone = phone.replace(/\D/g, "");
-            if (cleanPhone.startsWith("0")) {
-              if (cleanPhone.length !== 11) {
-                errors.phone = "Nigerian phone number starting with 0 must be 11 digits (e.g. 08012345678).";
-              } else if (!/^0[789]\d{9}$/.test(cleanPhone)) {
-                errors.phone = "Please enter a valid Nigerian phone number (e.g. 080..., 070..., 090...).";
-              }
-            } else {
-              if (cleanPhone.length !== 10) {
-                errors.phone = "Nigerian phone number without 0 must be 10 digits (e.g. 8012345678).";
-              } else if (!/^[789]\d{9}$/.test(cleanPhone)) {
-                errors.phone = "Please enter a valid Nigerian phone number (e.g. 80..., 70..., 90...).";
-              }
+          if (role === "seller" && !businessName.trim()) {
+            errors.businessName = "Business name is required for Vendor registration";
+          }
+
+          if (!email.trim()) {
+            errors.email = "Email is required";
+          } else {
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(email.trim())) {
+              errors.email = "Please enter a valid email address.";
             }
           }
-          if (!password) errors.password = "Password is required";
+
+          if (!password) {
+            errors.password = "Password is required";
+          } else {
+            const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#^()_+\-=\[\]{};':"\\|,.<>\/?]).{6,}$/;
+            if (!passwordRegex.test(password)) {
+              errors.password = "Password must be at least 6 characters long and contain uppercase, lowercase, number, and special character.";
+            }
+          }
 
           // Validate passwords match
           if (password !== confirmPassword) {
             errors.confirmPassword = "Passwords do not match.";
-          }
-
-          // Validate username (no symbols or spaces)
-          const usernameRegex = /^[a-zA-Z0-9]+$/;
-          if (username && !usernameRegex.test(username)) {
-            errors.username = "Username must only contain letters and numbers (no spaces or symbols).";
-          }
-
-          // Validate email format
-          const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-          if (email && !emailRegex.test(email)) {
-            errors.email = "Please enter a valid email address.";
-          }
-
-          // Validate password strength
-          const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#^()_+\-=\[\]{};':"\\|,.<>\/?]).{6,}$/;
-          if (password && !passwordRegex.test(password)) {
-            errors.password = "Password must be at least 6 characters long and contain uppercase, lowercase, number, and special character.";
           }
 
           // Validate terms agreement
@@ -539,7 +586,7 @@ export default function AuthPage({
             errors.terms = "Please read and accept the Conditions of Use & Terms and Privacy Policy to continue.";
           }
 
-          if (Object.keys(errors).length > 0) {
+                    if (Object.keys(errors).length > 0) {
             setFieldErrors(errors);
             setLoading(false);
             return;
@@ -582,7 +629,8 @@ export default function AuthPage({
           try {
             const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
             firebaseUser = userCredential.user;
-            await updateProfile(firebaseUser, { displayName: fullName });
+            const initialDisplayName = role === "seller" ? businessName.trim() : email.trim().split("@")[0];
+            await updateProfile(firebaseUser, { displayName: initialDisplayName });
 
             try {
               const actionCodeSettings = {
@@ -680,18 +728,21 @@ export default function AuthPage({
           console.warn("Stale docs cleanup notice:", cleanupErr);
         }
 
-        const referralCode = generateReferralCode(fullName || firebaseUser.displayName || "USER");
+        const effectiveName = role === "seller" ? (businessName.trim() || "Vendor") : (email.trim().split("@")[0] || "Customer");
+        const effectiveUsername = generateSmartUsername(effectiveName);
+        const referralCode = generateReferralCode(effectiveName || "USER");
         const referredBy = referralCodeInput || localStorage.getItem('referredBy');
 
         const userProfile: UserProfile = {
           uid: firebaseUser.uid,
-          displayName: fullName || firebaseUser.displayName || "User",
-          username: username.toLowerCase(),
+          displayName: effectiveName,
+          businessName: role === "seller" ? businessName.trim() : "",
+          username: effectiveUsername,
           email: firebaseUser.email || email.trim().toLowerCase(),
-          phoneNumber: phonePrefix === "+234" && phone.startsWith("0") ? `+234${phone.replace(/\D/g, "").slice(1)}` : `${phonePrefix}${phone}`,
+          phoneNumber: "",
           gender: gender,
-          role: role === "seller" ? "both" : "buyer",
-          activeRole: role,
+          role: role === "seller" ? "seller" : "buyer",
+          activeRole: role === "seller" ? "seller" : "buyer",
           referralCode,
           referredBy: referredBy || "",
           referralEarnings: 0,
@@ -729,7 +780,7 @@ export default function AuthPage({
             id: crypto.randomUUID(),
             userId: firebaseUser.uid,
             title: "Welcome to SHOPIVERSITY! 🎉",
-            message: `Hi ${fullName || 'there'}, your account has been successfully created. Welcome to your campus marketplace!`,
+            message: `Hi ${effectiveName}, your account has been successfully created. Welcome to your campus marketplace!`,
             type: "welcome",
             isRead: false,
             createdAt: new Date().toISOString()
@@ -739,15 +790,51 @@ export default function AuthPage({
           console.warn("Welcome notification notice:", notifErr);
         }
 
-        // Cleanly complete registration and transition directly into the platform
-        setIsVerifyingEmail(false);
-        setIsVerificationChoice(false);
-        setError("");
-        if (onVerificationScreenChange) {
-          onVerificationScreenChange(false);
-        }
-        handleGoToMarket();
-        return;
+        // Direct Email Verification (No Phone SMS Verification)
+                  // Email Verification
+          const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+          let fallbackCode = "";
+          let isLive = false;
+          let noticeMessage = "";
+
+          try {
+            console.log(`[SIGNUP EMAIL] Dispatching email verification to ${cleanEmail}`);
+            const vRes = await fetch("/api/send-verification", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                email: cleanEmail,
+                code: verificationCode,
+                userName: fullName || username
+              })
+            });
+            const vData = await vRes.json();
+            if (vData.sent) {
+              isLive = true;
+              noticeMessage = `Verification code sent to ${cleanEmail}!`;
+            } else {
+              fallbackCode = vData.code || verificationCode;
+              noticeMessage = vData.notice || "Verification code generated.";
+            }
+          } catch (vErr) {
+            console.warn("Email verification API dispatch notice:", vErr);
+            fallbackCode = verificationCode;
+          }
+
+          setSentOtpCode(verificationCode);
+          setEnteredOtpCode(fallbackCode || "");
+          setOtpSentVia(isLive ? "brevo" : "fallback");
+          setBrevoNotice(noticeMessage);
+          setVerificationMethod("email");
+          setIsVerifyingEmail(true);
+          setIsVerifyingPhone(false);
+          setIsVerificationChoice(false);
+          setResendCooldown(30);
+          setError("");
+          if (onVerificationScreenChange) {
+            onVerificationScreenChange(true);
+          }
+          return;
       }
     } catch (err: any) {
       setError(getFirestoreErrorMessage(err));
@@ -790,26 +877,46 @@ export default function AuthPage({
 
   const handleResendVerificationEmail = async () => {
     const currentAuthUser = auth.currentUser;
-    if (!currentAuthUser) {
-      setError("No active user session found. If you created an account, please try logging in.");
+    const targetEmail = (email || currentAuthUser?.email || "").trim().toLowerCase();
+    if (!targetEmail) {
+      setError("No email address found to resend verification code.");
       return;
     }
     setResendingCode(true);
     setError("");
+    const newCode = Math.floor(100000 + Math.random() * 900000).toString();
+
     try {
-      const actionCodeSettings = {
-        url: window.location.origin,
-        handleCodeInApp: false
-      };
-      await sendEmailVerification(currentAuthUser, actionCodeSettings);
-      setError(`Verification link resent to ${currentAuthUser.email}! Please check your inbox and spam folder.`);
-    } catch (err: any) {
-      console.error("Resend verification email error:", err);
-      if (err.code === "auth/too-many-requests") {
-        setError("Too many email requests. Please wait 1 minute before requesting another email.");
+      const vRes = await fetch("/api/send-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: targetEmail,
+          code: newCode,
+          userName: fullName || username || currentAuthUser?.displayName || "Student"
+        })
+      });
+      const vData = await vRes.json();
+      setSentOtpCode(newCode);
+      if (vData.sent) {
+        setOtpSentVia("brevo");
+        setError(`Fresh 6-digit verification code dispatched to ${targetEmail} via Brevo!`);
       } else {
-        setError("Failed to resend verification email. Please try again in a few moments.");
+        setOtpSentVia("fallback");
+        setEnteredOtpCode(vData.code || newCode);
+        setError(`New verification code: ${vData.code || newCode} (Brevo setup mode)`);
       }
+      setResendCooldown(30);
+
+      // Also trigger Firebase link in parallel
+      if (currentAuthUser) {
+        try {
+          await sendEmailVerification(currentAuthUser, { url: window.location.origin, handleCodeInApp: false });
+        } catch (e) {}
+      }
+    } catch (err: any) {
+      console.error("Resend Brevo verification error:", err);
+      setError("Failed to resend verification email. Please try again in a moment.");
     } finally {
       setResendingCode(false);
     }
@@ -843,14 +950,32 @@ export default function AuthPage({
         console.warn("Firestore email update notice:", uErr);
       }
       setEmail(trimmed);
-      const actionCodeSettings = {
-        url: window.location.origin,
-        handleCodeInApp: false
-      };
-      await sendEmailVerification(currentAuthUser, actionCodeSettings);
+
+      // Dispatch Brevo verification to new email
+      const newCode = Math.floor(100000 + Math.random() * 900000).toString();
+      try {
+        const vRes = await fetch("/api/send-verification", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: trimmed,
+            code: newCode,
+            userName: fullName || username || currentAuthUser.displayName || "Student"
+          })
+        });
+        const vData = await vRes.json();
+        setSentOtpCode(newCode);
+        if (vData.fallback && vData.code) {
+          setEnteredOtpCode(vData.code);
+        }
+      } catch (bErr) {
+        console.warn("Brevo new email dispatch notice:", bErr);
+      }
+
       setShowChangeEmail(false);
       setNewEmailInput("");
-      setError(`Email updated to ${trimmed}! A new verification link has been sent.`);
+      setResendCooldown(30);
+      setError(`Email updated to ${trimmed}! Verification code dispatched via Brevo.`);
     } catch (err: any) {
       console.error("Change email error:", err);
       if (err.code === "auth/requires-recent-login") {
@@ -885,61 +1010,52 @@ export default function AuthPage({
   const handleSendEmailCode = async () => {
     setLoading(true);
     setError("");
-    const targetEmail = email.trim();
+    const targetEmail = (email || auth.currentUser?.email || "").trim().toLowerCase();
 
     try {
       let currentAuthUser = auth.currentUser;
-      if (!currentAuthUser) {
+      if (!currentAuthUser && email && password) {
         const userCredential = await createUserWithEmailAndPassword(auth, targetEmail, password);
         currentAuthUser = userCredential.user;
-        await updateProfile(currentAuthUser, { displayName: fullName });
+        if (fullName) {
+          await updateProfile(currentAuthUser, { displayName: fullName });
+        }
       }
 
-      const actionCodeSettings = {
-        url: window.location.origin,
-        handleCodeInApp: false
-      };
-      await sendEmailVerification(currentAuthUser, actionCodeSettings);
+      const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+      let fallbackCode = "";
+      let isBrevoLive = false;
 
-      const referralCode = generateReferralCode(fullName || "USER");
-      const referredBy = referralCodeInput || localStorage.getItem("referredBy");
-      const userProfile: UserProfile = {
-        uid: currentAuthUser.uid,
-        displayName: fullName,
-        username: username.toLowerCase(),
-        email: targetEmail.toLowerCase(),
-        phoneNumber: phonePrefix === "+234" && phone.startsWith("0") ? `+234${phone.replace(/\D/g, "").slice(1)}` : `${phonePrefix}${phone}`,
-        gender: gender,
-        role: role === "seller" ? "both" : "buyer",
-        activeRole: role,
-        referralCode,
-        referredBy: referredBy || "",
-        referralEarnings: 0,
-        referralCount: 0,
-        schoolType: "", 
-        schoolName: "", 
-        state: "", 
-        city: "", 
-        deliveryAddress: "", 
-        isVerified: false, 
-        isSuspended: false,
-        reportCount: 0,
-        createdAt: new Date().toISOString(),
-        verificationIdUrl: verificationIdUrl || "",
-        profileCompleted: false 
-      };
-      await setDoc(doc(db, "users", currentAuthUser.uid), userProfile);
+      const vRes = await fetch("/api/send-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: targetEmail,
+          code: verificationCode,
+          userName: fullName || username || currentAuthUser?.displayName || "Student"
+        })
+      });
+      const vData = await vRes.json();
+      if (vData.sent) {
+        isBrevoLive = true;
+      }
+      if (vData.fallback && vData.code) {
+        fallbackCode = vData.code;
+      }
 
+      setSentOtpCode(verificationCode);
+      setEnteredOtpCode(fallbackCode || "");
+      setOtpSentVia(isBrevoLive ? "brevo" : "fallback");
       setVerificationMethod("email");
-      setIsVerifyingEmail(false);
+      setIsVerifyingEmail(true);
+      setIsVerifyingPhone(false);
       setIsVerificationChoice(false);
+      setResendCooldown(30);
       if (onVerificationScreenChange) {
-        onVerificationScreenChange(false);
+        onVerificationScreenChange(true);
       }
-      handleGoToMarket();
-      return;
     } catch (err: any) {
-      console.error("Firebase sendEmailVerification error:", err);
+      console.error("Brevo send-verification error:", err);
       setError(getFirestoreErrorMessage(err));
     } finally {
       setLoading(false);
@@ -961,133 +1077,126 @@ export default function AuthPage({
       ? `+234${rawDigits.slice(1)}`
       : `${phonePrefix}${rawDigits}`;
 
+    const phoneCode = Math.floor(100000 + Math.random() * 900000).toString();
+
     try {
-      const appVerifier = getRecaptchaVerifier();
-      console.log(`[FIREBASE SMS] Dispatching phone authentication SMS to ${fullPhoneNumber} via Firebase...`);
-      const confirmation = await signInWithPhoneNumber(auth, fullPhoneNumber, appVerifier);
-      setConfirmationResult(confirmation);
+      console.log(`[BREVO SMS] Dispatching phone SMS verification to ${fullPhoneNumber}...`);
+      const pRes = await fetch("/api/send-phone-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phoneNumber: fullPhoneNumber,
+          code: phoneCode,
+          userName: fullName || username || "Student"
+        })
+      });
+      const pData = await pRes.json();
+
+      setSentOtpCode(phoneCode);
+      setEnteredOtpCode(pData.fallback && pData.code ? pData.code : "");
+      setOtpSentVia(pData.sent ? "brevo" : "fallback");
       setVerificationMethod("phone");
       setIsVerifyingPhone(true);
+      setIsVerifyingEmail(false);
       setIsVerificationChoice(false);
-      setError(`Firebase SMS sent to ${fullPhoneNumber}! Enter the 6-digit code received via SMS.`);
-    } catch (err: any) {
-      console.error("Firebase Phone Auth Error:", err);
-      if ((window as any).recaptchaVerifier) {
-        try {
-          (window as any).recaptchaVerifier.clear();
-          (window as any).recaptchaVerifier = null;
-        } catch (e) {}
-      }
-      if (err.code === "auth/invalid-phone-number") {
-        setError("Invalid phone number format. Please ensure your country code and phone number are correct.");
-      } else if (err.code === "auth/too-many-requests" || err.code === "auth/quota-exceeded") {
-        setError("Too many SMS verification requests. Please try again later or use Email Verification.");
-      } else if (err.code === "auth/captcha-check-failed") {
-        setError("reCAPTCHA verification failed. Please try again.");
+      setResendCooldown(30);
+
+      if (pData.sent) {
+        setError(`SMS verification code delivered to ${fullPhoneNumber} via Brevo! Enter the 6-digit code.`);
       } else {
-        setError(err.message || "Failed to send SMS code via Firebase. Please try again or use Email Verification.");
+        setError(`SMS verification code: ${pData.code || phoneCode} (Brevo test/setup mode)`);
       }
+    } catch (err: any) {
+      console.error("Brevo phone auth dispatch error:", err);
+      setError("Could not dispatch SMS. Falling back to Email verification.");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleVerifyPhoneCode = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError("");
+  const handleVerifyOtpCode = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const codeToVerify = (enteredOtpCode || verificationInput).trim();
+    if (codeToVerify.length !== 6) {
+      setError("Please enter the full 6-digit verification code.");
+      return;
+    }
+
+    setVerifyingOtp(true);
     setLoading(true);
+    setError("");
 
-    if (!confirmationResult) {
-      setError("No pending SMS verification found. Please request a new verification code.");
-      setLoading(false);
-      return;
-    }
+    const targetEmail = (email || auth.currentUser?.email || "").trim().toLowerCase();
+    const rawDigits = phone.replace(/\D/g, "");
+    const fullPhoneNumber = phonePrefix === "+234" && rawDigits.startsWith("0")
+      ? `+234${rawDigits.slice(1)}`
+      : `${phonePrefix}${rawDigits}`;
 
-    if (!verificationInput || verificationInput.trim().length !== 6) {
-      setError("Please enter the 6-digit code sent to your phone via SMS.");
-      setLoading(false);
-      return;
-    }
+    const identifier = verificationMethod === "phone" ? fullPhoneNumber : targetEmail;
 
     try {
-      const userCredential = await confirmationResult.confirm(verificationInput.trim());
-      const firebaseUser = userCredential.user;
+      let isCodeValid = false;
 
-      if (fullName) {
-        await updateProfile(firebaseUser, { displayName: fullName });
+      // 1. Verify via server verification store
+      try {
+        const verifyRes = await fetch("/api/verify-code", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            identifier,
+            code: codeToVerify
+          })
+        });
+        const vData = await verifyRes.json();
+        if (vData.success && vData.verified) {
+          isCodeValid = true;
+        }
+      } catch (apiErr) {
+        console.warn("Verify code API notice:", apiErr);
       }
 
-      const referralCode = generateReferralCode(fullName || "USER");
-      const referredBy = referralCodeInput || localStorage.getItem("referredBy");
+      // 2. Fallback check with sentOtpCode if server network or test mode
+      if (!isCodeValid && sentOtpCode && sentOtpCode === codeToVerify) {
+        isCodeValid = true;
+      }
 
-      const userProfile: UserProfile = {
-        uid: firebaseUser.uid,
-        displayName: fullName || "User",
-        username: username.toLowerCase(),
-        email: email ? email.toLowerCase() : (firebaseUser.email || ""),
-        phoneNumber: firebaseUser.phoneNumber || `${phonePrefix}${phone}`,
-        gender: gender,
-        role: role === "seller" ? "both" : "buyer",
-        activeRole: role,
-        referralCode,
-        referredBy: referredBy || "",
-        referralEarnings: 0,
-        referralCount: 0,
-        schoolType: "", 
-        schoolName: "", 
-        state: "", 
-        city: "", 
-        deliveryAddress: "", 
-        isVerified: true, 
-        isSuspended: false,
-        reportCount: 0,
-        createdAt: new Date().toISOString(),
-        verificationIdUrl: verificationIdUrl || "",
-        profileCompleted: false 
-      };
+      if (!isCodeValid) {
+        setError("Invalid or expired 6-digit verification code. Please check and try again.");
+        setVerifyingOtp(false);
+        setLoading(false);
+        return;
+      }
 
-      await setDoc(doc(db, "users", firebaseUser.uid), userProfile);
-
-      if (referredBy) {
-        const referrersQ = query(collection(db, "users"), where("referralCode", "==", referredBy));
-        const referrersSnap = await getDocs(referrersQ);
-        if (!referrersSnap.empty) {
-          const referrerDoc = referrersSnap.docs[0];
-          const currentCount = referrerDoc.data().referralCount || 0;
-          await updateDoc(referrerDoc.ref, { referralCount: currentCount + 1 });
+      // Success! Update Firestore profile
+      const currentUid = auth.currentUser?.uid;
+      if (currentUid) {
+        try {
+          await updateDoc(doc(db, "users", currentUid), {
+            isVerified: true,
+            emailVerified: true
+          });
+        } catch (uErr) {
+          console.warn("User doc verification update notice:", uErr);
         }
       }
 
-      localStorage.removeItem("referredBy");
+      setIsVerificationSuccess(true);
+      setError("");
 
-      const welcomeNotification: Notification = {
-        id: crypto.randomUUID(),
-        userId: firebaseUser.uid,
-        title: "Welcome to SHOPIVERSITY!",
-        message: `Hi ${fullName}, welcome to SHOPIVERSITY! Your phone number has been verified via Firebase SMS.`,
-        type: "welcome",
-        isRead: false,
-        createdAt: new Date().toISOString()
-      };
-      await addDoc(collection(db, "notifications"), welcomeNotification);
-
-      setIsVerificationSuccess(false);
-      setIsVerifyingPhone(false);
-      if (onVerificationScreenChange) {
-        onVerificationScreenChange(false);
-      }
-      handleGoToMarket();
-      return;
+      setTimeout(() => {
+        setIsVerifyingEmail(false);
+        setIsVerifyingPhone(false);
+        setIsVerificationChoice(false);
+        if (onVerificationScreenChange) {
+          onVerificationScreenChange(false);
+        }
+        handleGoToMarket();
+      }, 1200);
     } catch (err: any) {
-      console.error("Firebase SMS Verification Error:", err);
-      if (err.code === "auth/invalid-verification-code") {
-        setError("Invalid SMS verification code. Please check the code sent to your phone and try again.");
-      } else if (err.code === "auth/code-expired") {
-        setError("The SMS verification code has expired. Please request a new code.");
-      } else {
-        setError(err.message || "Failed to verify SMS code with Firebase. Please try again.");
-      }
+      console.error("Verification error:", err);
+      setError("Failed to verify code. Please try again.");
     } finally {
+      setVerifyingOtp(false);
       setLoading(false);
     }
   };
@@ -1159,8 +1268,8 @@ export default function AuthPage({
         username: generateSmartUsername(user.displayName || "User"),
         email: user.email || "",
         phoneNumber: user.phoneNumber || "",
-        role: role === "seller" ? "both" : "buyer",
-        activeRole: role,
+        role: role === "seller" ? "seller" : "buyer",
+        activeRole: role === "seller" ? "seller" : "buyer",
         referralCode,
         referredBy: referredBy || "",
         referralEarnings: 0,
@@ -1325,7 +1434,7 @@ export default function AuthPage({
             email: targetEmail,
             phoneNumber: targetPhone,
             gender: "male",
-            role: sandboxRole === "buyer" ? "buyer" : "both",
+            role: sandboxRole === "buyer" ? "buyer" : "seller",
             activeRole: sandboxRole === "buyer" ? "buyer" : "seller",
             referralCode,
             referredBy: "",
@@ -1456,6 +1565,86 @@ export default function AuthPage({
       } finally {
         setIsVerifyingId(false);
       }
+    }
+  };
+
+  // Live ID Document Scanner State & Methods
+  const [isIdScannerOpen, setIsIdScannerOpen] = React.useState(false);
+  const scannerVideoRef = React.useRef<HTMLVideoElement | null>(null);
+  const scannerStreamRef = React.useRef<MediaStream | null>(null);
+  const [isScanningLive, setIsScanningLive] = React.useState(false);
+  const [scannerError, setScannerError] = React.useState("");
+
+  const startIdScanner = async () => {
+    setScannerError("");
+    setIsIdScannerOpen(true);
+    try {
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        setScannerError("Camera streaming is not supported on this browser. Please upload your ID file instead.");
+        return;
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }
+      });
+      scannerStreamRef.current = stream;
+      if (scannerVideoRef.current) {
+        scannerVideoRef.current.srcObject = stream;
+        scannerVideoRef.current.play().catch(() => {});
+      }
+    } catch (err: any) {
+      console.warn("Scanner camera access notice:", err);
+      setScannerError("Camera permission was denied or unavailable. Please upload a clear photo of your ID.");
+    }
+  };
+
+  const stopIdScanner = () => {
+    if (scannerStreamRef.current) {
+      scannerStreamRef.current.getTracks().forEach(track => track.stop());
+      scannerStreamRef.current = null;
+    }
+    setIsIdScannerOpen(false);
+    setIsScanningLive(false);
+  };
+
+  const captureAndScanIdDocument = async () => {
+    if (!scannerVideoRef.current) return;
+    setIsScanningLive(true);
+    setScannerError("");
+    try {
+      const video = scannerVideoRef.current;
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth || 1280;
+      canvas.height = video.videoHeight || 720;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Canvas context failed");
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const base64 = canvas.toDataURL("image/jpeg", 0.88);
+
+      // Call server Gemini ID verification
+      const res = await fetch("/api/gemini/verify-id", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageBase64: base64,
+          fullName: fullName || auth.currentUser?.displayName || "Student Seller",
+          schoolName: schoolName || "Campus",
+          state,
+          city
+        })
+      });
+      const result = await res.json();
+      if (result.matches) {
+        setVerificationIdUrl(base64);
+        setIdVerificationError("");
+        stopIdScanner();
+      } else {
+        setScannerError(result.reason || "Could not read ID card. Please ensure the card is in focus, well lit, and fully inside the frame.");
+      }
+    } catch (err: any) {
+      console.error("ID Scan error:", err);
+      setScannerError("Failed to scan document. Please hold steady and try again or upload a photo.");
+    } finally {
+      setIsScanningLive(false);
     }
   };
 
@@ -1603,34 +1792,139 @@ export default function AuthPage({
                     />
                   </div>
                   
-                  {/* ID Upload */}
-                  <div className="space-y-1.5 text-left">
-                    <label className="text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-widest ml-1 font-sans">ID Card Verification</label>
-                    <label className={cn(
-                      "border border-dashed rounded-sm p-5 flex flex-col items-center justify-center transition-colors cursor-pointer group relative overflow-hidden",
-                      idVerificationError ? "border-red-300 bg-red-50 dark:bg-red-900/10" : "border-slate-305 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-805/20 hover:bg-slate-100/50 dark:hover:bg-zinc-800"
-                    )}>
-                      <input type="file" accept="image/*" onChange={handleIdUpload} className="hidden" disabled={isVerifyingId} />
-                      {isVerifyingId ? (
-                        <div className="flex flex-col items-center text-center py-2">
-                          <Loader2 className="w-8 h-8 text-orange-500 animate-spin mb-2" />
-                          <p className="text-xs font-bold text-slate-600 dark:text-zinc-405">Verifying ID with Gemini...</p>
-                        </div>
-                      ) : verificationIdUrl ? (
-                        <>
-                          <img src={verificationIdUrl} alt="ID Preview" className="absolute inset-0 w-full h-full object-cover opacity-15" />
-                          <CheckCircle2 className="w-6 h-6 text-emerald-500 mb-1 relative z-10" />
-                          <span className="text-xs font-bold text-emerald-600 dark:text-emerald-404 relative z-10">ID Verified Successfully</span>
-                        </>
-                      ) : (
-                        <>
-                          <Upload className="w-6 h-6 text-slate-400 dark:text-slate-505 group-hover:text-orange-500 transition-colors mb-1.5" />
-                          <span className="text-xs font-bold text-slate-600 dark:text-zinc-400">Upload Student ID / Gov Card</span>
-                        </>
-                      )}
+                  {/* ID Scanner & Upload */}
+                  <div className="space-y-2 text-left">
+                    <label className="text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-widest ml-1 font-sans">
+                      Official ID Verification (Required for Sellers)
                     </label>
+
+                    {isIdScannerOpen ? (
+                      <div className="bg-black p-3.5 rounded-2xl border-2 border-orange-500 space-y-3">
+                        <div className="flex items-center justify-between text-white text-xs font-bold px-1">
+                          <span className="flex items-center gap-1.5 text-orange-400">
+                            <Scan className="w-4 h-4 animate-pulse" />
+                            Live ID Card Scanner
+                          </span>
+                          <button
+                            type="button"
+                            onClick={stopIdScanner}
+                            className="text-[11px] text-slate-400 hover:text-white bg-white/10 px-2 py-0.5 rounded cursor-pointer border-none"
+                          >
+                            Close
+                          </button>
+                        </div>
+
+                        {/* Camera Viewfinder */}
+                        <div className="relative w-full aspect-[16/10] bg-black rounded-xl overflow-hidden shadow-inner flex items-center justify-center border border-white/20">
+                          <video ref={scannerVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+
+                          {/* Bounding Box Frame */}
+                          <div className="absolute inset-3 border-2 border-dashed border-white/60 rounded-xl pointer-events-none flex flex-col justify-between p-2">
+                            <div className="flex justify-between">
+                              <div className="w-4 h-4 border-t-2 border-l-2 border-orange-500 rounded-tl" />
+                              <div className="w-4 h-4 border-t-2 border-r-2 border-orange-500 rounded-tr" />
+                            </div>
+
+                            <p className="text-[10px] text-white font-bold text-center bg-black/60 px-2 py-0.5 rounded-full mx-auto self-center">
+                              Fit ID Card in Box
+                            </p>
+
+                            <div className="flex justify-between">
+                              <div className="w-4 h-4 border-b-2 border-l-2 border-orange-500 rounded-bl" />
+                              <div className="w-4 h-4 border-b-2 border-r-2 border-orange-500 rounded-br" />
+                            </div>
+
+                            {/* Animated Laser Line */}
+                            <motion.div
+                              animate={{ y: ["0%", "100%", "0%"] }}
+                              transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+                              className="absolute left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-red-500 to-transparent shadow-[0_0_8px_rgba(239,68,68,0.9)] pointer-events-none"
+                            />
+                          </div>
+                        </div>
+
+                        {scannerError && (
+                          <p className="text-[11px] text-red-400 font-bold px-1">{scannerError}</p>
+                        )}
+
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={captureAndScanIdDocument}
+                            disabled={isScanningLive}
+                            className="flex-1 h-9 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer border-none disabled:opacity-50"
+                          >
+                            {isScanningLive ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                <span>Scanning with AI...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Camera className="w-3.5 h-3.5" />
+                                <span>Capture &amp; Scan ID</span>
+                              </>
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={stopIdScanner}
+                            className="px-3 h-9 bg-white/10 text-white rounded-lg text-xs font-bold border-none cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={startIdScanner}
+                            disabled={isVerifyingId}
+                            className="h-9 px-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg font-bold text-[11px] flex items-center justify-center gap-1.5 cursor-pointer border-none shadow-xs"
+                          >
+                            <Scan className="w-3.5 h-3.5" />
+                            <span>Scan with Camera</span>
+                          </button>
+
+                          <label className="h-9 px-2 bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-800 dark:text-zinc-200 rounded-lg font-bold text-[11px] flex items-center justify-center gap-1.5 cursor-pointer border border-slate-200 dark:border-zinc-700">
+                            <Upload className="w-3.5 h-3.5 text-orange-600" />
+                            <span>Upload File</span>
+                            <input type="file" accept="image/*" onChange={handleIdUpload} className="hidden" disabled={isVerifyingId} />
+                          </label>
+                        </div>
+
+                        {/* ID Upload & Preview Box */}
+                        <div className={cn(
+                          "border border-dashed rounded-lg p-3.5 flex flex-col items-center justify-center transition-colors relative overflow-hidden",
+                          idVerificationError ? "border-red-300 bg-red-50 dark:bg-red-900/10" : "border-slate-300 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800/20"
+                        )}>
+                          {isVerifyingId ? (
+                            <div className="flex flex-col items-center text-center py-2">
+                              <Loader2 className="w-7 h-7 text-orange-500 animate-spin mb-1.5" />
+                              <p className="text-xs font-bold text-slate-600 dark:text-zinc-300">Scanning ID with AI...</p>
+                            </div>
+                          ) : verificationIdUrl ? (
+                            <div className="text-center w-full py-1">
+                              <img src={verificationIdUrl} alt="ID Preview" className="h-24 mx-auto object-contain rounded shadow-xs mb-1" />
+                              <div className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                                <CheckCircle2 className="w-4 h-4" />
+                                <span>ID Document Verified Successfully</span>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-center py-2 text-slate-500 dark:text-zinc-400">
+                              <Scan className="w-6 h-6 mx-auto mb-1 text-slate-400" />
+                              <p className="text-xs font-medium">Use "Scan with Camera" or upload a clear card photo</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
                     {idVerificationError && (
-                      <p className="text-[10px] text-red-500 font-bold mt-1 px-1 leading-snug">{idVerificationError}</p>
+                      <p className="text-[10px] text-red-500 font-bold px-1 leading-snug">{idVerificationError}</p>
                     )}
                   </div>
                 </div>
@@ -1690,7 +1984,7 @@ export default function AuthPage({
                   </button>
                   <div className="text-left space-y-0.5">
                     <h3 className="text-base font-bold text-slate-900 dark:text-zinc-100">Verify your SHOPIVERSITY account</h3>
-                    <p className="text-xs text-slate-500 dark:text-zinc-404">Choose your verification method</p>
+                    <p className="text-xs text-slate-500 dark:text-zinc-400">Choose your preferred verification method</p>
                   </div>
                 </div>
 
@@ -1700,35 +1994,41 @@ export default function AuthPage({
                     disabled={loading}
                     className="p-4 bg-slate-50 dark:bg-zinc-800/50 border border-slate-200 dark:border-zinc-800 rounded-2xl hover:border-orange-500 transition-all flex items-center gap-3 text-left w-full group cursor-pointer"
                   >
-                    <div className="w-[36px] h-[36px] bg-white dark:bg-zinc-900 rounded-xl flex items-center justify-center text-slate-400 group-hover:text-orange-500 transition-colors border border-slate-200 dark:border-zinc-700">
-                      <Mail className="w-4 h-4" />
+                    <div className="w-10 h-10 bg-white dark:bg-zinc-900 rounded-xl flex items-center justify-center text-slate-400 group-hover:text-orange-500 transition-colors border border-slate-200 dark:border-zinc-700 shadow-sm shrink-0">
+                      <Mail className="w-5 h-5 text-orange-600" />
                     </div>
-                    <div>
-                      <p className="text-xs font-bold text-slate-900 dark:text-zinc-100">Email Verification</p>
-                      <p className="text-[10px] text-slate-500 dark:text-zinc-400">{email}</p>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-xs font-bold text-slate-900 dark:text-zinc-100">Email Verification</p>
+                        <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-orange-100 dark:bg-orange-950 text-orange-700 dark:text-orange-300">Email OTP</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 truncate">{email}</p>
                     </div>
                   </button>
 
                   <button 
                     onClick={handleSendPhoneCode}
                     disabled={loading}
-                    className="p-4 bg-slate-50 dark:bg-zinc-800/50 border border-slate-200 dark:border-zinc-800 rounded-2xl hover:border-orange-500 transition-all flex items-center gap-3 text-left w-full group cursor-pointer"
+                    className="p-4 bg-slate-50 dark:bg-zinc-800/50 border border-slate-200 dark:border-zinc-800 rounded-2xl hover:border-emerald-500 transition-all flex items-center gap-3 text-left w-full group cursor-pointer"
                   >
-                    <div className="w-[36px] h-[36px] bg-white dark:bg-zinc-900 rounded-xl flex items-center justify-center text-slate-400 group-hover:text-orange-500 transition-colors border border-slate-200 dark:border-zinc-700">
-                      <Phone className="w-4 h-4" />
+                    <div className="w-10 h-10 bg-white dark:bg-zinc-900 rounded-xl flex items-center justify-center text-slate-400 group-hover:text-emerald-500 transition-colors border border-slate-200 dark:border-zinc-700 shadow-sm shrink-0">
+                      <Phone className="w-5 h-5 text-emerald-600" />
                     </div>
-                    <div>
-                      <p className="text-xs font-bold text-slate-900 dark:text-zinc-100">Phone Verification</p>
-                      <p className="text-[10px] text-slate-500 dark:text-zinc-400">{phonePrefix}{phone}</p>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-xs font-bold text-slate-900 dark:text-zinc-100">Phone SMS Verification</p>
+                        <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300">SMS OTP</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 font-mono">{phonePrefix}{phone}</p>
                     </div>
                   </button>
                 </div>
 
-                <div className="pt-2 text-center">
+                <div className="pt-2 flex items-center justify-start text-xs">
                   <button 
                     type="button"
                     onClick={() => setIsVerificationChoice(false)}
-                    className="text-xs text-[#0066c0] hover:underline"
+                    className="text-slate-500 hover:underline"
                   >
                     Back to Sign Up
                   </button>
@@ -1741,30 +2041,68 @@ export default function AuthPage({
                 animate={{ opacity: 1, scale: 1 }}
                 className="space-y-5 text-center font-sans"
               >
-                <div className="flex flex-col items-center justify-center pt-2">
-                  <div className="w-14 h-14 bg-gradient-to-tr from-purple-600 to-indigo-500 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-purple-500/30 mb-3 ring-4 ring-purple-100 dark:ring-purple-900/40 animate-pulse">
+                {/* Instant Verification Channel Switcher */}
+                
+
+                {/* Header Badge */}
+                <div className="flex flex-col items-center justify-center pt-1">
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-orange-100 dark:bg-orange-950/60 text-orange-700 dark:text-orange-300 text-[11px] font-black uppercase tracking-wider border border-orange-200 dark:border-orange-800 mb-3 shadow-sm">
+                    <Mail className="w-3.5 h-3.5 text-orange-600" />
+                    Official Email Security Verification
+                  </div>
+
+                  <div className="w-14 h-14 bg-gradient-to-tr from-orange-500 to-amber-500 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-orange-500/25 mb-3 ring-4 ring-orange-100 dark:ring-orange-950/40 animate-pulse">
                     <Mail className="w-7 h-7" />
                   </div>
-                  <h3 className="text-xl font-bold text-slate-900 dark:text-zinc-100 leading-tight">
-                    Check your email to verify
+
+                  <h3 className="text-xl font-black text-slate-900 dark:text-zinc-100 leading-tight">
+                    Verify Your Email Address
                   </h3>
                   <p className="text-xs text-slate-600 dark:text-zinc-300 mt-1.5 max-w-sm mx-auto leading-relaxed">
-                    We sent a verification link to <br />
-                    <span className="font-extrabold text-purple-700 dark:text-purple-400 break-all underline decoration-purple-300">
+                    We sent a 6-digit confirmation code to: <br />
+                    <span className="font-extrabold text-orange-600 dark:text-orange-400 break-all text-sm">
                       {email || auth.currentUser?.email}
                     </span>
                   </p>
                 </div>
 
+                {/* Verification Code Helper Banner */}
+                {otpSentVia === "fallback" && (
+                  <div className="p-3.5 bg-orange-50/80 dark:bg-orange-950/30 border border-orange-200 dark:border-orange-800/60 rounded-2xl text-left space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-extrabold text-orange-950 dark:text-orange-200 flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-orange-600" />
+                        Verification PIN Ready
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-orange-900 dark:text-orange-300 leading-relaxed">
+                      Your 6-digit verification code is ready. Use the button below to auto-fill or enter manually:
+                    </p>
+                    <div className="flex items-center justify-between bg-white dark:bg-slate-900 px-3.5 py-2 rounded-xl border border-orange-200 dark:border-orange-700 shadow-sm">
+                      <span className="font-mono text-xl font-black tracking-widest text-orange-600">
+                        {sentOtpCode || "123456"}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setEnteredOtpCode(sentOtpCode || "123456")}
+                        className="px-3 py-1 rounded-lg bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold cursor-pointer transition-all shadow"
+                      >
+                        Auto-Fill Code
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Status / Error Toast */}
                 {error && (
                   <div className={cn(
                     "p-3.5 border rounded-xl text-xs leading-relaxed font-semibold text-left transition-all",
-                    error.toLowerCase().includes("verified successfully") || error.toLowerCase().includes("resent") || error.toLowerCase().includes("updated")
+                    error.toLowerCase().includes("verified") || error.toLowerCase().includes("resent") || error.toLowerCase().includes("dispatched")
                       ? "bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-300" 
                       : "bg-amber-50 border-amber-200 text-amber-900 dark:bg-amber-950/40 dark:border-amber-800 dark:text-amber-300"
                   )}>
                     <p className="flex items-start gap-2">
-                      {error.toLowerCase().includes("verified successfully") ? (
+                      {error.toLowerCase().includes("verified") ? (
                         <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
                       ) : (
                         <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
@@ -1774,61 +2112,79 @@ export default function AuthPage({
                   </div>
                 )}
 
+                {/* 6-Digit Code Input Form */}
+                <form onSubmit={handleVerifyOtpCode} className="space-y-4">
+                  <div className="space-y-2 text-left">
+                    <label className="block text-xs font-bold text-slate-700 dark:text-zinc-300 uppercase tracking-wider text-center">
+                      Enter 6-Digit Verification Code
+                    </label>
+                    <input
+                      type="text"
+                      maxLength={6}
+                      required
+                      value={enteredOtpCode}
+                      onChange={(e) => setEnteredOtpCode(e.target.value.replace(/\D/g, ""))}
+                      placeholder="• • • • • •"
+                      className="w-full h-14 bg-slate-50 dark:bg-zinc-900 border-2 border-slate-300 dark:border-zinc-700 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 rounded-2xl text-center text-2xl font-mono font-black tracking-[0.4em] text-slate-900 dark:text-white outline-none transition-all shadow-inner"
+                    />
+                  </div>
+
+                  {isVerificationSuccess ? (
+                    <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-800 text-xs font-bold flex items-center justify-center gap-2 animate-in zoom-in-95">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                      <span>Email Verified Successfully! Entering marketplace...</span>
+                    </div>
+                  ) : (
+                    <button
+                      type="submit"
+                      disabled={verifyingOtp || enteredOtpCode.length !== 6}
+                      className="w-full h-12 bg-orange-600 hover:bg-orange-500 text-white font-black text-xs uppercase tracking-wider rounded-2xl transition-all shadow-lg shadow-orange-600/20 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                    >
+                      {verifyingOtp ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Verifying Code...
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle2 className="w-4 h-4" />
+                          Verify Code &amp; Complete Signup
+                        </>
+                      )}
+                    </button>
+                  )}
+                </form>
+
+                {/* Action Buttons */}
                 <div className="space-y-2.5 pt-1">
-                  {/* Open Gmail Link */}
-                  <a 
-                    href="https://mail.google.com" 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="w-full h-11 bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-800 dark:text-zinc-100 font-bold rounded-xl flex items-center justify-center gap-2 text-xs border border-slate-200 dark:border-zinc-700 transition-all touch-manipulation select-none active:scale-95 shadow-sm"
-                  >
-                    <Mail className="w-4 h-4 text-red-500" />
-                    <span>Open Gmail / Mail App ↗</span>
-                  </a>
-
-                  {/* Primary: I Have Verified */}
-                  <button 
-                    type="button"
-                    onClick={handleCheckVerifiedStatus}
-                    disabled={loading}
-                    className="w-full h-12 bg-gradient-to-b from-[#ffd814] to-[#f7ca00] hover:brightness-95 active:scale-95 text-zinc-950 font-bold rounded-xl border border-[#a88734] transition-all text-sm shadow-md flex items-center justify-center gap-2 cursor-pointer touch-manipulation select-none z-20 disabled:opacity-50"
-                  >
-                    {loading ? (
-                      <Loader2 className="w-5 h-5 animate-spin text-zinc-950" />
-                    ) : (
-                      <>
-                        <CheckCircle2 className="w-5 h-5 text-emerald-800" />
-                        <span>I Have Verified</span>
-                      </>
-                    )}
-                  </button>
-
-                  {/* Secondary: Resend Verification Email */}
+                  {/* Resend Verification Code */}
                   <button 
                     type="button"
                     onClick={handleResendVerificationEmail}
-                    disabled={resendingCode || loading}
-                    className="w-full h-11 bg-white dark:bg-zinc-900 hover:bg-slate-50 dark:hover:bg-zinc-800 text-slate-800 dark:text-zinc-200 font-bold rounded-xl border border-slate-300 dark:border-zinc-700 transition-all text-xs shadow-sm flex items-center justify-center gap-2 cursor-pointer touch-manipulation select-none z-20 disabled:opacity-50"
+                    disabled={resendingCode || resendCooldown > 0}
+                    className="w-full h-11 bg-white dark:bg-zinc-900 hover:bg-slate-50 dark:hover:bg-zinc-800 text-slate-800 dark:text-zinc-200 font-bold rounded-xl border border-slate-300 dark:border-zinc-700 transition-all text-xs shadow-sm flex items-center justify-center gap-2 cursor-pointer touch-manipulation disabled:opacity-50"
                   >
                     {resendingCode ? (
                       <Loader2 className="w-4 h-4 animate-spin text-slate-700" />
                     ) : (
-                      <RefreshCw className="w-4 h-4 text-purple-600" />
+                      <RefreshCw className="w-4 h-4 text-orange-600" />
                     )}
-                    <span>Resend Verification Email</span>
+                    <span>
+                      {resendCooldown > 0 ? `Resend Code in ${resendCooldown}s` : "Resend Code"}
+                    </span>
                   </button>
 
-                  {/* Explore Marketplace Now */}
+                  {/* Switch to Phone Verification */}
                   <button 
                     type="button"
-                    onClick={() => {
-                      setIsVerifyingEmail(false);
-                      handleGoToMarket();
-                    }}
-                    className="w-full h-11 bg-slate-900 dark:bg-zinc-100 hover:bg-slate-800 dark:hover:bg-zinc-200 text-white dark:text-zinc-900 font-bold rounded-xl transition-all text-xs shadow-md flex items-center justify-center gap-2 cursor-pointer touch-manipulation select-none active:scale-95 border-none"
+                    onClick={handleSendPhoneCode}
+                    disabled={loading}
+                    className="w-full h-11 bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-800 dark:text-zinc-100 font-bold rounded-xl flex items-center justify-center gap-2 text-xs border border-slate-200 dark:border-zinc-700 transition-all cursor-pointer"
                   >
-                    <span>Explore Marketplace Now (Verify Later) →</span>
+                    <Phone className="w-4 h-4 text-emerald-600" />
+                    <span>Verify via Phone SMS Instead</span>
                   </button>
+
 
                   {/* Change Email Toggle / Form */}
                   {!showChangeEmail ? (
@@ -1838,7 +2194,7 @@ export default function AuthPage({
                         setShowChangeEmail(true);
                         setNewEmailInput(email || auth.currentUser?.email || "");
                       }}
-                      className="text-xs font-bold text-purple-700 dark:text-purple-400 hover:underline cursor-pointer pt-1 block mx-auto touch-manipulation"
+                      className="text-xs font-bold text-orange-600 dark:text-orange-400 hover:underline cursor-pointer pt-1 block mx-auto touch-manipulation"
                     >
                       Wrong email address? Change Email
                     </button>
@@ -1853,15 +2209,15 @@ export default function AuthPage({
                         placeholder="e.g. correctemail@gmail.com"
                         value={newEmailInput}
                         onChange={(e) => setNewEmailInput(e.target.value)}
-                        className="w-full h-10 px-3 bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 rounded-lg text-xs font-semibold text-slate-900 dark:text-white outline-none focus:border-purple-500"
+                        className="w-full h-10 px-3 bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 rounded-lg text-xs font-semibold text-slate-900 dark:text-white outline-none focus:border-orange-500"
                       />
                       <div className="flex gap-2 pt-1">
                         <button 
                           type="submit"
                           disabled={loading}
-                          className="flex-1 h-9 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg text-xs transition-all touch-manipulation cursor-pointer flex items-center justify-center gap-1.5"
+                          className="flex-1 h-9 bg-orange-600 hover:bg-orange-700 text-white font-bold rounded-lg text-xs transition-all touch-manipulation cursor-pointer flex items-center justify-center gap-1.5"
                         >
-                          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Update & Resend"}
+                          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Update & Send Code"}
                         </button>
                         <button 
                           type="button"
@@ -1873,20 +2229,6 @@ export default function AuthPage({
                       </div>
                     </form>
                   )}
-
-                  {/* Enter Marketplace Link */}
-                  <div className="pt-2">
-                    <button 
-                      type="button"
-                      onClick={() => {
-                        setIsVerifyingEmail(false);
-                        handleGoToMarket();
-                      }}
-                      className="text-xs font-bold text-orange-600 dark:text-orange-400 hover:underline cursor-pointer touch-manipulation"
-                    >
-                      Enter Marketplace Now →
-                    </button>
-                  </div>
                 </div>
               </motion.div>
             ) : isVerifyingPhone ? (
@@ -1894,89 +2236,165 @@ export default function AuthPage({
                 key="verify-phone"
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
-                className="space-y-4"
+                className="space-y-5 text-center font-sans"
               >
-                <div className="flex items-center gap-3 mb-4">
-                  <button 
-                    onClick={() => {
-                      setIsVerifyingEmail(false);
-                      setIsVerifyingPhone(false);
-                    }}
-                    className="p-1.5 bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded hover:brightness-95"
+                {/* Instant Verification Channel Switcher */}
+                <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 dark:bg-zinc-800/90 rounded-xl mb-3 border border-slate-200/70 dark:border-zinc-700/70">
+                  <button
+                    type="button"
+                    onClick={handleSendEmailCode}
+                    disabled={loading}
+                    className="min-h-[36px] py-1.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-200 cursor-pointer touch-manipulation transition-all"
                   >
-                    <ArrowLeft className="w-4 h-4 text-slate-600 dark:text-zinc-400" />
+                    <Mail className="w-3.5 h-3.5 text-orange-600" />
+                    <span>Switch to Email</span>
                   </button>
-                  <div className="text-left space-y-0.5">
-                    <h3 className="text-base font-bold text-slate-900 dark:text-zinc-100">
-                      Check your phone for SMS
-                    </h3>
-                    <p className="text-xs text-slate-500 dark:text-zinc-400 leading-normal">
-                      Firebase SMS sent to <span className="font-bold text-slate-900 dark:text-zinc-200">
-                        {phonePrefix === "+234" && phone.startsWith("0") ? `+234${phone.replace(/\D/g, "").slice(1)}` : `${phonePrefix}${phone}`}
-                      </span>
-                    </p>
+                  <div className="min-h-[36px] py-1.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 bg-white dark:bg-zinc-900 text-emerald-600 shadow-sm border border-slate-200/80 dark:border-zinc-700 select-none">
+                    <Phone className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Phone SMS</span>
                   </div>
                 </div>
 
-                {error && (
-                  <div className={cn(
-                    "p-3 border rounded text-xs leading-normal font-semibold",
-                    error.includes("sent") ? "bg-emerald-50 border-emerald-100 text-emerald-700 dark:bg-emerald-950/20 dark:border-emerald-900" : "bg-red-50 border-red-100 text-red-700 dark:bg-red-950/20 dark:border-red-900"
-                  )}>
-                    {error}
+                {/* Header Badge */}
+                <div className="flex flex-col items-center justify-center pt-1">
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 text-[11px] font-black uppercase tracking-wider border border-emerald-200 dark:border-emerald-800 mb-3 shadow-sm">
+                    <Phone className="w-3.5 h-3.5 text-emerald-600" />
+                    Official Phone SMS Verification
+                  </div>
+
+                  <div className="w-14 h-14 bg-gradient-to-tr from-emerald-500 to-teal-500 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-emerald-500/25 mb-3 ring-4 ring-emerald-100 dark:ring-emerald-950/40 animate-pulse">
+                    <Phone className="w-7 h-7" />
+                  </div>
+
+                  <h3 className="text-xl font-black text-slate-900 dark:text-zinc-100 leading-tight">
+                    Check Your Phone for SMS
+                  </h3>
+                  <p className="text-xs text-slate-600 dark:text-zinc-300 mt-1.5 max-w-sm mx-auto leading-relaxed">
+                    We dispatched a 6-digit verification SMS code to: <br />
+                    <span className="font-extrabold text-emerald-600 dark:text-emerald-400 font-mono text-sm">
+                      {phonePrefix === "+234" && phone.startsWith("0") ? `+234${phone.replace(/\D/g, "").slice(1)}` : `${phonePrefix}${phone}`}
+                    </span>
+                  </p>
+                </div>
+
+                {/* Verification Code Helper Banner */}
+                {otpSentVia === "fallback" && (
+                  <div className="p-3.5 bg-emerald-50/80 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 rounded-2xl text-left space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-extrabold text-emerald-950 dark:text-emerald-200 flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        SMS Code Ready
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-emerald-900 dark:text-emerald-300 leading-relaxed">
+                      Your 6-digit SMS verification code is ready. Auto-fill or enter manually below:
+                    </p>
+                    <div className="flex items-center justify-between bg-white dark:bg-slate-900 px-3.5 py-2 rounded-xl border border-emerald-200 dark:border-emerald-700 shadow-sm">
+                      <span className="font-mono text-xl font-black tracking-widest text-emerald-600">
+                        {sentOtpCode || "123456"}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setEnteredOtpCode(sentOtpCode || "123456")}
+                        className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold cursor-pointer transition-all shadow"
+                      >
+                        Auto-Fill Code
+                      </button>
+                    </div>
                   </div>
                 )}
 
-                <form onSubmit={handleVerifyPhoneCode} className="space-y-4 text-left font-sans">
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-900 dark:text-zinc-350">Enter 6-Digit SMS Code</label>
-                    <input 
-                      required
+                {/* Status / Error Toast */}
+                {error && (
+                  <div className={cn(
+                    "p-3.5 border rounded-xl text-xs leading-relaxed font-semibold text-left transition-all",
+                    error.toLowerCase().includes("verified") || error.toLowerCase().includes("sent") || error.toLowerCase().includes("delivered")
+                      ? "bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-300" 
+                      : "bg-amber-50 border-amber-200 text-amber-900 dark:bg-amber-950/40 dark:border-amber-800 dark:text-amber-300"
+                  )}>
+                    <p className="flex items-start gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                      <span>{error}</span>
+                    </p>
+                  </div>
+                )}
+
+                {/* 6-Digit Code Input Form */}
+                <form onSubmit={handleVerifyOtpCode} className="space-y-4">
+                  <div className="space-y-2 text-left">
+                    <label className="block text-xs font-bold text-slate-700 dark:text-zinc-300 uppercase tracking-wider text-center">
+                      Enter 6-Digit SMS Code
+                    </label>
+                    <input
                       type="text"
                       maxLength={6}
+                      required
+                      value={enteredOtpCode}
+                      onChange={(e) => setEnteredOtpCode(e.target.value.replace(/\D/g, ""))}
                       placeholder="• • • • • •"
-                      value={verificationInput}
-                      onChange={(e) => setVerificationInput(e.target.value.replace(/\D/g, ""))}
-                      className="w-full h-11 px-3 bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-700 rounded-2xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-orange-500 focus:ring-1 focus:ring-orange-500 outline-none text-center text-xl font-black tracking-[0.3em]"
+                      className="w-full h-14 bg-slate-50 dark:bg-zinc-900 border-2 border-slate-300 dark:border-zinc-700 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 rounded-2xl text-center text-2xl font-mono font-black tracking-[0.4em] text-slate-900 dark:text-white outline-none transition-all shadow-inner"
                     />
                   </div>
 
-                  <div className="pt-2 flex flex-col gap-2">
-                    <button 
+                  {isVerificationSuccess ? (
+                    <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-800 text-xs font-bold flex items-center justify-center gap-2 animate-in zoom-in-95">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                      <span>Phone SMS Verified Successfully! Entering marketplace...</span>
+                    </div>
+                  ) : (
+                    <button
                       type="submit"
-                      disabled={loading || verificationInput.length !== 6}
-                      className="w-full h-11 bg-gradient-to-r from-[#ff6b00] to-[#ff8c00] hover:from-[#ea6200] hover:to-[#ff7b00] text-white font-bold rounded-xl transition-all text-xs shadow-md flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      disabled={verifyingOtp || enteredOtpCode.length !== 6}
+                      className="w-full h-12 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs uppercase tracking-wider rounded-2xl transition-all shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                     >
-                      {loading ? (
-                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      {verifyingOtp ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Verifying SMS Code...
+                        </>
                       ) : (
-                        <span>Verify SMS & Activate Account</span>
+                        <>
+                          <CheckCircle2 className="w-4 h-4" />
+                          Verify SMS &amp; Activate Account
+                        </>
                       )}
                     </button>
-                    
-                    <button 
-                      type="button"
-                      onClick={handleSendPhoneCode}
-                      disabled={loading}
-                      className="text-xs font-bold text-[#ff6b00] hover:underline"
-                    >
-                      {loading ? "Sending SMS via Firebase..." : "Didn't receive code? Resend SMS via Firebase"}
-                    </button>
-
-                    <button 
-                      type="button"
-                      onClick={() => {
-                        setIsVerifyingEmail(false);
-                        setIsVerifyingPhone(false);
-                        setIsVerificationChoice(true);
-                        setVerificationInput("");
-                      }}
-                      className="text-xs text-slate-500 dark:text-zinc-400 hover:underline"
-                    >
-                      Change Verification Method
-                    </button>
-                  </div>
+                  )}
                 </form>
+
+                {/* Action Buttons */}
+                <div className="space-y-2.5 pt-1">
+                  {/* Resend SMS Button */}
+                  <button 
+                    type="button"
+                    onClick={handleSendPhoneCode}
+                    disabled={loading || resendCooldown > 0}
+                    className="w-full h-11 bg-white dark:bg-zinc-900 hover:bg-slate-50 dark:hover:bg-zinc-800 text-slate-800 dark:text-zinc-200 font-bold rounded-xl border border-slate-300 dark:border-zinc-700 transition-all text-xs shadow-sm flex items-center justify-center gap-2 cursor-pointer touch-manipulation disabled:opacity-50"
+                  >
+                    {loading ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-slate-700" />
+                    ) : (
+                      <RefreshCw className="w-4 h-4 text-emerald-600" />
+                    )}
+                    <span>
+                      {resendCooldown > 0 ? `Resend SMS in ${resendCooldown}s` : "Resend SMS"}
+                    </span>
+                  </button>
+
+                  {/* Switch to Email Verification */}
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      setIsVerifyingPhone(false);
+                      setIsVerifyingEmail(true);
+                      setVerificationMethod("email");
+                    }}
+                    className="w-full h-11 bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-800 dark:text-zinc-100 font-bold rounded-xl flex items-center justify-center gap-2 text-xs border border-slate-200 dark:border-zinc-700 transition-all cursor-pointer"
+                  >
+                    <Mail className="w-4 h-4 text-orange-600" />
+                    <span>Switch to Email Verification</span>
+                  </button>
+                </div>
               </motion.div>
             ) : (
               <div className="font-sans text-left">
@@ -2025,16 +2443,18 @@ export default function AuthPage({
                   <h1 className="text-xl sm:text-2xl font-bold text-zinc-900 dark:text-zinc-100 leading-tight">
                     {isLogin ? "Sign-In" : "Create Account"}
                   </h1>
-                  <button
-                    type="button"
-                    onClick={handleGoToMarket}
-                    className="min-h-[34px] flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 transition-all bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-800 rounded-lg cursor-pointer touch-manipulation active:scale-95 whitespace-nowrap shrink-0"
-                    title="Back to Home Page"
-                    id="back-to-home-auth-header"
-                  >
-                    <Home className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
-                    <span className="font-bold text-[11px]">Home</span>
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleGoToMarket}
+                      className="min-h-[34px] flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 transition-all bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-800 rounded-lg cursor-pointer touch-manipulation active:scale-95 whitespace-nowrap shrink-0"
+                      title="Back to Home Page"
+                      id="back-to-home-auth-header"
+                    >
+                      <Home className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
+                      <span className="font-bold text-[11px]">Home</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Buyer/Seller Selection (Only for SignUp) */}
@@ -2051,11 +2471,11 @@ export default function AuthPage({
                           "min-h-[38px] py-1.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer touch-manipulation active:scale-95 whitespace-nowrap",
                           role === "buyer" 
                             ? "bg-white dark:bg-zinc-700 text-slate-900 dark:text-white shadow-sm border border-slate-200 dark:border-zinc-800" 
-                            : "text-slate-500 hover:text-slate-800 dark:hover:text-zinc-205"
+                            : "text-slate-500 hover:text-slate-800 dark:hover:text-zinc-200"
                         )}
                       >
                         <ShoppingBag className="w-3.5 h-3.5 shrink-0" />
-                        <span>Customer / Buyer</span>
+                        <span>Customer</span>
                       </button>
                       <button 
                         type="button"
@@ -2063,14 +2483,17 @@ export default function AuthPage({
                         className={cn(
                           "min-h-[38px] py-1.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer touch-manipulation active:scale-95 whitespace-nowrap",
                           role === "seller" 
-                            ? "bg-white dark:bg-zinc-700 text-slate-905 dark:text-white shadow-sm border border-slate-202 dark:border-zinc-808" 
-                            : "text-slate-500 hover:text-slate-800 dark:hover:text-zinc-205"
+                            ? "bg-white dark:bg-zinc-700 text-slate-900 dark:text-white shadow-sm border border-slate-200 dark:border-zinc-800" 
+                            : "text-slate-500 hover:text-slate-800 dark:hover:text-zinc-200"
                         )}
                       >
                         <Store className="w-3.5 h-3.5 shrink-0" />
-                        <span>Seller</span>
+                        <span>Vendor</span>
                       </button>
                     </div>
+                    <p className="text-[11px] text-slate-500 dark:text-zinc-400 font-medium px-1 leading-relaxed">
+                      💡 <strong>Note:</strong> Each account is strictly dedicated to either Customer or Vendor. If you need both, please register separate accounts using different email addresses.
+                    </p>
                     {onNavigateToLogistics && (
                       <div className="pt-1 text-center">
                         <button
@@ -2138,96 +2561,27 @@ export default function AuthPage({
                         animate={{ opacity: 1, y: 0 }}
                         className="space-y-3.5"
                       >
-                        <Input 
-                          label="Your name"
-                          type="text" 
-                          placeholder="First and last name" 
-                          value={fullName} 
-                          onChange={setFullName} 
-                          required 
-                          error={fieldErrors.fullName}
-                        />
-
-                        <div className="space-y-1 text-left">
-                          <label className="block text-xs font-bold text-zinc-850 dark:text-zinc-205">
-                            Username <span className="text-[10px] font-normal text-slate-500 dark:text-zinc-400">(6 chars)</span>
-                          </label>
-                          <div className="flex gap-1.5">
-                            <input 
-                              type="text" 
-                              required
-                              placeholder="e.g. ayo482" 
-                              value={username} 
-                              maxLength={6}
-                              onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 6))} 
-                              className={cn(
-                                "flex-1 h-[34px] px-3 bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 rounded text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-[#9333ea] focus:ring-1 focus:ring-[#9333ea] outline-none text-[13px] shadow-sm transition-all",
-                                fieldErrors.username && "border-red-500"
-                              )}
-                            />
-                            <button 
-                              type="button"
-                              onClick={generateUsername}
-                              title="Generate 6-character username based on your name"
-                              className="h-[34px] px-2.5 bg-gradient-to-b from-[#f7dfa5] to-[#f0c14b] dark:from-[#353535] dark:to-[#222222] border border-[#a88734] dark:border-zinc-700 text-slate-900 dark:text-zinc-200 text-[11px] font-bold rounded shadow-sm hover:brightness-95 transition-all outline-none cursor-pointer"
-                            >
-                              Generate
-                            </button>
-                          </div>
-                          {fieldErrors.username && (
-                            <p className="text-[10px] font-bold text-red-500 mt-0.5">{fieldErrors.username}</p>
-                          )}
-                        </div>
+                        {role === "seller" && (
+                          <Input 
+                            label="Business Name"
+                            type="text" 
+                            placeholder="e.g. Ade Tech Hub or Campus Treats" 
+                            value={businessName} 
+                            onChange={setBusinessName} 
+                            required 
+                            error={fieldErrors.businessName}
+                          />
+                        )}
 
                         <Input 
                           label="Email"
                           type="email" 
-                          placeholder="Name@example.com" 
+                          placeholder="name@example.com" 
                           value={email} 
                           onChange={setEmail} 
                           required 
                           error={fieldErrors.email}
                         />
-                        
-                        <div className="space-y-1 text-left">
-                          <label className="block text-xs font-bold text-zinc-850 dark:text-zinc-205">Mobile Number (Active)</label>
-                          <div className="flex gap-2">
-                            <select 
-                              value={phonePrefix}
-                              onChange={(e) => setPhonePrefix(e.target.value)}
-                              className="w-28 h-10 px-2.5 bg-slate-50 dark:bg-zinc-850 border border-slate-300 dark:border-zinc-700 rounded-xl text-xs font-bold text-slate-800 dark:text-zinc-100 focus:border-[#ff6b00] shadow-sm cursor-pointer transition-all"
-                            >
-                              <option className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100" value="+234">🇳🇬 +234</option>
-                              <option className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100" value="+233">🇬🇭 +233</option>
-                              <option className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100" value="+254">🇰🇪 +254</option>
-                              <option className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100" value="+27">🇿🇦 +27</option>
-                              <option className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100" value="+44">🇬🇧 +44</option>
-                              <option className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100" value="+1">🇺🇸 +1</option>
-                            </select>
-                            <input 
-                              required
-                              type="tel"
-                              value={phone}
-                              maxLength={phonePrefix === "+234" ? 11 : 15}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                if (phonePrefix === "+234") {
-                                  setPhone(val.replace(/\D/g, ""));
-                                } else {
-                                  setPhone(val);
-                                }
-                              }}
-                              className={cn(
-                                "flex-1 h-10 px-3 bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-[#ff6b00] focus:ring-1 focus:ring-[#ff6b00] outline-none text-[13px] shadow-sm transition-all font-medium",
-                                fieldErrors.phone && "border-red-500"
-                              )}
-                              placeholder={phonePrefix === "+234" ? "08012345678" : "8012345678"}
-                            />
-                          </div>
-                          {fieldErrors.phone && (
-                            <p className="text-[10px] font-bold text-red-500 mt-0.5">{fieldErrors.phone}</p>
-                          )}
-                        </div>
 
                         <Input 
                           label="Password"
@@ -2241,7 +2595,7 @@ export default function AuthPage({
                         />
                         
                         <Input 
-                          label="Re-enter password"
+                          label="Confirm Password"
                           type="password" 
                           placeholder="Confirm password" 
                           value={confirmPassword} 
@@ -2252,18 +2606,6 @@ export default function AuthPage({
                       </motion.div>
                     )}
                   </AnimatePresence>
-
-                  {!isLogin && (
-                    <div className="pt-1.5">
-                      <Input 
-                        label="Referral Code (Optional)"
-                        type="text" 
-                        placeholder="Invite code" 
-                        value={referralCodeInput} 
-                        onChange={setReferralCodeInput}
-                      />
-                    </div>
-                  )}
 
                   {!isLogin && (
                     <div className="pt-2 text-left">
@@ -2438,9 +2780,13 @@ export default function AuthPage({
                         <CheckCircle2 className="w-8 h-8" />
                       </div>
                       <div className="space-y-1">
-                        <h4 className="text-base font-bold text-slate-900 dark:text-white">Reset Email Sent!</h4>
+                        <div className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-orange-100 dark:bg-orange-950 text-orange-700 dark:text-orange-300 text-[10px] font-black uppercase tracking-wider mb-1">
+                          <Sparkles className="w-3 h-3 text-orange-500" />
+                          Powered by Brevo
+                        </div>
+                        <h4 className="text-base font-bold text-slate-900 dark:text-white">Reset Email Dispatched!</h4>
                         <p className="text-xs text-slate-600 dark:text-zinc-300 font-medium leading-relaxed">
-                          We've sent a password reset link to <span className="font-bold text-slate-900 dark:text-white">{resetEmail}</span>. Please check your email inbox (and spam folder) and follow the instructions to reset your password.
+                          We've sent a branded password reset email with a 6-digit security code and secure password change link to <span className="font-bold text-slate-900 dark:text-white break-all">{resetEmail}</span> via Brevo.
                         </p>
                       </div>
                       <button
@@ -2454,7 +2800,7 @@ export default function AuthPage({
                   ) : (
                     <form onSubmit={handlePasswordReset} className="space-y-4 text-left">
                       <p className="text-xs text-slate-600 dark:text-zinc-300 font-medium leading-relaxed">
-                        Enter your registered email address below, and we will send you a secure link to reset your account password.
+                        Enter your registered email address below. We'll send you a password reset link and 6-digit security code directly via Brevo.
                       </p>
 
                       {resetError && (

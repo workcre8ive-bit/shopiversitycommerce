@@ -1,5 +1,5 @@
 import React from "react";
-import { ShieldCheck, HelpCircle, Heart, Store, FileText, ArrowRight, Sparkles, AlertCircle, Cookie, RotateCcw, Mail, MapPin } from "lucide-react";
+import { ShieldCheck, HelpCircle, Heart, Store, FileText, ArrowRight, Sparkles, AlertCircle, Cookie, RotateCcw, MapPin } from "lucide-react";
 import Logo from "./Logo";
 
 interface FooterProps {
@@ -26,12 +26,6 @@ export default function Footer({ setActiveTab, activeTab, onOpenCookieSettings }
               <div className="flex items-start gap-2">
                 <MapPin className="w-3.5 h-3.5 text-[#ff6b00] shrink-0 mt-0.5" />
                 <span>Shopiversity Technologies Ltd. • Serving Universities Nationwide, Nigeria</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Mail className="w-3.5 h-3.5 text-[#ff6b00] shrink-0" />
-                <a href="mailto:tommzypolaris@gmail.com" className="hover:text-white transition-colors underline">
-                  tommzypolaris@gmail.com
-                </a>
               </div>
             </div>
 

@@ -36,12 +36,108 @@ async function startServer() {
   const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
   const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 
-  // Brevo Transactional Email Engine Configuration & Runtime Store
+  // Brevo Transactional Email & SMS Engine Configuration & Persistent Store
+  const BREVO_CONFIG_FILE = path.join(process.cwd(), "brevo-config.json");
   let runtimeBrevoConfig = {
     apiKey: process.env.BREVO_API_KEY || "",
     senderEmail: process.env.BREVO_SENDER_EMAIL || "shopiversitycommerce@gmail.com",
-    senderName: process.env.BREVO_SENDER_NAME || "SHOPIVERSITY Campus Marketplace"
+    senderName: process.env.BREVO_SENDER_NAME || "SHOPIVERSITY Campus Marketplace",
+    smsSender: process.env.BREVO_SMS_SENDER || "SHOPIV"
   };
+
+  // Load saved Brevo config from disk if available
+  try {
+    if (fs.existsSync(BREVO_CONFIG_FILE)) {
+      const savedConfig = JSON.parse(fs.readFileSync(BREVO_CONFIG_FILE, "utf-8"));
+      runtimeBrevoConfig = { ...runtimeBrevoConfig, ...savedConfig };
+      console.log("[BREVO PERSISTENCE] Loaded active Brevo settings from brevo-config.json:", {
+        configured: Boolean(runtimeBrevoConfig.apiKey),
+        senderEmail: runtimeBrevoConfig.senderEmail,
+        senderName: runtimeBrevoConfig.senderName,
+        smsSender: runtimeBrevoConfig.smsSender
+      });
+    }
+  } catch (persErr) {
+    console.warn("[BREVO PERSISTENCE] Could not load brevo-config.json:", persErr);
+  }
+
+  // In-memory OTP code store (Email & Phone verification, password resets)
+  interface StoredVerificationCode {
+    code: string;
+    target: string; // email or phone
+    type: "email" | "phone" | "password_reset";
+    expiresAt: number;
+    userName?: string;
+  }
+  const verificationCodesStore = new Map<string, StoredVerificationCode>();
+
+  /**
+   * Brevo Transactional SMS Sender (v3)
+   * Sends real SMS worldwide using Brevo's Transactional SMS Gateway
+   */
+  async function sendBrevoSMS(options: {
+    recipient: string;
+    content: string;
+    sender?: string;
+    customApiKey?: string;
+  }): Promise<{ success: boolean; provider: string; messageId?: string; error?: string; raw?: any }> {
+    const activeKey = (options.customApiKey || runtimeBrevoConfig.apiKey || process.env.BREVO_API_KEY || "").trim();
+    let sender = (options.sender || runtimeBrevoConfig.smsSender || "SHOPIV").trim().replace(/[^a-zA-Z0-9]/g, "").slice(0, 11);
+    if (!sender || sender.length < 3) sender = "SHOPIV";
+
+    // Format recipient into standard international E.164
+    let cleanRecipient = options.recipient.replace(/[\s\-\(\)]/g, "");
+    if (!cleanRecipient.startsWith("+")) {
+      if (cleanRecipient.startsWith("0") && cleanRecipient.length === 11) {
+        cleanRecipient = `+234${cleanRecipient.slice(1)}`;
+      } else {
+        cleanRecipient = `+${cleanRecipient}`;
+      }
+    }
+
+    if (!activeKey) {
+      console.log(`[BREVO SMS NOTICE] Brevo API Key not configured. Using fallback OTP mode for ${cleanRecipient}.`);
+      return { success: false, provider: "none", error: "Brevo API Key not configured. Please connect your Brevo account." };
+    }
+
+    try {
+      console.log(`[BREVO SMS DISPATCHER] Dispatching SMS to ${cleanRecipient} (Sender: ${sender})`);
+      const brevoSmsPayload = {
+        sender,
+        recipient: cleanRecipient,
+        content: options.content,
+        type: "transactional"
+      };
+
+      const res = await axios.post("https://api.brevo.com/v3/transactionalSMS/sms", brevoSmsPayload, {
+        headers: {
+          "accept": "application/json",
+          "api-key": activeKey,
+          "content-type": "application/json"
+        },
+        timeout: 10000
+      });
+
+      const messageId = res.data?.messageId || res.data?.reference || `SMS_${Date.now()}`;
+      console.log(`[BREVO SMS SUCCESS] SMS dispatched to ${cleanRecipient}! MessageId: ${messageId}`);
+      return {
+        success: true,
+        provider: "brevo",
+        messageId,
+        raw: res.data
+      };
+    } catch (smsErr: any) {
+      const errData = smsErr.response?.data;
+      const msg = errData?.message || smsErr.message || "Unknown Brevo SMS error";
+      console.warn(`[BREVO SMS ERROR] Failed sending SMS: ${msg}`, errData || "");
+      return {
+        success: false,
+        provider: "brevo",
+        error: `Brevo SMS: ${msg}`,
+        raw: errData
+      };
+    }
+  }
 
   /**
    * Unified Email Sender
@@ -202,13 +298,14 @@ async function startServer() {
       maskedKey,
       senderEmail: runtimeBrevoConfig.senderEmail,
       senderName: runtimeBrevoConfig.senderName,
+      smsSender: runtimeBrevoConfig.smsSender,
       provider: "brevo",
       activeFallback: Boolean(process.env.RESEND_API_KEY || (process.env.SMTP_HOST && process.env.SMTP_USER))
     });
   });
 
   app.post("/api/brevo/save-config", (req, res) => {
-    const { apiKey, senderEmail, senderName } = req.body;
+    const { apiKey, senderEmail, senderName, smsSender } = req.body;
     if (apiKey !== undefined) {
       runtimeBrevoConfig.apiKey = String(apiKey).trim();
     }
@@ -218,15 +315,26 @@ async function startServer() {
     if (senderName) {
       runtimeBrevoConfig.senderName = String(senderName).trim();
     }
+    if (smsSender) {
+      runtimeBrevoConfig.smsSender = String(smsSender).trim().replace(/[^a-zA-Z0-9]/g, "").slice(0, 11) || "SHOPIV";
+    }
 
-    console.log(`[BREVO CONFIG UPDATED] Sender: ${runtimeBrevoConfig.senderName} <${runtimeBrevoConfig.senderEmail}>, Key Set: ${Boolean(runtimeBrevoConfig.apiKey)}`);
+    try {
+      fs.writeFileSync(BREVO_CONFIG_FILE, JSON.stringify(runtimeBrevoConfig, null, 2), "utf-8");
+      console.log(`[BREVO PERSISTENCE] Persisted Brevo settings to ${BREVO_CONFIG_FILE}`);
+    } catch (saveErr) {
+      console.warn(`[BREVO PERSISTENCE ERROR] Failed saving ${BREVO_CONFIG_FILE}:`, saveErr);
+    }
+
+    console.log(`[BREVO CONFIG UPDATED] Sender: ${runtimeBrevoConfig.senderName} <${runtimeBrevoConfig.senderEmail}>, SMS: ${runtimeBrevoConfig.smsSender}, Key Set: ${Boolean(runtimeBrevoConfig.apiKey)}`);
 
     return res.status(200).json({
       success: true,
-      message: "Brevo configuration saved successfully",
+      message: "Brevo configuration saved and permanently persisted!",
       configured: Boolean(runtimeBrevoConfig.apiKey),
       senderEmail: runtimeBrevoConfig.senderEmail,
-      senderName: runtimeBrevoConfig.senderName
+      senderName: runtimeBrevoConfig.senderName,
+      smsSender: runtimeBrevoConfig.smsSender
     });
   });
 
@@ -305,8 +413,18 @@ async function startServer() {
       return res.status(400).json({ error: "Email and code are required" });
     }
 
-    const targetEmail = email.trim();
-    console.log(`[VERIFICATION ENGINE] Dispatching verification code ${code} to: ${targetEmail}`);
+    const targetEmail = email.trim().toLowerCase();
+    const cleanCode = String(code).trim();
+    console.log(`[VERIFICATION ENGINE] Dispatching verification code ${cleanCode} to: ${targetEmail}`);
+
+    // Store in verification store with 15-minute validity
+    verificationCodesStore.set(targetEmail, {
+      code: cleanCode,
+      target: targetEmail,
+      type: "email",
+      expiresAt: Date.now() + 15 * 60 * 1000,
+      userName: userName || "Student"
+    });
 
     const htmlContent = `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
@@ -323,7 +441,7 @@ async function startServer() {
             Welcome ${userName ? `<strong>${userName}</strong>` : "to SHOPIVERSITY"}! Please enter the 6-digit confirmation code below to activate your student account:
           </p>
           <div style="background-color: #ffffff; padding: 20px 32px; display: inline-block; border-radius: 16px; border: 2px dashed #ff6b00; box-shadow: 0 10px 20px -3px rgba(255, 107, 0, 0.15);">
-            <span style="font-size: 38px; font-weight: 900; letter-spacing: 12px; color: #ff6b00; font-family: monospace;">${code}</span>
+            <span style="font-size: 38px; font-weight: 900; letter-spacing: 12px; color: #ff6b00; font-family: monospace;">${cleanCode}</span>
           </div>
           <p style="color: #94a3b8; font-size: 11px; margin-top: 16px; margin-bottom: 0;">Code expires in 15 minutes.</p>
         </div>
@@ -341,18 +459,18 @@ async function startServer() {
 
     const dispatchResult = await sendBrevoOrFallbackEmail({
       to: targetEmail,
-      subject: `${code} is your SHOPIVERSITY Verification Code`,
+      subject: `${cleanCode} is your SHOPIVERSITY Verification Code`,
       htmlContent,
       tags: ["verification", "signup-auth"]
     });
 
     if (!dispatchResult.success) {
-      console.log(`[VERIFICATION ENGINE] Brevo/email unavailable, enabling seamless fallback code: ${code}`);
+      console.log(`[VERIFICATION ENGINE] Brevo/email unavailable, enabling seamless fallback code: ${cleanCode}`);
       return res.status(200).json({
         success: true,
         sent: false,
         fallback: true,
-        code,
+        code: cleanCode,
         message: "Verification code generated.",
         notice: "Verification code generated and auto-filled for quick entry.",
         targetEmail
@@ -362,10 +480,159 @@ async function startServer() {
     return res.status(200).json({
       success: true,
       sent: true,
+      code: cleanCode,
       provider: dispatchResult.provider,
       messageId: dispatchResult.messageId,
       message: `Verification email sent directly to ${targetEmail} via ${dispatchResult.provider.toUpperCase()}`,
       targetEmail
+    });
+  });
+
+  // API Routes: 1b. Phone SMS Verification Endpoint (Powered by Brevo Transactional SMS)
+  app.post("/api/send-phone-verification", async (req, res) => {
+    const { phoneNumber, code, userName } = req.body;
+
+    if (!phoneNumber) {
+      return res.status(400).json({ error: "Phone number is required." });
+    }
+
+    let cleanPhone = String(phoneNumber).replace(/[\s\-\(\)]/g, "");
+    if (!cleanPhone.startsWith("+")) {
+      if (cleanPhone.startsWith("0") && cleanPhone.length === 11) {
+        cleanPhone = `+234${cleanPhone.slice(1)}`;
+      } else {
+        cleanPhone = `+${cleanPhone}`;
+      }
+    }
+
+    const verificationCode = code ? String(code).trim() : Math.floor(100000 + Math.random() * 900000).toString();
+    console.log(`[PHONE VERIFICATION] Sending SMS code ${verificationCode} to: ${cleanPhone}`);
+
+    // Store in verification store
+    verificationCodesStore.set(cleanPhone, {
+      code: verificationCode,
+      target: cleanPhone,
+      type: "phone",
+      expiresAt: Date.now() + 15 * 60 * 1000,
+      userName: userName || "Student"
+    });
+
+    const smsContent = `Your SHOPIVERSITY verification code is ${verificationCode}. Valid for 15 minutes. Never share this code.`;
+
+    const smsResult = await sendBrevoSMS({
+      recipient: cleanPhone,
+      content: smsContent
+    });
+
+    if (!smsResult.success) {
+      console.log(`[PHONE VERIFICATION NOTICE] Brevo SMS response:`, smsResult.error);
+      return res.status(200).json({
+        success: true,
+        sent: false,
+        fallback: true,
+        code: verificationCode,
+        phoneNumber: cleanPhone,
+        message: "SMS verification code generated.",
+        notice: smsResult.error?.includes("credits")
+          ? "Brevo SMS requires transactional credits. For testing, auto-fill code is provided."
+          : (smsResult.error || "SMS generated in test mode for immediate verification.")
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      sent: true,
+      provider: "brevo",
+      messageId: smsResult.messageId,
+      code: verificationCode,
+      phoneNumber: cleanPhone,
+      message: `SMS verification code dispatched via Brevo to ${cleanPhone}`
+    });
+  });
+
+  // API Routes: 1c. Universal OTP Code Verification Endpoint
+  app.post("/api/verify-code", (req, res) => {
+    const { identifier, code } = req.body;
+
+    if (!identifier || !code) {
+      return res.status(400).json({ success: false, error: "Identifier (email/phone) and 6-digit code are required." });
+    }
+
+    const cleanId = String(identifier).trim().toLowerCase();
+    const cleanPhoneId = String(identifier).replace(/[\s\-\(\)]/g, "");
+    const cleanCode = String(code).trim();
+
+    // Check by email or phone variant
+    const record = verificationCodesStore.get(cleanId) || 
+                   verificationCodesStore.get(cleanPhoneId) ||
+                   (cleanPhoneId.startsWith("0") ? verificationCodesStore.get(`+234${cleanPhoneId.slice(1)}`) : undefined);
+
+    if (!record) {
+      return res.status(400).json({ 
+        success: false, 
+        verified: false, 
+        error: "Verification code expired or not found. Please click 'Resend Code'." 
+      });
+    }
+
+    if (Date.now() > record.expiresAt) {
+      verificationCodesStore.delete(cleanId);
+      return res.status(400).json({ 
+        success: false, 
+        verified: false, 
+        error: "Verification code has expired. Please request a fresh code." 
+      });
+    }
+
+    if (record.code !== cleanCode) {
+      return res.status(400).json({ 
+        success: false, 
+        verified: false, 
+        error: "Incorrect 6-digit code. Please check and try again." 
+      });
+    }
+
+    // Code matches!
+    verificationCodesStore.delete(cleanId);
+    return res.status(200).json({
+      success: true,
+      verified: true,
+      message: "Code successfully verified!",
+      target: record.target,
+      type: record.type
+    });
+  });
+
+  // Brevo Test SMS Endpoint
+  app.post("/api/brevo/test-sms", async (req, res) => {
+    const { phoneNumber, customApiKey, smsSender } = req.body;
+
+    if (!phoneNumber) {
+      return res.status(400).json({ success: false, error: "Phone number is required." });
+    }
+
+    const testCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const smsContent = `[SHOPIVERSITY] Test SMS from Brevo Gateway. Your system is connected! Test Code: ${testCode}`;
+
+    const result = await sendBrevoSMS({
+      recipient: phoneNumber,
+      content: smsContent,
+      sender: smsSender,
+      customApiKey
+    });
+
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: result.error || "Failed to dispatch test SMS via Brevo.",
+        raw: result.raw
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Test SMS successfully sent to ${phoneNumber} via Brevo!`,
+      messageId: result.messageId
     });
   });
 
@@ -502,6 +769,15 @@ async function startServer() {
     const targetEmail = email.trim();
     const resetCode = code || Math.floor(100000 + Math.random() * 900000).toString();
     console.log(`[PASSWORD SECURITY] Sending password change/reset code to ${targetEmail}`);
+
+    // Store in verificationCodesStore for OTP validation
+    verificationCodesStore.set(targetEmail.toLowerCase(), {
+      code: String(resetCode).trim(),
+      target: targetEmail.toLowerCase(),
+      type: "password_reset",
+      expiresAt: Date.now() + 15 * 60 * 1000,
+      userName: userName || ""
+    });
 
     const htmlContent = `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
@@ -1042,7 +1318,7 @@ You MUST respond ONLY with a JSON object containing the exact fields below:
       contents.push({ text: systemPrompt });
 
       const response = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
+        model: "gemini-2.5-flash",
         contents,
         config: {
           tools: [{ googleSearch: {} }],
@@ -1167,7 +1443,7 @@ Return JSON in this EXACT format:
       }
 
       const response = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
+        model: "gemini-2.5-flash",
         contents: {
           parts: [
             { inlineData: { data: base64Clean, mimeType } },
@@ -1254,7 +1530,7 @@ Return JSON in this EXACT format:
       }
 
       const response = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
+        model: "gemini-2.5-flash",
         contents: {
           parts: [
             { inlineData: { data: base64Clean, mimeType } },
@@ -1306,7 +1582,7 @@ Return JSON in this EXACT format:
       const prompt = `Generate a professional, engaging, and concise product description for a ${type || 'product'} named "${name}" in the "${category || 'general'}" category for a campus student marketplace. Focus on benefits and key features. Keep it under 150 words. Do not use markdown formatting like bold or bullet points, just plain text.`;
       
       const response = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
+        model: "gemini-2.5-flash",
         contents: prompt
       });
 
@@ -1413,7 +1689,7 @@ Return ONLY a JSON object:
       contents.push({ text: prompt });
 
       const response = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
+        model: "gemini-2.5-flash",
         contents,
         config: {
           responseMimeType: "application/json",
@@ -2780,7 +3056,10 @@ const FALLBACK_BANKS = [
         reasonCategory,
         reason,
         evidenceDetails,
-        evidenceFileUrl
+        evidenceFileUrl,
+        bankName,
+        accountNumber,
+        accountName
       } = req.body;
 
       if (!orderId || !buyerId || !reasonCategory || !reason) {
@@ -2816,6 +3095,9 @@ const FALLBACK_BANKS = [
         buyerRefundAmount,
         reasonCategory,
         reason,
+        bankName: bankName || null,
+        accountNumber: accountNumber || null,
+        accountName: accountName || null,
         evidenceDetails: evidenceDetails || "",
         evidenceFileUrl: evidenceFileUrl || null,
         status: "requested",
@@ -2830,13 +3112,16 @@ const FALLBACK_BANKS = [
         performedBy: buyerId,
         role: "buyer",
         actorName: buyerName || "Buyer",
-        notes: `Refund requested for ₦${amount.toLocaleString()} (Fee: ₦${refundFee.toLocaleString()}, Net: ₦${buyerRefundAmount.toLocaleString()}). Category: ${reasonCategory}. Reason: ${reason}`,
+        notes: `Refund requested for ₦${amount.toLocaleString()} (Fee: ₦${refundFee.toLocaleString()}, Net: ₦${buyerRefundAmount.toLocaleString()}). Bank: ${bankName || 'N/A'}, Account: ${accountNumber || 'N/A'}. Category: ${reasonCategory}. Reason: ${reason}`,
         metadata: {
           refundId,
           requestedAmount: amount,
           refundFee,
           buyerRefundAmount,
-          reasonCategory
+          reasonCategory,
+          bankName,
+          accountNumber,
+          accountName
         },
         timestamp: now
       };
@@ -2853,6 +3138,9 @@ const FALLBACK_BANKS = [
             buyerRefundAmount,
             refundReason: reason,
             refundReasonCategory: reasonCategory,
+            refundBankName: bankName || null,
+            refundAccountNumber: accountNumber || null,
+            refundAccountName: accountName || null,
             refundEvidenceDetails: evidenceDetails || "",
             refundEvidenceUrl: evidenceFileUrl || null,
             refundCreatedAt: now,

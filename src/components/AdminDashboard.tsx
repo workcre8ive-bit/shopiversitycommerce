@@ -530,7 +530,7 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
           )}
         >
           <Mail className="w-4 h-4" />
-          Brevo Email Engine
+          Brevo Email &amp; SMS Gateway
         </button>
       </div>
 

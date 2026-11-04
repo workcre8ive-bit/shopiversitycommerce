@@ -1162,11 +1162,11 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                 </div>
               </div>
 
-              {/* Protection & Review Section */}
+              {/* 3-Day Protection & Refund Countdown Section */}
               {(effectiveStatus === "completed") && (
                 <div className="px-6 sm:px-8 pb-6 space-y-4">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {/* Complaint/Support Window */}
+                    {/* 3-Day Refund Countdown Card */}
                     <div className={cn(
                       "rounded-[2rem] p-6 border transition-all",
                       (order.paymentStatus === "paid" || order.paymentMethod === "online") && getComplaintCountdown(order) !== "expired" 
@@ -1182,9 +1182,9 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                             <ShieldCheck className="w-5 h-5" />
                           </div>
                           <div>
-                            <h5 className="text-[10px] font-black uppercase tracking-wider text-slate-900 dark:text-white">Active Buyer Protection</h5>
+                            <h5 className="text-[10px] font-black uppercase tracking-wider text-slate-900 dark:text-white">Active Customer Protection</h5>
                             <p className="text-[9px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">
-                              {(order.paymentStatus === "paid" || order.paymentMethod === "online") ? "72h Escrow Inspection Window" : "Payment Required for Escrow"}
+                              3-Day (72h) Refund Guarantee Window
                             </p>
                           </div>
                         </div>
@@ -1198,42 +1198,38 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                               <div className="w-2 h-2 bg-amber-500 rounded-full" />
                               {getComplaintCountdown(order)}
                             </div>
-                            <span className="text-[8px] font-bold text-amber-500/50 uppercase tracking-widest">Countdown Active</span>
+                            <span className="text-[8px] font-bold text-amber-500/50 uppercase tracking-widest">3-Day Countdown Active</span>
                           </div>
                         ) : (
                           <div className="px-3 py-1 bg-slate-200 dark:bg-slate-800 text-slate-500 rounded-full text-[8px] font-black uppercase tracking-widest">
-                            72h Window Expired
+                            3-Day Window Expired
                           </div>
                         )}
                       </div>
                       
-                      <div className="space-y-4">
-                        <div className="p-4 bg-white/70 dark:bg-slate-900/50 rounded-2xl border border-slate-200/60 dark:border-slate-800/60 space-y-3">
-                           <div className="space-y-2">
-                             <p className="text-[10px] text-slate-600 dark:text-slate-400 font-medium leading-relaxed">
-                               <span className="font-black text-slate-900 dark:text-white uppercase mr-1">Term 2.1:</span> You have <strong>72 hours</strong> from delivery to inspect your order and raise a dispute if there are issues.
+                      <div className="space-y-3">
+                        <div className="p-4 bg-white/70 dark:bg-slate-900/50 rounded-2xl border border-slate-200/60 dark:border-slate-800/60 space-y-2.5">
+                           <div className="space-y-2 text-[11px] text-slate-600 dark:text-slate-400 font-medium leading-relaxed">
+                             <p>
+                               You have <strong>3 days (72 hours)</strong> from order completion to inspect your product and request a refund or raise a dispute if there are issues.
                              </p>
-                             <p className="text-[10px] text-slate-600 dark:text-slate-400 font-medium leading-relaxed">
-                               <span className="font-black text-slate-900 dark:text-white uppercase mr-1">Term 2.3:</span> If no dispute is raised for 72 hours, SHOPIVERSITY marks the order final and pays the seller.
-                             </p>
-                             {/* Off-platform payment implication point */}
-                             <div className="p-2.5 bg-red-50 dark:bg-red-950/30 border border-red-200/70 dark:border-red-900/40 rounded-xl text-[10px] text-red-700 dark:text-red-300 font-medium leading-relaxed">
-                               <span className="font-black uppercase mr-1">Term 7.2 & 1.4 (Off-Platform Payment Risk):</span> Never pay sellers or couriers outside the SHOPIVERSITY app (e.g. personal cash or direct transfers). Paying outside completely voids Escrow Protection and forfeits your 72-hour refund eligibility.
+                             <div className="p-2.5 bg-red-50 dark:bg-red-950/30 border border-red-200/70 dark:border-red-900/40 rounded-xl text-[10px] text-red-700 dark:text-red-300 font-semibold leading-relaxed">
+                               ⚠️ <strong>Non-Refundable Policy Exception:</strong> The 3-day refund guarantee is strictly in exception of perishable goods (fresh cooked campus meals, fast food, groceries) or goods that are tampered with or consumed.
                              </div>
                            </div>
                            <div className="flex items-center gap-2 text-[9px] text-amber-600/80 font-bold italic border-t border-amber-100/50 pt-2">
                               <Info className="w-3 h-3 shrink-0" />
-                              Governed by SHOPIVERSITY 72-Hour Escrow & Security Rules
+                              Governed by SHOPIVERSITY 3-Day Escrow & Consumer Protection Rules
                            </div>
                         </div>
 
-                        {(order.paymentStatus === "paid" || order.paymentMethod === "online") && getComplaintCountdown(order) !== "expired" && (!order.disputeStatus || order.disputeStatus === "none") && (
+                        {(order.paymentStatus === "paid" || order.paymentMethod === "online") && getComplaintCountdown(order) !== "expired" && (!order.refundStatus || order.refundStatus === "none" || order.refundStatus === "rejected") && (
                           <button
-                            onClick={() => setDisputeModalOrder(order)}
-                            className="w-full h-12 bg-slate-900 dark:bg-amber-500 text-white dark:text-slate-950 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2 shadow-xl shadow-amber-500/10 cursor-pointer"
+                            onClick={() => setRefundModalOrder(order)}
+                            className="w-full h-11 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 text-white rounded-xl text-[10px] font-black uppercase tracking-[0.2em] hover:scale-[1.01] active:scale-95 transition-all flex items-center justify-center gap-2 shadow-md cursor-pointer border-none"
                           >
-                            <AlertCircle className="w-4 h-4" />
-                            Report a Problem (Raise Dispute)
+                            <ShieldAlert className="w-4 h-4" />
+                            Request 3-Day Refund (1.5% Fee)
                           </button>
                         )}
                       </div>
@@ -1654,87 +1650,223 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                         const isPickup = order.deliveryType === "pickup";
                         const isPod = order.paymentMethod === "pod";
 
-                        let stepList: { key: string; label: string; desc: string; actor: string; icon: any }[] = [];
-
                         if (isPickup) {
-                          // Pickup Flow
-                          stepList = [
-                            { key: "pending", label: "Order Placed", desc: "Order submitted to merchant", actor: "Buyer", icon: Clock },
-                            { key: "accepted", label: "Seller Accepted", desc: "Merchant accepted & packaging item", actor: "Seller", icon: CheckCircle },
-                            { key: "ready_for_pickup", label: "Ready at Store / Station", desc: "Awaiting your physical collection", actor: "Station", icon: Package },
-                            { key: "delivered", label: "Package Handover Verified", desc: "PIN verified at store/station", actor: "Buyer", icon: Package },
-                            ...(isPod ? [{ key: "payment_required", label: "Pay on Delivery Settlement", desc: "Paystack electronic payment", actor: "Buyer", icon: CreditCard }] : []),
-                            { key: "completed", label: "Order Completed", desc: "Escrow funds released to vendor", actor: "Escrow", icon: CheckCircle }
-                          ];
-                        } else {
-                          // Home / Campus Delivery Flow (Full Courier Logistics Handshake)
-                          const isLogisticsPending = effectiveStatus === "logistics_pending";
-                          stepList = [
-                            { key: "pending", label: "Order Placed", desc: "Order sent to seller", actor: "Buyer", icon: Clock },
-                            { key: "accepted", label: "Seller Accepted", desc: "Merchant accepted & packaging items", actor: "Seller", icon: CheckCircle },
+                          // Pickup Flow (Refined 4-Stage Pickup)
+                          const isStage1Done = (order.status !== "pending" && order.status !== "Pending Seller Acceptance") || Boolean(order.acceptedAt);
+                          const isStage2Done = isStage1Done && (effectiveStatus === "ready_for_pickup" || effectiveStatus === "delivered" || effectiveStatus === "completed");
+                          const isStage3Done = isStage2Done && (effectiveStatus === "delivered" || effectiveStatus === "completed" || Boolean(order.buyerDeliveryConfirmed));
+                          const isStage4Done = order.status === "completed" || effectiveStatus === "completed";
+
+                          let pickupActive = 0;
+                          if (isStage3Done) pickupActive = 3;
+                          else if (isStage2Done) pickupActive = 2;
+                          else if (isStage1Done) pickupActive = 1;
+
+                          const pickupSteps = [
                             { 
-                              key: "logistics_booked", 
-                              label: isLogisticsPending ? "Awaiting Courier Acceptance" : "Logistics Courier Booked", 
-                              desc: isLogisticsPending 
-                                ? (order.logisticsName ? `Offer sent to ${order.logisticsName}` : "Booking sent to logistics partner")
-                                : (order.logisticsName ? `${order.logisticsName} assigned` : "Logistics courier assigned"), 
-                              actor: "Seller ➔ Courier", 
-                              icon: Truck 
+                              key: "seller_accepts", 
+                              label: "Vendor Confirmed & Packing", 
+                              desc: "Vendor accepted order & is preparing pickup items", 
+                              actor: "Vendor", 
+                              icon: CheckCircle,
+                              isCompleted: isStage1Done,
+                              isActive: pickupActive === 0 && !isStage1Done
                             },
                             { 
-                              key: "transit", 
-                              label: "On Transit", 
-                              desc: order.logisticsName ? `${order.logisticsName} accepted dispatch & is on transit` : "Courier accepted dispatch and is on transit", 
-                              actor: "Courier", 
-                              icon: Truck 
+                              key: "ready_for_pickup", 
+                              label: "Ready at Pickup Station", 
+                              desc: "Package ready for physical collection at designated station", 
+                              actor: "Station", 
+                              icon: Package,
+                              isCompleted: isStage2Done,
+                              isActive: pickupActive === 1
                             },
-                            { key: "out_for_delivery", label: "Out For Delivery", desc: "Rider arrived at campus doorstep", actor: "Courier", icon: MapPin },
-                            { key: "delivered", label: "Order Delivered", desc: "Delivery PIN verified by courier", actor: "Courier ➔ Buyer", icon: Package },
-                            ...(isPod ? [{ key: "payment_required", label: "Pay on Delivery Settlement", desc: "Paystack electronic escrow settlement", actor: "Buyer", icon: CreditCard }] : []),
-                            { key: "completed", label: "Order Completed", desc: "Escrow funds released to vendor & courier", actor: "Escrow", icon: CheckCircle }
+                            { 
+                              key: "delivered", 
+                              label: "Package Handover Verified", 
+                              desc: "Customer verified PIN and confirmed collection", 
+                              actor: "Customer", 
+                              icon: Package,
+                              isCompleted: isStage3Done,
+                              isActive: pickupActive === 2
+                            },
+                            { 
+                              key: "completed", 
+                              label: "Order Completed", 
+                              desc: isPod ? "Automatic after Pay on Delivery settlement" : "Payment verified & escrow released to vendor", 
+                              actor: "Escrow Finalized", 
+                              icon: CheckCircle,
+                              isCompleted: isStage4Done,
+                              isActive: pickupActive === 3
+                            }
                           ];
+
+                          return pickupSteps.map((step, index) => {
+                            const stepColor = step.isCompleted
+                              ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
+                              : "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500";
+
+                            return (
+                              <div key={`order-pickup-step-${step.key}-${index}`} className="flex items-start gap-4">
+                                <div className={cn(
+                                  "w-8 h-8 rounded-full flex items-center justify-center z-10 shrink-0 transition-all duration-300",
+                                  stepColor,
+                                  step.isActive && "ring-4 ring-indigo-100 dark:ring-indigo-900/40 scale-110"
+                                )}>
+                                  <step.icon className={cn("w-4 h-4", step.isActive && "animate-pulse")} />
+                                </div>
+                                <div className="flex flex-col min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className={cn(
+                                      "text-xs font-bold transition-colors",
+                                      step.isCompleted ? "text-slate-900 dark:text-white" : "text-slate-400 dark:text-slate-500"
+                                    )}>
+                                      {step.label}
+                                    </span>
+                                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                                      {step.actor}
+                                    </span>
+                                    {step.isActive && (
+                                      <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 flex items-center gap-1">
+                                        ● Active Stage
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                                    {step.desc}
+                                  </p>
+                                </div>
+                              </div>
+                            );
+                          });
                         }
 
-                        return stepList.map((step, index, array) => {
-                          const statuses = array.map(s => s.key);
-                          const normalizedStatus = effectiveStatus === "logistics_pending" ? "logistics_booked" : effectiveStatus;
-                          const currentIndex = statuses.indexOf(normalizedStatus);
-                          const isCompleted = index <= currentIndex && order.status !== "cancelled";
-                          const isCurrent = index === currentIndex;
-                          
-                          let stepColor = "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500";
-                          if (isCompleted) {
-                            if (step.key === "pending") stepColor = "bg-indigo-600 text-white shadow-md shadow-indigo-600/20";
-                            else if (step.key === "accepted") stepColor = "bg-blue-600 text-white shadow-md shadow-blue-600/20";
-                            else if (step.key === "logistics_booked") stepColor = "bg-indigo-500 text-white shadow-md shadow-indigo-500/20";
-                            else if (step.key === "transit") stepColor = "bg-purple-600 text-white shadow-md shadow-purple-600/20";
-                            else if (step.key === "out_for_delivery") stepColor = "bg-orange-600 text-white shadow-md shadow-orange-600/20";
-                            else if (step.key === "payment_required") stepColor = "bg-amber-600 text-white shadow-md shadow-amber-600/20";
-                            else stepColor = "bg-emerald-600 text-white shadow-md shadow-emerald-600/20";
+                        // Standard Campus Delivery: Exact 5-Stage Lifecycle
+                        // 1. Seller accepts (Vendor Confirmed & Packing)
+                        // 2. Logistics accepts (Courier Assigned & Accepted)
+                        // 3. Product on its way (Package In Transit)
+                        // 4. Product delivered (Customer confirms receipt)
+                        // 5. Order complete (Automatic on delivery for online paid; after settlement for POD)
+
+                        const isStage1Complete = (order.status !== "pending" && order.status !== "Pending Seller Acceptance") || Boolean(order.acceptedAt);
+                        const isStage2Complete = isStage1Complete && (
+                          Boolean(order.logisticsAcceptedAt) || 
+                          order.logisticsOfferStatus === "accepted" || 
+                          effectiveStatus === "transit" || 
+                          effectiveStatus === "out_for_delivery" || 
+                          effectiveStatus === "delivered" || 
+                          effectiveStatus === "completed" || 
+                          effectiveStatus === "payment_required"
+                        );
+                        const isStage3Complete = isStage2Complete && (
+                          effectiveStatus === "transit" || 
+                          effectiveStatus === "out_for_delivery" || 
+                          effectiveStatus === "delivered" || 
+                          effectiveStatus === "completed" || 
+                          effectiveStatus === "payment_required" || 
+                          Boolean(order.buyerDeliveryConfirmed)
+                        );
+                        const isStage4Complete = isStage3Complete && (
+                          effectiveStatus === "completed" || 
+                          Boolean(order.buyerDeliveryConfirmed) || 
+                          (order.paymentMethod === "online" && (order.status === "delivered" || effectiveStatus === "delivered"))
+                        );
+                        const isStage5Complete = order.status === "completed" || effectiveStatus === "completed";
+
+                        let activeStage = 0;
+                        if (isStage4Complete) activeStage = 4;
+                        else if (isStage3Complete) activeStage = 3;
+                        else if (isStage2Complete) activeStage = 2;
+                        else if (isStage1Complete) activeStage = 1;
+                        else activeStage = 0;
+
+                        const deliverySteps = [
+                          { 
+                            key: "seller_accepts", 
+                            label: "Vendor Confirmed & Packing", 
+                            desc: "Vendor accepted the order and is preparing items", 
+                            actor: "Vendor", 
+                            icon: CheckCircle,
+                            isCompleted: isStage1Complete,
+                            isActive: activeStage === 0 && !isStage1Complete,
+                            activeColor: "bg-blue-600 text-white shadow-md shadow-blue-600/20"
+                          },
+                          { 
+                            key: "logistics_accepts", 
+                            label: "Courier Assigned & Accepted", 
+                            desc: order.logisticsName 
+                              ? `${order.logisticsName} accepted vendor dispatch request` 
+                              : "Campus logistics partner accepted vendor dispatch request", 
+                            actor: "Logistics Fleet", 
+                            icon: Truck,
+                            isCompleted: isStage2Complete,
+                            isActive: activeStage === 1,
+                            activeColor: "bg-indigo-600 text-white shadow-md shadow-indigo-600/20"
+                          },
+                          { 
+                            key: "in_transit", 
+                            label: "Package In Transit", 
+                            desc: order.logisticsName 
+                              ? `${order.logisticsName} is on the way with your package` 
+                              : "Logistics courier is on the way with your package", 
+                            actor: "Courier ➔ Customer", 
+                            icon: Truck,
+                            isCompleted: isStage3Complete,
+                            isActive: activeStage === 2,
+                            activeColor: "bg-purple-600 text-white shadow-md shadow-purple-600/20"
+                          },
+                          { 
+                            key: "delivered", 
+                            label: "Product Delivered", 
+                            desc: "Package arrived at campus destination. Customer confirms receipt", 
+                            actor: "Customer", 
+                            icon: Package,
+                            isCompleted: isStage4Complete,
+                            isActive: activeStage === 3,
+                            activeColor: "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
+                          },
+                          { 
+                            key: "completed", 
+                            label: "Order Completed", 
+                            desc: isPod 
+                              ? "Automatic after Pay on Delivery settlement" 
+                              : "Payment verified & transaction finalized", 
+                            actor: "Escrow Finalized", 
+                            icon: CheckCircle,
+                            isCompleted: isStage5Complete,
+                            isActive: activeStage === 4,
+                            activeColor: "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
                           }
-                          
+                        ];
+
+                        return deliverySteps.map((step, index) => {
+                          let stepColor = "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500";
+                          if (step.isCompleted) {
+                            stepColor = step.activeColor;
+                          }
+
                           return (
-                            <div key={`order-step-${step.key}-${index}`} className="flex items-start gap-4">
+                            <div key={`order-5stage-${step.key}-${index}`} className="flex items-start gap-4">
                               <div className={cn(
                                 "w-8 h-8 rounded-full flex items-center justify-center z-10 shrink-0 transition-all duration-300",
                                 stepColor,
-                                isCurrent && "ring-4 ring-indigo-100 dark:ring-indigo-900/40 scale-110"
+                                step.isActive && "ring-4 ring-orange-100 dark:ring-orange-950/50 scale-110"
                               )}>
-                                <step.icon className={cn("w-4 h-4", isCurrent && (step.key === "transit" || step.key === "pending") && "animate-pulse")} />
+                                <step.icon className={cn("w-4 h-4", step.isActive && (step.key === "in_transit" || step.key === "seller_accepts") && "animate-pulse")} />
                               </div>
                               <div className="flex flex-col min-w-0">
                                 <div className="flex items-center gap-2 flex-wrap">
                                   <span className={cn(
                                     "text-xs font-bold transition-colors",
-                                    isCompleted ? "text-slate-900 dark:text-white" : "text-slate-400 dark:text-slate-500"
+                                    step.isCompleted ? "text-slate-900 dark:text-white" : "text-slate-400 dark:text-slate-500"
                                   )}>
                                     {step.label}
                                   </span>
                                   <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                                     {step.actor}
                                   </span>
-                                  {isCurrent && (
-                                    <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 flex items-center gap-1">
+                                  {step.isActive && (
+                                    <span className="text-[10px] font-bold text-orange-600 dark:text-orange-400 flex items-center gap-1">
                                       ● Active Stage
                                     </span>
                                   )}

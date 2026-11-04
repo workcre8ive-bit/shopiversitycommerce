@@ -74,6 +74,20 @@ export interface UserProfile {
   };
   theme?: "light" | "dark";
   storefrontSettings?: StorefrontSettings;
+  wishlistProductIds?: string[];
+}
+
+export interface WishlistItem {
+  id: string;
+  userId: string;
+  productId: string;
+  productName: string;
+  productPrice: number;
+  productImageUrl?: string;
+  category?: string;
+  sellerId?: string;
+  sellerName?: string;
+  createdAt: string;
 }
 
 export interface Product {

@@ -10,16 +10,16 @@ import {
   ExternalLink, 
   ShieldCheck, 
   Sparkles, 
-  FileText, 
   HelpCircle, 
   Lock, 
   Eye, 
   EyeOff, 
   Check, 
-  Copy,
-  Receipt,
-  MessageSquare,
-  Flame
+  Receipt, 
+  MessageSquare, 
+  Phone,
+  Key,
+  ShieldAlert
 } from "lucide-react";
 import { cn } from "../lib/utils";
 
@@ -27,11 +27,13 @@ export default function AdminEmailBrevoSettings() {
   const [apiKey, setApiKey] = useState("");
   const [senderEmail, setSenderEmail] = useState("shopiversitycommerce@gmail.com");
   const [senderName, setSenderName] = useState("SHOPIVERSITY Campus Marketplace");
+  const [smsSender, setSmsSender] = useState("SHOPIV");
   
   const [showApiKey, setShowApiKey] = useState(false);
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [savingConfig, setSavingConfig] = useState(false);
   const [testingEmail, setTestingEmail] = useState(false);
+  const [testingSms, setTestingSms] = useState(false);
 
   const [statusData, setStatusData] = useState<{
     configured: boolean;
@@ -39,12 +41,14 @@ export default function AdminEmailBrevoSettings() {
     maskedKey: string;
     senderEmail: string;
     senderName: string;
+    smsSender?: string;
     provider: string;
     activeFallback: boolean;
   } | null>(null);
 
   const [testRecipient, setTestRecipient] = useState("fashinaayomide2005@gmail.com");
-  const [testType, setTestType] = useState<"general" | "verification" | "receipt" | "password_reset" | "support" | "feedback">("general");
+  const [testPhoneNumber, setTestPhoneNumber] = useState("");
+  const [testType, setTestType] = useState<"general" | "verification" | "password_reset" | "receipt" | "support" | "feedback">("verification");
   
   const [notification, setNotification] = useState<{
     type: "success" | "error" | "info";
@@ -60,6 +64,7 @@ export default function AdminEmailBrevoSettings() {
       setStatusData(data);
       if (data.senderEmail) setSenderEmail(data.senderEmail);
       if (data.senderName) setSenderName(data.senderName);
+      if (data.smsSender) setSmsSender(data.smsSender);
     } catch (err: any) {
       console.error("Failed to fetch Brevo status:", err);
     } finally {
@@ -81,9 +86,10 @@ export default function AdminEmailBrevoSettings() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          apiKey: apiKey.trim(),
+          apiKey: apiKey.trim() || undefined,
           senderEmail: senderEmail.trim(),
-          senderName: senderName.trim()
+          senderName: senderName.trim(),
+          smsSender: smsSender.trim()
         })
       });
 
@@ -92,7 +98,7 @@ export default function AdminEmailBrevoSettings() {
 
       setNotification({
         type: "success",
-        message: "Brevo configuration saved successfully! API key is active."
+        message: "Brevo configuration saved and persisted successfully! API key and SMS gateway are active."
       });
       setApiKey("");
       await fetchStatus();
@@ -124,7 +130,22 @@ export default function AdminEmailBrevoSettings() {
         testRecipientEmail: testRecipient.trim()
       };
 
-      if (testType === "receipt") {
+      if (testType === "verification") {
+        endpoint = "/api/send-verification";
+        payload = {
+          email: testRecipient.trim(),
+          code: "482910",
+          userName: "Student Tester"
+        };
+      } else if (testType === "password_reset") {
+        endpoint = "/api/send-password-reset";
+        payload = {
+          email: testRecipient.trim(),
+          code: "739201",
+          userName: "Account Owner",
+          resetLink: `${window.location.origin}/?tab=auth&mode=login`
+        };
+      } else if (testType === "receipt") {
         endpoint = "/api/send-receipt";
         payload = {
           orderId: `ORD-${Math.floor(100000 + Math.random() * 900000)}`,
@@ -172,7 +193,7 @@ export default function AdminEmailBrevoSettings() {
 
       setNotification({
         type: "success",
-        message: data.message || `Test email successfully dispatched to ${testRecipient}!`
+        message: data.message || `Test email (${testType}) successfully dispatched to ${testRecipient} via Brevo!`
       });
       await fetchStatus();
     } catch (err: any) {
@@ -182,6 +203,44 @@ export default function AdminEmailBrevoSettings() {
       });
     } finally {
       setTestingEmail(false);
+    }
+  };
+
+  const handleSendTestSms = async () => {
+    if (!testPhoneNumber) {
+      setNotification({ type: "error", message: "Please enter a test mobile phone number (e.g. +234... or 080...)." });
+      return;
+    }
+
+    setTestingSms(true);
+    setNotification(null);
+
+    try {
+      const res = await fetch("/api/brevo/test-sms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phoneNumber: testPhoneNumber.trim(),
+          customApiKey: apiKey.trim() || undefined,
+          smsSender: smsSender.trim()
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to dispatch test SMS via Brevo");
+
+      setNotification({
+        type: "success",
+        message: data.message || `Test SMS successfully dispatched to ${testPhoneNumber} via Brevo!`
+      });
+      await fetchStatus();
+    } catch (err: any) {
+      setNotification({
+        type: "error",
+        message: err.message || "Failed to dispatch test SMS. Please ensure your Brevo account has active SMS credits."
+      });
+    } finally {
+      setTestingSms(false);
     }
   };
 
@@ -195,13 +254,13 @@ export default function AdminEmailBrevoSettings() {
           <div className="space-y-2">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/20 text-blue-300 text-xs font-black uppercase tracking-wider border border-blue-400/30">
               <Mail className="w-3.5 h-3.5" />
-              Brevo (Sendinblue) Transactional Engine
+              Brevo (Sendinblue) Unified Engine
             </div>
             <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-white">
-              Email Dispatch & Brevo API Setup
+              Email Authentication &amp; Phone SMS Gateway
             </h2>
             <p className="text-slate-300 text-xs sm:text-sm max-w-2xl leading-relaxed">
-              Configure your Brevo API key to power marketplace transactional emails: official Escrow purchase receipts, student support tickets, logistics dispatch notices, and platform updates.
+              Connect your Brevo account to handle student email verification (OTP), phone SMS verification, password resets, escrow receipts, and support tickets across the platform.
             </p>
           </div>
 
@@ -250,19 +309,19 @@ export default function AdminEmailBrevoSettings() {
         </div>
       )}
 
-      {/* Firebase Authentication Architecture Notice */}
-      <div className="bg-gradient-to-r from-orange-50 to-amber-50 dark:from-zinc-900 dark:to-zinc-800/80 p-4 sm:p-5 rounded-2xl border border-orange-200/80 dark:border-zinc-700 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      {/* Services Powered by Brevo Info Box */}
+      <div className="bg-gradient-to-r from-orange-50 via-amber-50 to-orange-50 dark:from-zinc-900 dark:to-zinc-800/80 p-5 rounded-2xl border border-orange-200/80 dark:border-zinc-700 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div className="flex items-start gap-3.5">
           <div className="w-10 h-10 rounded-xl bg-orange-500 text-white flex items-center justify-center shrink-0 shadow-md">
-            <ShieldCheck className="w-5 h-5" />
+            <Sparkles className="w-5 h-5" />
           </div>
           <div>
             <h4 className="text-sm font-extrabold text-slate-900 dark:text-zinc-100 flex items-center gap-2">
-              <span>Authentication Managed Exclusively by Firebase</span>
-              <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">Direct Firebase SDK</span>
+              <span>All Communication Services Powered by Brevo</span>
+              <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-orange-100 dark:bg-orange-950 text-orange-800 dark:text-orange-300 border border-orange-300 dark:border-orange-800">Unified Gateway</span>
             </h4>
             <p className="text-xs text-slate-600 dark:text-zinc-400 mt-0.5 leading-relaxed">
-              Email verification links, phone SMS OTP codes, and password reset dispatches are handled 100% by Firebase Authentication. Brevo is strictly dedicated to marketplace operations (Escrow receipts, courier dispatch, and support).
+              When connected, Brevo directly dispatches: <strong>1)</strong> 6-Digit Email Signup OTP Codes, <strong>2)</strong> Phone SMS Verification OTPs, <strong>3)</strong> Password Reset Security Codes, <strong>4)</strong> Official Escrow Order Receipts, and <strong>5)</strong> Courier Delivery Updates.
             </p>
           </div>
         </div>
@@ -275,7 +334,7 @@ export default function AdminEmailBrevoSettings() {
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Brevo API Engine</span>
             {statusData?.hasKey ? (
               <span className="inline-flex items-center gap-1 text-[11px] font-black px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                <CheckCircle2 className="w-3 h-3" /> ACTIVE & READY
+                <CheckCircle2 className="w-3 h-3" /> ACTIVE &amp; READY
               </span>
             ) : (
               <span className="inline-flex items-center gap-1 text-[11px] font-black px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
@@ -284,12 +343,12 @@ export default function AdminEmailBrevoSettings() {
             )}
           </div>
           <p className="text-lg font-black text-slate-900 dark:text-white">
-            {statusData?.hasKey ? (statusData.maskedKey || "Configured in Environment") : "Not Configured"}
+            {statusData?.hasKey ? (statusData.maskedKey || "Active in Config") : "Not Configured"}
           </p>
           <p className="text-xs text-slate-500 mt-1">
             {statusData?.hasKey 
-              ? "All transactional endpoints will deliver directly through Brevo."
-              : "Paste your API key below or add BREVO_API_KEY to your .env file."}
+              ? "All transactional email & SMS endpoints deliver directly through Brevo."
+              : "Paste your Brevo API key below or enter it via the Connect Brevo dialog."}
           </p>
         </div>
 
@@ -302,20 +361,20 @@ export default function AdminEmailBrevoSettings() {
             {statusData?.senderEmail || senderEmail}
           </p>
           <p className="text-xs text-slate-500 mt-1 truncate">
-            From Name: {statusData?.senderName || senderName}
+            Sender: {statusData?.senderName || senderName}
           </p>
         </div>
 
         <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Fallback Safeguards</span>
-            <ShieldCheck className="w-4 h-4 text-emerald-500" />
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">SMS Sender ID</span>
+            <Phone className="w-4 h-4 text-emerald-500" />
           </div>
-          <p className="text-sm font-bold text-slate-900 dark:text-white">
-            {statusData?.activeFallback ? "Resend / SMTP Fallback Ready" : "Built-in Code Auto-Fill Enabled"}
+          <p className="text-sm font-bold text-slate-900 dark:text-white font-mono">
+            {statusData?.smsSender || smsSender || "SHOPIV"}
           </p>
           <p className="text-xs text-slate-500 mt-1">
-            Zero downtime: If an API quota is reached, verification codes are never blocked.
+            Display name for Brevo phone verification OTP text messages.
           </p>
         </div>
       </div>
@@ -330,10 +389,10 @@ export default function AdminEmailBrevoSettings() {
             </div>
             <div>
               <h3 className="text-base font-black text-slate-900 dark:text-white">
-                Brevo API Credentials Input
+                Brevo Credentials &amp; Sender Setup
               </h3>
               <p className="text-xs text-slate-500">
-                Enter your Brevo v3 API key to activate live email delivery.
+                Enter your Brevo v3 API key to activate live email and SMS delivery.
               </p>
             </div>
           </div>
@@ -349,7 +408,7 @@ export default function AdminEmailBrevoSettings() {
                   type={showApiKey ? "text" : "password"}
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={statusData?.hasKey ? "Key is currently configured (enter new key to update)" : "xkeysib-..."}
+                  placeholder={statusData?.hasKey ? `Currently active: ${statusData.maskedKey}` : "xkeysib-..."}
                   className="w-full pl-4 pr-12 py-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-sm font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all"
                 />
                 <button
@@ -383,19 +442,35 @@ export default function AdminEmailBrevoSettings() {
               </p>
             </div>
 
-            {/* Sender Name Input */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
-                Sender Display Name
-              </label>
-              <input
-                type="text"
-                value={senderName}
-                onChange={(e) => setSenderName(e.target.value)}
-                placeholder="e.g. SHOPIVERSITY Campus Marketplace"
-                className="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all"
-                required
-              />
+            {/* Sender Name & SMS Sender ID */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
+                  Sender Display Name
+                </label>
+                <input
+                  type="text"
+                  value={senderName}
+                  onChange={(e) => setSenderName(e.target.value)}
+                  placeholder="SHOPIVERSITY Campus Marketplace"
+                  className="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
+                  SMS Sender ID (Max 11)
+                </label>
+                <input
+                  type="text"
+                  maxLength={11}
+                  value={smsSender}
+                  onChange={(e) => setSmsSender(e.target.value)}
+                  placeholder="SHOPIV"
+                  className="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-sm font-mono uppercase text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all"
+                />
+              </div>
             </div>
 
             <div className="pt-2">
@@ -429,113 +504,112 @@ export default function AdminEmailBrevoSettings() {
               <li>Log in to <a href="https://app.brevo.com" target="_blank" rel="noopener noreferrer" className="text-orange-600 font-bold underline">brevo.com</a>.</li>
               <li>Go to <strong>Senders &amp; IP</strong> and verify your sender email.</li>
               <li>Go to <strong>SMTP &amp; API &gt; API Keys</strong> and click <strong>Generate a new API key</strong>.</li>
+              <li>For Phone Verification SMS: check <strong>Transactional &gt; SMS</strong> in Brevo.</li>
               <li>Copy the key, paste it into the field above, and click <strong>Save</strong>.</li>
             </ol>
           </div>
         </div>
 
-        {/* Right Column: Live Email Dispatch Tester */}
-        <div className="lg:col-span-6 bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-5">
-          <div className="flex items-center gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
-            <div className="w-10 h-10 rounded-2xl bg-blue-100 dark:bg-blue-950/60 flex items-center justify-center text-blue-600">
-              <Send className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-base font-black text-slate-900 dark:text-white">
-                Live Transactional Email Tester
-              </h3>
-              <p className="text-xs text-slate-500">
-                Send an actual styled test email to your inbox to confirm formatting and deliverability.
-              </p>
-            </div>
-          </div>
-
-          <div className="space-y-4">
-            {/* Test Recipient Email */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
-                Test Recipient Email
-              </label>
-              <input
-                type="email"
-                value={testRecipient}
-                onChange={(e) => setTestRecipient(e.target.value)}
-                placeholder="Enter email to receive test message"
-                className="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
-              />
-            </div>
-
-            {/* Email Type Selector */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-2">
-                Select Marketplace Transactional Email Template to Test:
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setTestType("general")}
-                  className={cn(
-                    "p-3 rounded-xl text-left border transition-all text-xs font-bold flex items-center gap-2",
-                    testType === "general"
-                      ? "bg-blue-50 dark:bg-blue-950/60 border-blue-500 text-blue-700 dark:text-blue-300 shadow-sm"
-                      : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
-                  )}
-                >
-                  <Sparkles className="w-4 h-4 text-blue-600 shrink-0" />
-                  <span>General Connection Test</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setTestType("receipt")}
-                  className={cn(
-                    "p-3 rounded-xl text-left border transition-all text-xs font-bold flex items-center gap-2",
-                    testType === "receipt"
-                      ? "bg-emerald-50 dark:bg-emerald-950/60 border-emerald-500 text-emerald-700 dark:text-emerald-300 shadow-sm"
-                      : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
-                  )}
-                >
-                  <Receipt className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Escrow Transaction Receipt</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setTestType("support")}
-                  className={cn(
-                    "p-3 rounded-xl text-left border transition-all text-xs font-bold flex items-center gap-2",
-                    testType === "support"
-                      ? "bg-indigo-50 dark:bg-indigo-950/60 border-indigo-500 text-indigo-700 dark:text-indigo-300 shadow-sm"
-                      : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
-                  )}
-                >
-                  <HelpCircle className="w-4 h-4 text-indigo-600 shrink-0" />
-                  <span>Support Ticket Confirmation</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setTestType("feedback")}
-                  className={cn(
-                    "p-3 rounded-xl text-left border transition-all text-xs font-bold flex items-center gap-2",
-                    testType === "feedback"
-                      ? "bg-amber-50 dark:bg-amber-950/60 border-amber-500 text-amber-700 dark:text-amber-300 shadow-sm"
-                      : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
-                  )}
-                >
-                  <MessageSquare className="w-4 h-4 text-amber-600 shrink-0" />
-                  <span>Feedback Thank-You</span>
-                </button>
+        {/* Right Column: Live Email & SMS Dispatch Tester */}
+        <div className="lg:col-span-6 space-y-6">
+          {/* Email Tester */}
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-5">
+            <div className="flex items-center gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="w-10 h-10 rounded-2xl bg-blue-100 dark:bg-blue-950/60 flex items-center justify-center text-blue-600">
+                <Send className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900 dark:text-white">
+                  Live Transactional Email Tester
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Send actual styled verification and transaction emails via Brevo.
+                </p>
               </div>
             </div>
 
-            {/* Send Test Button */}
-            <div className="pt-2">
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
+                  Test Recipient Email
+                </label>
+                <input
+                  type="email"
+                  value={testRecipient}
+                  onChange={(e) => setTestRecipient(e.target.value)}
+                  placeholder="Enter email to receive test message"
+                  className="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-2">
+                  Select Email Template to Test:
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setTestType("verification")}
+                    className={cn(
+                      "p-3 rounded-xl text-left border transition-all text-xs font-bold flex items-center gap-2",
+                      testType === "verification"
+                        ? "bg-orange-50 dark:bg-orange-950/60 border-orange-500 text-orange-700 dark:text-orange-300 shadow-sm"
+                        : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
+                    )}
+                  >
+                    <Mail className="w-4 h-4 text-orange-600 shrink-0" />
+                    <span>Signup Verification (OTP)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setTestType("password_reset")}
+                    className={cn(
+                      "p-3 rounded-xl text-left border transition-all text-xs font-bold flex items-center gap-2",
+                      testType === "password_reset"
+                        ? "bg-red-50 dark:bg-red-950/60 border-red-500 text-red-700 dark:text-red-300 shadow-sm"
+                        : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
+                    )}
+                  >
+                    <Key className="w-4 h-4 text-red-600 shrink-0" />
+                    <span>Password Reset (OTP)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setTestType("receipt")}
+                    className={cn(
+                      "p-3 rounded-xl text-left border transition-all text-xs font-bold flex items-center gap-2",
+                      testType === "receipt"
+                        ? "bg-emerald-50 dark:bg-emerald-950/60 border-emerald-500 text-emerald-700 dark:text-emerald-300 shadow-sm"
+                        : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
+                    )}
+                  >
+                    <Receipt className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>Escrow Order Receipt</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setTestType("support")}
+                    className={cn(
+                      "p-3 rounded-xl text-left border transition-all text-xs font-bold flex items-center gap-2",
+                      testType === "support"
+                        ? "bg-indigo-50 dark:bg-indigo-950/60 border-indigo-500 text-indigo-700 dark:text-indigo-300 shadow-sm"
+                        : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
+                    )}
+                  >
+                    <HelpCircle className="w-4 h-4 text-indigo-600 shrink-0" />
+                    <span>Support Ticket</span>
+                  </button>
+                </div>
+              </div>
+
               <button
                 type="button"
                 onClick={handleSendTestEmail}
                 disabled={testingEmail}
-                className="w-full py-3.5 rounded-2xl bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-100 text-white dark:text-slate-900 font-black text-xs uppercase tracking-wider transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer"
+                className="w-full py-3 rounded-2xl bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-100 text-white dark:text-slate-900 font-black text-xs uppercase tracking-wider transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer"
               >
                 {testingEmail ? (
                   <>
@@ -545,10 +619,56 @@ export default function AdminEmailBrevoSettings() {
                 ) : (
                   <>
                     <Send className="w-4 h-4" />
-                    Send Live Test Email to {testRecipient}
+                    Send Live Test Email
                   </>
                 )}
               </button>
+            </div>
+          </div>
+
+          {/* SMS Tester */}
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
+            <div className="flex items-center gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="w-10 h-10 rounded-2xl bg-emerald-100 dark:bg-emerald-950/60 flex items-center justify-center text-emerald-600">
+                <Phone className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900 dark:text-white">
+                  Live Phone SMS Gateway Tester
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Send real OTP verification SMS using Brevo Transactional SMS API.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
+                  Test Recipient Phone Number (International E.164 or Local)
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="tel"
+                    value={testPhoneNumber}
+                    onChange={(e) => setTestPhoneNumber(e.target.value)}
+                    placeholder="e.g. +2348012345678 or 08012345678"
+                    className="flex-1 px-4 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-xs sm:text-sm font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSendTestSms}
+                    disabled={testingSms}
+                    className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    {testingSms ? <Loader2 className="w-4 h-4 animate-spin" /> : <MessageSquare className="w-4 h-4" />}
+                    Send Test SMS
+                  </button>
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Transactional SMS requires Brevo credits. If credits are pending, the signup flow auto-provides the OTP code directly so testing is never blocked.
+              </p>
             </div>
           </div>
         </div>

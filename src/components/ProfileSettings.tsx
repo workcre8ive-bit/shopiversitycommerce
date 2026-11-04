@@ -38,7 +38,9 @@ import {
   AtSign,
   Sparkles,
   ArrowLeft,
-  ExternalLink
+  ExternalLink,
+  Scan,
+  ScanLine
 } from "lucide-react";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
 import { compressImage } from "../lib/imageUtils";
@@ -334,6 +336,100 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
     } catch (err: any) {
       console.error("Face capture error:", err);
       setIdVerificationError("Failed to process face verification. Please try again.");
+    } finally {
+      setIsVerifyingId(false);
+    }
+  };
+
+  // Document Camera Scanner for Government/Student ID
+  const [isIdDocCameraActive, setIsIdDocCameraActive] = React.useState(false);
+  const idDocVideoRef = React.useRef<HTMLVideoElement | null>(null);
+  const idDocStreamRef = React.useRef<MediaStream | null>(null);
+
+  const startIdDocCamera = async () => {
+    try {
+      setIdVerificationError("");
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        setIsIdDocCameraActive(false);
+        setIdVerificationError("Live camera document scanning is not supported on this device/browser. Please upload your document photo directly.");
+        return;
+      }
+
+      setIsIdDocCameraActive(true);
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }
+      });
+      idDocStreamRef.current = stream;
+      if (idDocVideoRef.current) {
+        idDocVideoRef.current.srcObject = stream;
+        idDocVideoRef.current.play().catch((e) => console.warn("ID scan play error:", e));
+      }
+    } catch (err: any) {
+      console.warn("ID Doc camera access notice:", err);
+      setIsIdDocCameraActive(false);
+      setIdVerificationError("Could not access camera for document scanning. Please grant camera permission or use the file upload option.");
+    }
+  };
+
+  const stopIdDocCamera = () => {
+    if (idDocStreamRef.current) {
+      idDocStreamRef.current.getTracks().forEach(track => track.stop());
+      idDocStreamRef.current = null;
+    }
+    setIsIdDocCameraActive(false);
+  };
+
+  const captureIdDocSnapshot = async () => {
+    if (!fullName || !fullName.trim()) {
+      alert("Please enter your full name first before scanning your ID.");
+      return;
+    }
+
+    if (!idDocVideoRef.current) return;
+
+    try {
+      setIsVerifyingId(true);
+      setIdVerificationError("");
+
+      const canvas = document.createElement("canvas");
+      canvas.width = idDocVideoRef.current.videoWidth || 1280;
+      canvas.height = idDocVideoRef.current.videoHeight || 720;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Canvas context failed");
+      ctx.drawImage(idDocVideoRef.current, 0, 0, canvas.width, canvas.height);
+      const base64 = canvas.toDataURL("image/jpeg", 0.88);
+
+      stopIdDocCamera();
+
+      // Send to server Gemini ID Verification
+      const response = await fetch("/api/gemini/verify-id", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageBase64: base64,
+          fullName,
+          idType,
+          idNumber,
+          schoolName,
+          state,
+          city
+        })
+      });
+
+      const result = await response.json();
+      if (result.matches) {
+        setVerificationIdUrl(base64);
+        setVerificationMethod("government_id");
+        setIdVerificationError("");
+        setIdVerificationSuccess(true);
+      } else {
+        setIdVerificationError(result.reason || "Unable to verify document. Ensure your card is centered, legible, and not blurry, or try uploading a high-res photo.");
+        setVerificationIdUrl("");
+        setIdVerificationSuccess(false);
+      }
+    } catch (err: any) {
+      console.error("ID capture scan error:", err);
+      setIdVerificationError("Failed to process ID document scan. Please try again or upload a photo.");
     } finally {
       setIsVerifyingId(false);
     }
@@ -1926,46 +2022,156 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                       </div>
                     </div>
 
-                    <label className={cn(
-                      "border-2 border-dashed rounded-2xl p-8 flex flex-col items-center justify-center transition-all cursor-pointer group relative overflow-hidden min-h-[180px]",
-                      idVerificationError ? "border-red-300 bg-red-50/80 dark:bg-red-900/10" : "border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-purple-500 hover:bg-slate-50 dark:hover:bg-slate-800"
-                    )}>
-                      <input type="file" accept="image/*" onChange={handleIdUpload} className="hidden" disabled={isVerifyingId} />
-                      {isVerifyingId ? (
-                        <div className="flex flex-col items-center text-center">
-                          <Loader2 className="w-10 h-10 text-purple-600 animate-spin mb-3" />
-                          <p className="text-sm font-bold text-slate-700 dark:text-slate-300">Verifying document with AI...</p>
-                          <p className="text-xs text-slate-500 mt-1">Checking image match for {idType}</p>
-                        </div>
-                      ) : verificationIdUrl && verificationMethod === "government_id" ? (
-                        <div className="text-center w-full h-full p-2 flex flex-col items-center justify-center min-h-[180px] relative">
-                          <img src={verificationIdUrl} alt="ID Document" className="w-full max-h-48 object-contain rounded-xl shadow-md bg-slate-100 dark:bg-slate-800" />
-                          <div className="w-10 h-10 bg-emerald-500 text-white rounded-full flex items-center justify-center shadow-lg absolute top-2 right-2 z-20">
-                            <CheckCircle className="w-6 h-6" />
-                          </div>
+                    {/* Live Camera Scanner vs Upload Options */}
+                    {isIdDocCameraActive ? (
+                      <div className="flex flex-col items-center gap-4 bg-slate-950 p-4 sm:p-6 rounded-3xl relative overflow-hidden shadow-2xl border-2 border-purple-500/50">
+                        <div className="flex items-center justify-between w-full text-white text-xs font-bold px-2">
+                          <span className="flex items-center gap-2">
+                            <Scan className="w-4 h-4 text-purple-400 animate-pulse" />
+                            Live ID Document Scanner
+                          </span>
                           <button
                             type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              handleRemoveId();
-                            }}
-                            className="mt-3 px-4 py-2 bg-red-500 text-white rounded-xl shadow hover:bg-red-600 transition-all z-30 flex items-center gap-2 border-none cursor-pointer"
+                            onClick={stopIdDocCamera}
+                            className="text-xs text-slate-400 hover:text-white bg-white/10 px-3 py-1 rounded-lg border-none cursor-pointer"
                           >
-                            <Trash2 className="w-4 h-4" />
-                            <span className="text-xs font-bold">Remove or Replace ID</span>
+                            Close Camera
                           </button>
                         </div>
-                      ) : (
-                        <div className="text-center group-hover:scale-105 transition-transform duration-300">
-                          <div className="w-14 h-14 bg-purple-50 dark:bg-purple-950/30 rounded-2xl flex items-center justify-center text-purple-600 mx-auto mb-3">
-                            <Upload className="w-7 h-7" />
+
+                        {/* Scanner Viewfinder with Card Bounding Box & Animated Laser */}
+                        <div className="relative w-full max-w-md aspect-[16/10] bg-black rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center border border-white/20">
+                          <video ref={idDocVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+
+                          {/* Card Alignment Frame Overlay */}
+                          <div className="absolute inset-4 sm:inset-6 border-2 border-dashed border-white/50 rounded-2xl pointer-events-none flex flex-col justify-between p-2">
+                            {/* Corner brackets */}
+                            <div className="flex justify-between">
+                              <div className="w-5 h-5 border-t-4 border-l-4 border-purple-500 rounded-tl-md" />
+                              <div className="w-5 h-5 border-t-4 border-r-4 border-purple-500 rounded-tr-md" />
+                            </div>
+                            
+                            {/* Center guidance text */}
+                            <div className="text-center bg-black/60 backdrop-blur-xs py-1 px-3 rounded-full mx-auto self-center">
+                              <p className="text-[11px] font-bold text-white tracking-wide">
+                                Align <strong className="text-purple-400">{idType}</strong> within this box
+                              </p>
+                            </div>
+
+                            <div className="flex justify-between">
+                              <div className="w-5 h-5 border-b-4 border-l-4 border-purple-500 rounded-bl-md" />
+                              <div className="w-5 h-5 border-b-4 border-r-4 border-purple-500 rounded-br-md" />
+                            </div>
+
+                            {/* Animated Red/Amber Scanning Laser Beam */}
+                            <motion.div
+                              animate={{ y: ["0%", "100%", "0%"] }}
+                              transition={{ duration: 2.2, repeat: Infinity, ease: "easeInOut" }}
+                              className="absolute left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-red-500 to-transparent shadow-[0_0_12px_rgba(239,68,68,0.9)] pointer-events-none"
+                            />
                           </div>
-                          <p className="text-sm font-bold text-slate-800 dark:text-slate-200 mb-1">Click to Upload {idType}</p>
-                          <p className="text-[11px] text-slate-400 font-bold">Supports JPG, PNG, WEBP (Max 10MB)</p>
                         </div>
-                      )}
-                    </label>
+
+                        {/* Camera Controls */}
+                        <div className="flex flex-wrap items-center justify-center gap-3 w-full">
+                          <button
+                            type="button"
+                            onClick={captureIdDocSnapshot}
+                            disabled={isVerifyingId}
+                            className="px-6 py-3 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white rounded-2xl font-black text-xs uppercase tracking-wider shadow-lg flex items-center gap-2 transition-all cursor-pointer border-none disabled:opacity-50"
+                          >
+                            {isVerifyingId ? (
+                              <>
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                                <span>Reading & Scanning Card with AI...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Camera className="w-4 h-4" />
+                                <span>Capture & Scan ID Document</span>
+                              </>
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={stopIdDocCamera}
+                            className="px-4 py-3 bg-white/10 hover:bg-white/20 text-slate-300 rounded-2xl font-bold text-xs border-none cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <button
+                            type="button"
+                            onClick={startIdDocCamera}
+                            disabled={isVerifyingId}
+                            className="min-h-[50px] p-3 rounded-2xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer border-none"
+                          >
+                            <Scan className="w-4 h-4" />
+                            <span>Scan ID with Live Camera</span>
+                          </button>
+
+                          <label className="min-h-[50px] p-3 rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer border border-slate-200 dark:border-slate-700">
+                            <Upload className="w-4 h-4 text-purple-600" />
+                            <span>Upload Document File</span>
+                            <input type="file" accept="image/*" onChange={handleIdUpload} className="hidden" disabled={isVerifyingId} />
+                          </label>
+                        </div>
+
+                        {/* ID Upload & Preview Box */}
+                        <div className={cn(
+                          "border-2 border-dashed rounded-2xl p-6 flex flex-col items-center justify-center transition-all group relative overflow-hidden min-h-[160px]",
+                          idVerificationError ? "border-red-300 bg-red-50/80 dark:bg-red-900/10" : "border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+                        )}>
+                          {isVerifyingId ? (
+                            <div className="flex flex-col items-center text-center py-4">
+                              <Loader2 className="w-10 h-10 text-purple-600 animate-spin mb-3" />
+                              <p className="text-sm font-bold text-slate-700 dark:text-slate-300">Scanning ID document with AI...</p>
+                              <p className="text-xs text-slate-500 mt-1">Reading document text and matching against {fullName || "your profile"}</p>
+                            </div>
+                          ) : verificationIdUrl && verificationMethod === "government_id" ? (
+                            <div className="text-center w-full h-full p-2 flex flex-col items-center justify-center relative">
+                              <img src={verificationIdUrl} alt="ID Document" className="w-full max-h-48 object-contain rounded-xl shadow-md bg-slate-100 dark:bg-slate-800" />
+                              <div className="w-10 h-10 bg-emerald-500 text-white rounded-full flex items-center justify-center shadow-lg absolute top-2 right-2 z-20">
+                                <CheckCircle className="w-6 h-6" />
+                              </div>
+                              <div className="mt-3 flex items-center gap-2">
+                                <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-3 py-1 rounded-full border border-emerald-200 dark:border-emerald-800">
+                                  ✓ ID Document Verified Successfully
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    handleRemoveId();
+                                  }}
+                                  className="px-3 py-1 bg-red-500 text-white rounded-xl shadow hover:bg-red-600 transition-all z-30 flex items-center gap-1.5 border-none cursor-pointer text-xs font-bold"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <span>Remove ID</span>
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-center py-4">
+                              <div className="w-12 h-12 bg-purple-50 dark:bg-purple-950/30 rounded-2xl flex items-center justify-center text-purple-600 mx-auto mb-2">
+                                <Scan className="w-6 h-6" />
+                              </div>
+                              <p className="text-xs font-bold text-slate-800 dark:text-slate-200 mb-0.5">
+                                Tap "Scan ID with Live Camera" or "Upload Document File"
+                              </p>
+                              <p className="text-[11px] text-slate-400">
+                                Accepts National ID, Student ID, PVC, Driver's License or International Passport
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
 
                     {idVerificationError && (
                       <div className="p-4 bg-red-50 dark:bg-red-900/10 border border-red-200 dark:border-red-900/30 rounded-2xl space-y-2">

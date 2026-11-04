@@ -27,7 +27,8 @@ import {
   Menu,
   Truck,
   ShoppingCart,
-  UserPlus
+  UserPlus,
+  Heart
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { motion, AnimatePresence } from "motion/react";
@@ -43,7 +44,7 @@ interface SidebarProps {
   setActiveTab: (tab: string) => void;
   role: "buyer" | "seller" | "admin";
   activeRole: "buyer" | "seller";
-  onToggleRole: () => void;
+  onToggleRole?: () => void;
   user: UserProfile | null;
   onSelectAllCategories?: () => void;
 }
@@ -81,6 +82,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
     { id: "search", label: "Search", icon: Search },
     { id: "logistics", label: "Campus Logistics", icon: Truck },
     { id: "orders", label: "My Orders", icon: ShoppingBag },
+    { id: "wishlist", label: "My Wishlist", icon: Heart },
     { id: "referrals", label: "Referral Program", icon: Share2 },
     { id: "history", label: "Product Trash", icon: Trash2 },
     { id: "support", label: "Customer Support", icon: HeartHandshake },
@@ -187,17 +189,24 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
               </button>
               
               <div className="flex items-center gap-2">
-                {(user?.role === "both" || user?.role === "seller" || user?.role === "admin") && user?.state !== "Logistics Partner" && (
-                  <button 
-                    onClick={onToggleRole}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-white/20 backdrop-blur-md rounded-xl border border-white/30 text-white hover:bg-white/30 transition-all active:scale-95 shadow-md group touch-manipulation"
-                  >
-                    <ArrowLeftRight className="w-3.5 h-3.5 group-hover:rotate-180 transition-transform duration-500" />
-                    <span className="text-[10px] font-black uppercase tracking-widest">
-                      Switch to {activeRole === "buyer" ? "Seller" : "Buyer"}
-                    </span>
-                  </button>
-                )}
+                <div className="flex items-center gap-1.5 px-2.5 py-1 bg-white/20 backdrop-blur-md rounded-xl border border-white/30 text-white shadow-sm select-none">
+                  {activeRole === "seller" ? (
+                    <>
+                      <Store className="w-3.5 h-3.5 text-white" />
+                      <span className="text-[10px] font-black uppercase tracking-wider text-white">Vendor Account</span>
+                    </>
+                  ) : (user?.state === "Logistics Partner" || user?.role === "logistics") ? (
+                    <>
+                      <Truck className="w-3.5 h-3.5 text-white" />
+                      <span className="text-[10px] font-black uppercase tracking-wider text-white">Logistics Account</span>
+                    </>
+                  ) : (
+                    <>
+                      <ShoppingBag className="w-3.5 h-3.5 text-white" />
+                      <span className="text-[10px] font-black uppercase tracking-wider text-white">Customer Account</span>
+                    </>
+                  )}
+                </div>
               </div>
             </div>
             
@@ -210,7 +219,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
               title="View Profile Settings"
             >
               <p className="text-white/80 text-[10px] font-extrabold uppercase tracking-widest flex items-center gap-1">
-                <span>{(user?.state === "Logistics Partner" || user?.role === "logistics") ? "Logistics Partner Account" : (activeRole === "buyer" ? "Shopping Account" : "Seller Account")}</span>
+                <span>{(user?.state === "Logistics Partner" || user?.role === "logistics") ? "Logistics Partner Account" : (activeRole === "buyer" ? "Customer Account" : "Vendor Account")}</span>
                 <ChevronRight className="w-3.5 h-3.5 text-white/70 group-hover:translate-x-0.5 transition-transform" />
               </p>
               <h2 className="text-xl font-black !text-white tracking-tight truncate mt-0.5">
@@ -244,7 +253,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
                <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-widest">Your Experience</h3>
             </div>
             <div className="space-y-1">
-              {navItems.filter(item => ["auth", "signup", "settings", "orders", "notifications", "messages", "history", "referrals", "support", "feedback-help", "admin", "payouts"].includes(item.id)).map((item, idx) => (
+              {navItems.filter(item => ["auth", "signup", "settings", "orders", "wishlist", "notifications", "messages", "history", "referrals", "support", "feedback-help", "admin", "payouts"].includes(item.id)).map((item, idx) => (
                 <button
                    key={`nav-exp-${item.id}-${idx}`}
                    onClick={() => {

@@ -84,7 +84,7 @@ export default function AuthErrorModal({
   const modalContent = (
     <AnimatePresence>
       <div 
-        className="fixed inset-0 z-[999999] overflow-y-auto overscroll-contain flex flex-col items-center justify-center p-3.5 sm:p-6"
+        className="fixed inset-0 z-[999999] overflow-y-auto overscroll-contain flex flex-col items-center justify-start p-4 sm:p-6 pt-8 sm:pt-12 md:pt-16"
         role="dialog"
         aria-modal="true"
       >
@@ -97,13 +97,13 @@ export default function AuthErrorModal({
           className="fixed inset-0 bg-black/75 backdrop-blur-md"
         />
 
-        {/* Modal Card - fully visible, self-centering, never truncated */}
+        {/* Modal Card - positioned up at top of viewport, fully visible without clipping */}
         <motion.div
-          initial={{ opacity: 0, scale: 0.93, y: 15 }}
+          initial={{ opacity: 0, scale: 0.95, y: -24 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.93, y: 15 }}
-          transition={{ type: "spring", stiffness: 350, damping: 26 }}
-          className="relative w-full max-w-md my-auto bg-white dark:bg-zinc-900 rounded-[2rem] border border-slate-200 dark:border-zinc-800 p-5 sm:p-7 shadow-2xl z-10 text-center space-y-4 max-h-[calc(100vh-2rem)] overflow-y-auto"
+          exit={{ opacity: 0, scale: 0.95, y: -24 }}
+          transition={{ type: "spring", stiffness: 380, damping: 28 }}
+          className="relative w-full max-w-md my-0 bg-white dark:bg-zinc-900 rounded-[2rem] border border-slate-200 dark:border-zinc-800 p-6 sm:p-7 shadow-2xl z-10 text-center space-y-4 max-h-[90vh] overflow-y-auto"
         >
           {/* Close button */}
           <button

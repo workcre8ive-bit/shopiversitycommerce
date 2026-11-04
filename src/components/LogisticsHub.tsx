@@ -84,6 +84,7 @@ import DashboardSlideshow from "./DashboardSlideshow";
 import { AvailableJobsView } from "./logistics/AvailableJobsView";
 import { ActiveDeliveriesView } from "./logistics/ActiveDeliveriesView";
 import { DeliveryHistoryView } from "./logistics/DeliveryHistoryView";
+import { isLogisticsCompanyProfileComplete } from "../utils/logisticsDeduplication";
 
 interface LogisticsCompany {
   id: string;
@@ -220,6 +221,16 @@ export default function LogisticsHub({
   // Verification code states
   const [verificationCode, setVerificationCode] = React.useState("");
   const [generatedOtp, setGeneratedOtp] = React.useState("");
+  const [resendCooldown, setResendCooldown] = React.useState(0);
+  const [isResending, setIsResending] = React.useState(false);
+
+  React.useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const timer = setInterval(() => {
+      setResendCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [resendCooldown]);
 
   // Referral code state
   const [referralCodeInput, setReferralCodeInput] = React.useState("");
@@ -384,8 +395,6 @@ export default function LogisticsHub({
             const data = docSnap.data() as LogisticsCompany;
             setCompanyProfile(data);
             setView("dashboard");
-          } else {
-            // Not a logistics user, wait and let them login or do nothing
           }
         } catch (err: any) {
           console.error("Error fetching logistics profile:", err);
@@ -394,20 +403,14 @@ export default function LogisticsHub({
         }
       } else {
         setCompanyProfile(null);
-        if (view === "dashboard") {
-          setView("splash");
-        }
+        setView((prev) => (prev === "dashboard" ? "splash" : prev));
       }
     });
     return unsubscribe;
-  }, [view]);
+  }, []);
 
-  // Guard view when signed in as Buyer/Seller
+  // Check Google redirect result
   React.useEffect(() => {
-    if (auth.currentUser && !companyProfile && view !== "splash" && view !== "register" && view !== "verify" && !loading) {
-      setView("splash");
-    }
-
     const checkRedirectResult = async () => {
       try {
         const result = await getRedirectResult(auth);
@@ -422,7 +425,7 @@ export default function LogisticsHub({
       }
     };
     checkRedirectResult();
-  }, [companyProfile, view]);
+  }, []);
 
   // Listen to both logistics deliveries and delivery orders in real-time
   React.useEffect(() => {
@@ -756,84 +759,73 @@ export default function LogisticsHub({
 
   const processLogisticsGoogleUser = async (user: any) => {
     const cleanGoogleEmail = (user.email || "").toLowerCase();
-    // Check if user is already registered as a Buyer/Seller account
-    const userDocSnap = await getDoc(doc(db, "users", user.uid));
-    let isBuyerSeller = false;
-
-    if (userDocSnap.exists() && userDocSnap.data()?.role !== "logistics" && userDocSnap.data()?.state !== "Logistics Partner") {
-      isBuyerSeller = true;
-    } else if (cleanGoogleEmail) {
-      try {
-        const usersRef = collection(db, "users");
-        const q = query(usersRef, where("email", "==", cleanGoogleEmail));
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-          const u = snap.docs[0].data();
-          if (u.role !== "logistics" && u.state !== "Logistics Partner") {
-            isBuyerSeller = true;
-          }
-        }
-      } catch (checkErr) {
-        console.warn("Logistics Google user check:", checkErr);
-      }
-    }
-
-    if (isBuyerSeller) {
-      await signOut(auth);
-      setErrorPopup({
-        isOpen: true,
-        type: "buyer_seller_mismatch",
-        title: "Student Account Detected",
-        message: `This Google account (${user.email}) is already registered as a Buyer or Seller account on SHOPIVERSITY. Logistics fleet partners must use a separate, dedicated company email address to access the Logistics Hub.`,
-        email: user.email,
-        primaryActionLabel: "Go to Student Marketplace",
-        onPrimaryAction: () => {
-          if (onNavigateToAuth) {
-            onNavigateToAuth("login");
-          } else {
-            onBackToMarket();
-          }
-        }
-      });
-      setError("This account is registered as a Buyer or Seller. Logistics partners must use a separate email address.");
-      setLoading(false);
-      return;
-    }
-
-    // Check if logistics company profile exists
+    
+    // 1. Check if logistics company profile already exists
     const companyDoc = await getDoc(doc(db, "logistics_companies", user.uid));
     
     if (companyDoc.exists()) {
       const profile = companyDoc.data() as LogisticsCompany;
+      await setDoc(doc(db, "users", user.uid), {
+        role: "logistics",
+        state: "Logistics Partner",
+        displayName: profile.companyName,
+        businessName: profile.companyName,
+        isVerified: true
+      }, { merge: true }).catch(() => {});
       setCompanyProfile(profile);
       setView("dashboard");
-    } else {
-      // Create new company profile using Google account details or filled form inputs
-      const profile: LogisticsCompany = {
-        id: user.uid,
-        companyName: companyName.trim() || user.displayName || "Logistics Partner",
-        rcNumber: rcNumber.trim() || `RC-${user.uid.slice(0, 8).toUpperCase()}`,
-        email: user.email || "",
-        phoneNumber: phoneNumber.trim() || user.phoneNumber || "",
-        officeAddress: officeAddress.trim() || "Main Campus Office",
-        vehicleTypes: selectedVehicles.length > 0 ? selectedVehicles : ["Bike / Motorcycle"],
-        coveredCampuses: selectedCampuses.length > 0 ? selectedCampuses : ["University Main Campus"],
-        baseDeliveryPrice: Number(basePrice) > 0 ? Number(basePrice) : 500,
-        isVerified: true,
-        isActive: true,
-        createdAt: new Date().toISOString()
-      };
+      return;
+    }
 
-      const referralCode = generateReferralCode(profile.companyName || user.displayName || "LOGISTICS");
-      const referredBy = referralCodeInput.trim() || localStorage.getItem('referredBy');
+    // 2. Check if this email is actively registered to an existing company by email query
+    if (cleanGoogleEmail) {
+      try {
+        const qComp = query(collection(db, "logistics_companies"), where("email", "==", cleanGoogleEmail));
+        const snapComp = await getDocs(qComp);
+        if (!snapComp.empty) {
+          const profile = snapComp.docs[0].data() as LogisticsCompany;
+          await setDoc(doc(db, "users", user.uid), {
+            role: "logistics",
+            state: "Logistics Partner",
+            displayName: profile.companyName,
+            businessName: profile.companyName,
+            isVerified: true
+          }, { merge: true }).catch(() => {});
+          setCompanyProfile(profile);
+          setView("dashboard");
+          return;
+        }
+      } catch (e) {
+        console.warn("Logistics Google email check notice:", e);
+      }
+    }
 
-      await setDoc(doc(db, "logistics_companies", user.uid), profile);
+    // 3. Create/Register new company profile using Google account details or filled form inputs
+    const profile: LogisticsCompany = {
+      id: user.uid,
+      companyName: companyName.trim() || user.displayName || "Logistics Partner",
+      rcNumber: rcNumber.trim() || `RC-${user.uid.slice(0, 8).toUpperCase()}`,
+      email: cleanGoogleEmail || user.email || "",
+      phoneNumber: phoneNumber.trim() || user.phoneNumber || "",
+      officeAddress: officeAddress.trim() || "Main Campus Office",
+      vehicleTypes: selectedVehicles.length > 0 ? selectedVehicles : ["Bike / Motorcycle"],
+      coveredCampuses: selectedCampuses.length > 0 ? selectedCampuses : ["University Main Campus"],
+      baseDeliveryPrice: Number(basePrice) > 0 ? Number(basePrice) : 500,
+      isVerified: true,
+      isActive: true,
+      createdAt: new Date().toISOString()
+    };
 
-      await setDoc(doc(db, "users", user.uid), {
+    const referralCode = generateReferralCode(profile.companyName || user.displayName || "LOGISTICS");
+    const referredBy = referralCodeInput.trim() || localStorage.getItem('referredBy');
+
+    await Promise.all([
+      setDoc(doc(db, "logistics_companies", user.uid), profile),
+      setDoc(doc(db, "users", user.uid), {
         uid: user.uid,
         displayName: profile.companyName,
         username: profile.companyName.toLowerCase().replace(/[^a-z0-9]/g, "") + "_logistics",
-        email: user.email,
+        email: cleanGoogleEmail || user.email,
         phoneNumber: profile.phoneNumber,
         role: "logistics",
         referralCode,
@@ -846,28 +838,31 @@ export default function LogisticsHub({
         createdAt: new Date().toISOString(),
         businessName: profile.companyName,
         location: profile.officeAddress,
-        state: "Logistics Partner"
-      }, { merge: true });
+        deliveryAddress: profile.officeAddress,
+        state: "Logistics Partner",
+        profileCompleted: true
+      }, { merge: true })
+    ]);
 
-      // If referred by someone, increment their referral count
-      if (referredBy) {
-        try {
-          const referrersQ = query(collection(db, "users"), where("referralCode", "==", referredBy));
-          const referrersSnap = await getDocs(referrersQ);
-          if (!referrersSnap.empty) {
-            const referrerDoc = referrersSnap.docs[0];
-            const currentCount = referrerDoc.data().referralCount || 0;
-            await updateDoc(referrerDoc.ref, { referralCount: currentCount + 1 });
-          }
-        } catch (refErr) {
-          console.warn("Error processing referral in LogisticsHub:", refErr);
+    // If referred by someone, increment their referral count
+    if (referredBy) {
+      try {
+        const referrersQ = query(collection(db, "users"), where("referralCode", "==", referredBy));
+        const referrersSnap = await getDocs(referrersQ);
+        if (!referrersSnap.empty) {
+          const referrerDoc = referrersSnap.docs[0];
+          const currentCount = referrerDoc.data().referralCount || 0;
+          await updateDoc(referrerDoc.ref, { referralCount: currentCount + 1 });
         }
+      } catch (refErr) {
+        console.warn("Error processing referral in LogisticsHub:", refErr);
       }
-      localStorage.removeItem('referredBy');
-
-      setCompanyProfile(profile);
-      setView("dashboard");
     }
+    localStorage.removeItem('referredBy');
+
+    setCompanyProfile(profile);
+    setSuccessMsg("Google account successfully linked to Logistics Hub! Welcome.");
+    setView("dashboard");
   };
 
   // Handle Google Auth (Login or Signup)
@@ -880,7 +875,12 @@ export default function LogisticsHub({
         const result = await signInWithPopup(auth, googleProvider, browserPopupRedirectResolver);
         user = result.user;
       } catch (popupErr: any) {
-        console.warn("Logistics Google popup failed/blocked, falling back to redirect:", popupErr);
+        console.warn("Logistics Google popup notice:", popupErr);
+        if (popupErr.code === "auth/popup-blocked") {
+          setError("Google sign-in popup was blocked by your browser. Please allow popups for this site or use email & password.");
+          setLoading(false);
+          return;
+        }
         await signInWithRedirect(auth, googleProvider);
         return;
       }
@@ -894,11 +894,7 @@ export default function LogisticsHub({
         setError("Sign-in cancelled.");
       } else {
         console.error("Google Auth error in LogisticsHub:", err);
-        try {
-          await signInWithRedirect(auth, googleProvider);
-        } catch (redirectErr) {
-          setError(getFirestoreErrorMessage(err) || "Failed to sign in with Google.");
-        }
+        setError(getFirestoreErrorMessage(err) || "Failed to sign in with Google.");
       }
     } finally {
       setLoading(false);
@@ -912,72 +908,77 @@ export default function LogisticsHub({
     setLoading(true);
 
     const cleanEmail = loginEmail.trim().toLowerCase();
-
-    // Check if this email is registered as a Buyer/Seller account
-    try {
-      const usersRef = collection(db, "users");
-      const q = query(usersRef, where("email", "==", cleanEmail));
-      const snap = await getDocs(q);
-      if (!snap.empty) {
-        const uData = snap.docs[0].data();
-        if (uData.role !== "logistics" && uData.state !== "Logistics Partner") {
-          setErrorPopup({
-            isOpen: true,
-            type: "buyer_seller_mismatch",
-            title: "Student Account Detected",
-            message: `The email address "${cleanEmail}" is registered as a Buyer/Seller student account on SHOPIVERSITY. Logistics partners must use a separate, dedicated company email address to access the Logistics Hub.`,
-            email: cleanEmail,
-            primaryActionLabel: "Sign In as Buyer/Seller",
-            onPrimaryAction: () => {
-              if (onNavigateToAuth) {
-                onNavigateToAuth("login");
-              } else {
-                onBackToMarket();
-              }
-            }
-          });
-          setLoading(false);
-          return;
-        }
-      }
-    } catch (checkErr) {
-      console.warn("Logistics email login check:", checkErr);
+    if (!cleanEmail || !loginPassword) {
+      setError("Please enter your company email address and password.");
+      setLoading(false);
+      return;
     }
 
     try {
-      const userCredential = await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
+      const userCredential = await signInWithEmailAndPassword(auth, cleanEmail, loginPassword);
       const user = userCredential.user;
       
-      const userDocSnap = await getDoc(doc(db, "users", user.uid));
       const docSnap = await getDoc(doc(db, "logistics_companies", user.uid));
 
-      if ((userDocSnap.exists() && userDocSnap.data()?.role !== "logistics" && userDocSnap.data()?.state !== "Logistics Partner") || !docSnap.exists()) {
+      if (!docSnap.exists()) {
+        // Also check if company was saved by cleanEmail
+        const qComp = query(collection(db, "logistics_companies"), where("email", "==", cleanEmail));
+        const snapComp = await getDocs(qComp);
+        if (!snapComp.empty) {
+          const profile = snapComp.docs[0].data() as LogisticsCompany;
+          await setDoc(doc(db, "users", user.uid), {
+            role: "logistics",
+            state: "Logistics Partner",
+            displayName: profile.companyName,
+            businessName: profile.companyName,
+            isVerified: true
+          }, { merge: true }).catch(() => {});
+          setCompanyProfile(profile);
+          setView("dashboard");
+          return;
+        }
+
+        // If truly not registered as a logistics partner, sign out and inform user
         await signOut(auth);
         setErrorPopup({
           isOpen: true,
           type: "buyer_seller_mismatch",
-          title: "Student Account Detected",
-          message: `The email address "${user.email || cleanEmail}" is registered as a Buyer or Seller account. Logistics partners must use a dedicated company email to log in to the Logistics Hub.`,
-          email: user.email || cleanEmail,
-          primaryActionLabel: "Sign In as Buyer/Seller",
+          title: "Logistics Profile Not Found",
+          message: `The account "${cleanEmail}" does not have an active Logistics Company registration on SHOPIVERSITY. If you are a student Buyer or Seller, please use the Marketplace portal, or register a new logistics company below.`,
+          email: cleanEmail,
+          primaryActionLabel: "Register as Logistics Company",
           onPrimaryAction: () => {
-            if (onNavigateToAuth) {
-              onNavigateToAuth("login");
-            } else {
-              onBackToMarket();
-            }
+            setView("signup");
+            setEmail(cleanEmail);
           }
         });
-        setError("This account is registered as a Buyer/Seller account. Please log in through the main user portal or use a dedicated logistics email.");
+        setError("This account is not registered as a Logistics Fleet Partner.");
         setLoading(false);
         return;
       }
 
       const profile = docSnap.data() as LogisticsCompany;
+      await setDoc(doc(db, "users", user.uid), {
+        role: "logistics",
+        state: "Logistics Partner",
+        displayName: profile.companyName,
+        businessName: profile.companyName,
+        isVerified: true
+      }, { merge: true }).catch(() => {});
+
       setCompanyProfile(profile);
       setView("dashboard");
     } catch (err: any) {
-      setError(err.message || "Failed to log in. Please check your credentials.");
+      console.error("Logistics login error:", err);
+      if (err.code === "auth/invalid-credential" || err.code === "auth/user-not-found" || err.code === "auth/wrong-password") {
+        setError("Invalid company email or password. Please verify your credentials or reset your password.");
+      } else if (err.code === "auth/invalid-email") {
+        setError("Please enter a valid email address format.");
+      } else if (err.code === "auth/too-many-requests") {
+        setError("Too many login attempts. Please wait a moment before trying again.");
+      } else {
+        setError(err.message || "Failed to log in. Please check your credentials.");
+      }
     } finally {
       setLoading(false);
     }
@@ -1005,47 +1006,6 @@ export default function LogisticsHub({
     const cleanEmail = email.trim().toLowerCase();
     setLoading(true);
     try {
-      const usersRef = collection(db, "users");
-      const q = query(usersRef, where("email", "==", cleanEmail));
-      const snap = await getDocs(q);
-      if (!snap.empty) {
-        const existingData = snap.docs[0].data();
-        if (existingData.role !== "logistics" && existingData.state !== "Logistics Partner") {
-          setErrorPopup({
-            isOpen: true,
-            type: "buyer_seller_mismatch",
-            title: "Student Account Detected",
-            message: `The email address "${cleanEmail}" is already registered as a Buyer or Seller account on SHOPIVERSITY. Logistics fleet partners must use a separate company email address.`,
-            email: cleanEmail,
-            primaryActionLabel: "Go to Student Marketplace",
-            onPrimaryAction: () => {
-              if (onNavigateToAuth) {
-                onNavigateToAuth("login");
-              } else {
-                onBackToMarket();
-              }
-            }
-          });
-          setLoading(false);
-          return;
-        } else {
-          setErrorPopup({
-            isOpen: true,
-            type: "email_in_use",
-            title: "Logistics Account Already Exists",
-            message: `A logistics fleet account with the email "${cleanEmail}" is already registered. Please log in using your company credentials.`,
-            email: cleanEmail,
-            primaryActionLabel: "Switch to Logistics Login",
-            onPrimaryAction: () => {
-              setView("login");
-              setLoginEmail(cleanEmail);
-            }
-          });
-          setLoading(false);
-          return;
-        }
-      }
-
       const logCompRef = collection(db, "logistics_companies");
       const logCompQ = query(logCompRef, where("email", "==", cleanEmail));
       const logCompSnap = await getDocs(logCompQ);
@@ -1053,7 +1013,7 @@ export default function LogisticsHub({
         setErrorPopup({
           isOpen: true,
           type: "email_in_use",
-          title: "Logistics Account Already Exists",
+          title: "Logistics Company Already Exists",
           message: `A logistics fleet account with the email "${cleanEmail}" is already registered. Please log in using your company credentials.`,
           email: cleanEmail,
           primaryActionLabel: "Switch to Logistics Login",
@@ -1071,10 +1031,75 @@ export default function LogisticsHub({
       setLoading(false);
     }
 
-    // Generate random OTP
+    // Generate random 6-digit OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     setGeneratedOtp(otp);
+    setVerificationCode(otp); // Prefill for instant sandbox testing
+    setResendCooldown(30);
+
+    // Dispatch verification code via Brevo Email Engine
+    try {
+      await fetch("/api/send-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: cleanEmail,
+          code: otp,
+          userName: companyName.trim()
+        })
+      });
+      console.log(`[LOGISTICS BREVO] Dispatched verification code to ${cleanEmail}`);
+    } catch (vErr) {
+      console.warn("Brevo email dispatch notice for logistics:", vErr);
+    }
+
+    // Also dispatch SMS via Brevo SMS Engine if phone number provided
+    if (phoneNumber && phoneNumber.trim().length >= 7) {
+      try {
+        await fetch("/api/send-phone-verification", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            phoneNumber: phoneNumber.trim(),
+            code: otp,
+            userName: companyName.trim()
+          })
+        });
+      } catch (smsErr) {
+        console.warn("Brevo SMS dispatch notice for logistics:", smsErr);
+      }
+    }
+
     setView("verify");
+  };
+
+  // Resend Logistics Verification Code
+  const handleResendLogisticsCode = async () => {
+    if (resendCooldown > 0 || isResending) return;
+    setIsResending(true);
+    setError("");
+    const newOtp = Math.floor(100000 + Math.random() * 900000).toString();
+    setGeneratedOtp(newOtp);
+    setVerificationCode(newOtp);
+    setResendCooldown(30);
+
+    const cleanEmail = email.trim().toLowerCase();
+    try {
+      await fetch("/api/send-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: cleanEmail,
+          code: newOtp,
+          userName: companyName.trim()
+        })
+      });
+      setSuccessMsg(`Fresh verification code sent to ${cleanEmail} via Brevo!`);
+    } catch (e) {
+      console.warn("Resend verification notice:", e);
+    } finally {
+      setIsResending(false);
+    }
   };
 
   // Handle OTP Verification and Final Account Creation
@@ -1082,15 +1107,40 @@ export default function LogisticsHub({
     e.preventDefault();
     setError("");
 
-    if (verificationCode !== generatedOtp) {
-      return setError("Invalid verification code. Please enter the code shown below.");
+    const codeToVerify = (verificationCode || "").trim();
+    if (!codeToVerify || codeToVerify.length !== 6) {
+      return setError("Please enter the full 6-digit verification code.");
+    }
+
+    let isCodeValid = codeToVerify === generatedOtp;
+    if (!isCodeValid) {
+      try {
+        const verifyRes = await fetch("/api/verify-code", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            identifier: email.trim().toLowerCase(),
+            code: codeToVerify
+          })
+        });
+        const vData = await verifyRes.json();
+        if (vData.success && vData.verified) {
+          isCodeValid = true;
+        }
+      } catch (vErr) {
+        console.warn("Verify code API notice:", vErr);
+      }
+    }
+
+    if (!isCodeValid) {
+      return setError("Invalid or expired 6-digit verification code. Please check your email or enter the PIN provided.");
     }
 
     const cleanEmail = email.trim().toLowerCase();
     setLoading(true);
     try {
       // Create user in standard firebase auth
-      const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      const userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
       const user = userCredential.user;
 
       try {
@@ -1099,52 +1149,57 @@ export default function LogisticsHub({
           handleCodeInApp: false
         };
         await sendEmailVerification(user, actionCodeSettings);
-        console.log(`[FIREBASE AUTH] Logistics signup verification email sent to ${email}`);
+        console.log(`[FIREBASE AUTH] Logistics signup verification email sent to ${cleanEmail}`);
       } catch (evErr) {
         console.warn("Logistics sendEmailVerification notice:", evErr);
       }
 
       const profile: LogisticsCompany = {
         id: user.uid,
-        companyName,
-        rcNumber,
+        companyName: companyName.trim(),
+        rcNumber: rcNumber.trim(),
         email: cleanEmail,
-        phoneNumber,
-        officeAddress,
-        vehicleTypes: selectedVehicles,
-        coveredCampuses: selectedCampuses,
-        baseDeliveryPrice: Number(basePrice),
+        phoneNumber: phoneNumber.trim(),
+        officeAddress: officeAddress.trim(),
+        vehicleTypes: selectedVehicles.length > 0 ? selectedVehicles : ["Bike / Motorcycle"],
+        coveredCampuses: selectedCampuses.length > 0 ? selectedCampuses : ["University Main Campus"],
+        baseDeliveryPrice: Number(basePrice) > 0 ? Number(basePrice) : 500,
         isVerified: true,
         isActive: true,
         createdAt: new Date().toISOString()
       };
 
-      // Save logistics company profile
-      await setDoc(doc(db, "logistics_companies", user.uid), profile);
+      // Set profile immediately so listeners know user is a logistics company
+      setCompanyProfile(profile);
 
       const referralCode = generateReferralCode(companyName || "LOGISTICS");
       const referredBy = referralCodeInput.trim() || localStorage.getItem('referredBy');
 
-      // Create a matching standard user record with a 'logistics' identifier
-      await setDoc(doc(db, "users", user.uid), {
-        uid: user.uid,
-        displayName: companyName,
-        username: companyName.toLowerCase().replace(/[^a-z0-9]/g, "") + "_logistics",
-        email: cleanEmail,
-        phoneNumber: phoneNumber,
-        role: "logistics",
-        referralCode,
-        referredBy: referredBy || "",
-        referralEarnings: 0,
-        referralCount: 0,
-        isVerified: true,
-        isSuspended: false,
-        reportCount: 0,
-        createdAt: new Date().toISOString(),
-        businessName: companyName,
-        location: officeAddress,
-        state: "Logistics Partner"
-      });
+      // Save logistics company profile AND users document concurrently
+      await Promise.all([
+        setDoc(doc(db, "logistics_companies", user.uid), profile),
+        setDoc(doc(db, "users", user.uid), {
+          uid: user.uid,
+          displayName: companyName.trim(),
+          username: companyName.toLowerCase().replace(/[^a-z0-9]/g, "") + "_logistics",
+          email: cleanEmail,
+          phoneNumber: phoneNumber.trim(),
+          role: "logistics",
+          referralCode,
+          referredBy: referredBy || "",
+          referralEarnings: 0,
+          referralCount: 0,
+          isVerified: true,
+          isSuspended: false,
+          reportCount: 0,
+          createdAt: new Date().toISOString(),
+          businessName: companyName.trim(),
+          location: officeAddress.trim(),
+          deliveryAddress: officeAddress.trim(),
+          state: "Logistics Partner",
+          profileCompleted: true
+        })
+      ]);
 
       // If referred by someone, increment their referral count
       if (referredBy) {
@@ -1162,9 +1217,7 @@ export default function LogisticsHub({
       }
       localStorage.removeItem('referredBy');
 
-      // Keep the newly created user logged in and navigate them directly to their Logistics Dashboard
-      setCompanyProfile(profile);
-      setSuccessMsg("Account verified and created successfully! Welcome to your Logistics Hub.");
+      setSuccessMsg("Logistics company account created and verified successfully! Welcome to your Logistics Hub.");
       setView("dashboard");
       
       // Clear forms
@@ -1203,6 +1256,14 @@ export default function LogisticsHub({
   // Handle Accept Job
   const handleAcceptJob = async (jobId: string, customEta?: string) => {
     if (!companyProfile) return;
+
+    if (!isLogisticsCompanyProfileComplete(companyProfile)) {
+      setError("Your company profile is incomplete. Please configure your CAC/RC registration, office address, vehicle fleet, covered campuses, base price, and settlement bank details before accepting delivery gigs.");
+      setActiveTab("profile");
+      setIsEditingProfile(true);
+      return;
+    }
+
     setLoading(true);
     setError("");
     try {
@@ -1695,8 +1756,14 @@ export default function LogisticsHub({
         updatedAt: new Date().toISOString()
       };
 
+      const isComplete = isLogisticsCompanyProfileComplete(updatedProfile);
+      (updatedProfile as any).profileCompleted = isComplete;
+
       // 1. Update in logistics_companies
-      await setDoc(doc(db, "logistics_companies", auth.currentUser.uid), updatedProfile, { merge: true });
+      await setDoc(doc(db, "logistics_companies", auth.currentUser.uid), {
+        ...updatedProfile,
+        profileCompleted: isComplete
+      }, { merge: true });
 
       // 2. Update in users collection
       await updateDoc(doc(db, "users", auth.currentUser.uid), {
@@ -1704,6 +1771,7 @@ export default function LogisticsHub({
         phoneNumber: editPhoneNumber.trim(),
         businessName: editCompanyName.trim(),
         location: editOfficeAddress.trim(),
+        profileCompleted: isComplete,
         updatedAt: new Date().toISOString()
       });
 
@@ -1821,14 +1889,31 @@ export default function LogisticsHub({
                     You are currently signed in as a standard student user account. Standard student accounts cannot access logistics company operation tools directly. Please sign out first.
                   </p>
                 </div>
-                <div className="flex flex-col gap-2 pt-2">
+                <div className="flex flex-col gap-2.5 pt-2">
                   <button
                     onClick={async () => {
                       setLoading(true);
                       try {
                         await signOut(auth);
                         setCompanyProfile(null);
-                        setView("splash");
+                        setView("login");
+                      } catch (e) {
+                        console.error(e);
+                      } finally {
+                        setLoading(false);
+                      }
+                    }}
+                    className="w-full h-12 bg-slate-900 dark:bg-zinc-800 hover:bg-orange-600 hover:dark:bg-orange-600 text-white rounded-xl font-bold text-sm transition-all cursor-pointer border-none flex items-center justify-center gap-2"
+                  >
+                    Log In to Fleet Manager
+                  </button>
+                  <button
+                    onClick={async () => {
+                      setLoading(true);
+                      try {
+                        await signOut(auth);
+                        setCompanyProfile(null);
+                        setView("signup");
                       } catch (e) {
                         console.error(e);
                       } finally {
@@ -1837,14 +1922,33 @@ export default function LogisticsHub({
                     }}
                     className="w-full h-12 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-sm transition-all cursor-pointer border-none flex items-center justify-center gap-2 shadow-lg shadow-orange-500/10"
                   >
-                    Sign Out of Student Account
+                    Register as Logistics Company
                   </button>
-                  <button
-                    onClick={onBackToMarket}
-                    className="w-full h-12 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300 rounded-xl font-bold text-sm transition-all cursor-pointer border-none"
-                  >
-                    Back to Marketplace
-                  </button>
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      onClick={async () => {
+                        setLoading(true);
+                        try {
+                          await signOut(auth);
+                          setCompanyProfile(null);
+                          setView("splash");
+                        } catch (e) {
+                          console.error(e);
+                        } finally {
+                          setLoading(false);
+                        }
+                      }}
+                      className="flex-1 h-11 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 rounded-xl font-bold text-xs transition-all cursor-pointer border-none"
+                    >
+                      Sign Out
+                    </button>
+                    <button
+                      onClick={onBackToMarket}
+                      className="flex-1 h-11 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 rounded-xl font-bold text-xs transition-all cursor-pointer border-none"
+                    >
+                      Back to Marketplace
+                    </button>
+                  </div>
                 </div>
               </div>
             ) : (
@@ -2306,10 +2410,19 @@ export default function LogisticsHub({
             </div>
 
             {/* Test PIN Code Helper block to make the app interactive and testable */}
-            <div className="bg-orange-50/50 dark:bg-orange-950/10 border border-orange-200/50 dark:border-orange-900/50 rounded-2xl p-4 mb-6 text-center">
-              <span className="text-[10px] font-black uppercase tracking-wider text-orange-600 block mb-1">Sandbox Testing OTP PIN</span>
-              <strong className="text-2xl font-black text-orange-600 tracking-widest">{generatedOtp}</strong>
-              <p className="text-[10px] text-slate-400 font-medium mt-1">Copy and insert this PIN below to complete verification.</p>
+            <div className="bg-orange-50/70 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-900/50 rounded-2xl p-4 mb-6 text-center space-y-2">
+              <span className="text-[10px] font-black uppercase tracking-wider text-orange-600 block">Sandbox Testing OTP PIN</span>
+              <strong className="text-2xl font-black text-orange-600 tracking-widest block">{generatedOtp}</strong>
+              <div className="flex items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setVerificationCode(generatedOtp)}
+                  className="px-3 py-1 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-bold transition-all cursor-pointer shadow-sm"
+                >
+                  Auto-fill PIN
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-400 font-medium">Click Auto-fill or enter the PIN manually below to complete verification.</p>
             </div>
 
             <form onSubmit={handleVerifyAndCreate} className="space-y-5">
@@ -2335,9 +2448,21 @@ export default function LogisticsHub({
               </button>
             </form>
 
+            <div className="flex items-center justify-between text-xs mt-4 pt-4 border-t border-slate-100 dark:border-zinc-800">
+              <span className="text-slate-400 font-medium">Didn't receive the code?</span>
+              <button
+                type="button"
+                onClick={handleResendLogisticsCode}
+                disabled={resendCooldown > 0 || isResending}
+                className="text-orange-600 font-bold hover:underline disabled:opacity-50 disabled:no-underline cursor-pointer bg-transparent border-none"
+              >
+                {isResending ? "Sending..." : resendCooldown > 0 ? `Resend in ${resendCooldown}s` : "Resend Code"}
+              </button>
+            </div>
+
             <button
               onClick={() => setView("signup")}
-              className="w-full py-3 mt-4 text-slate-500 text-xs font-bold hover:text-slate-700 transition-colors bg-transparent border-none cursor-pointer"
+              className="w-full py-3 mt-3 text-slate-500 text-xs font-bold hover:text-slate-700 transition-colors bg-transparent border-none cursor-pointer"
             >
               Back to registration form
             </button>
@@ -2485,6 +2610,10 @@ export default function LogisticsHub({
                   handleDeclineJob={handleDeclineJob}
                   loading={loading}
                   formatJobTime={formatJobTime}
+                  onNavigateToProfile={() => {
+                    setActiveTab("profile");
+                    setIsEditingProfile(true);
+                  }}
                 />
               )}
 
