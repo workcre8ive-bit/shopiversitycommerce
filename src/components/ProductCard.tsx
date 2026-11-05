@@ -7,8 +7,9 @@ import ReportModal from "./ReportModal";
 import ProductDetail from "./ProductDetail";
 import { db } from "../firebase";
 import { collection, query, where, onSnapshot, deleteDoc, doc, getDocs } from "firebase/firestore";
-import { Review, UserProfile } from "../types";
+import { UserProfile } from "../types";
 import { toggleWishlist, isProductInWishlist, WISHLIST_UPDATED_EVENT } from "../utils/wishlist";
+import VendorVerificationBadge from "./VendorVerificationBadge";
 
 interface ProductCardProps {
   product: Product;
@@ -270,13 +271,18 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                     <UserIcon className="w-2.5 h-2.5" style={{ color: brandColor }} />
                   </div>
                   <span 
-                    className="truncate max-w-[75px] font-bold transition-colors"
+                    className="truncate max-w-[65px] font-bold transition-colors"
                     style={{
                       color: isHovered ? brandColor : undefined
                     }}
                   >
                     {product.sellerName}
                   </span>
+                  <VendorVerificationBadge 
+                    user={sellerProfile || ((product as any).sellerVerified ? { isVerified: true, profileCompleted: true } as any : undefined)}
+                    size="xs"
+                    showIconOnly={true}
+                  />
                 </div>
 
                 {/* Quick link action capsules */}

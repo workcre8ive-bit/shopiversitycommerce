@@ -2174,16 +2174,7 @@ export default function AuthPage({
                     </span>
                   </button>
 
-                  {/* Switch to Phone Verification */}
-                  <button 
-                    type="button"
-                    onClick={handleSendPhoneCode}
-                    disabled={loading}
-                    className="w-full h-11 bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-800 dark:text-zinc-100 font-bold rounded-xl flex items-center justify-center gap-2 text-xs border border-slate-200 dark:border-zinc-700 transition-all cursor-pointer"
-                  >
-                    <Phone className="w-4 h-4 text-emerald-600" />
-                    <span>Verify via Phone SMS Instead</span>
-                  </button>
+
 
 
                   {/* Change Email Toggle / Form */}

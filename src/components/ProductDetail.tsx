@@ -12,6 +12,7 @@ import ReportModal from "./ReportModal";
 import ReviewSuccessModal from "./ReviewSuccessModal";
 import { AlertTriangle } from "lucide-react";
 import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
+import VendorVerificationBadge from "./VendorVerificationBadge";
 
 interface ProductDetailProps {
   product: Product;
@@ -1020,8 +1021,12 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                     {product.name}
                   </h2>
                   <div className="flex items-center gap-4 mb-4">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                        <span className="text-xs font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">by {product.sellerName}</span>
+                       <VendorVerificationBadge 
+                         user={sellerProfile || ((product as any).sellerVerified ? { isVerified: true, profileCompleted: true } as any : undefined)}
+                         size="sm"
+                       />
                        {product.category !== "Logistics & Errands" && product.category !== "Logistics" && (
                          <button 
                            onClick={(e) => {
@@ -1170,6 +1175,20 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                       <div>
                         <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Business Location</p>
                         <p className="text-xs font-bold text-slate-700 dark:text-slate-300">{product.location || sellerProfile?.campus || "Not Specified"}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-emerald-50 dark:bg-emerald-900/10 flex items-center justify-center text-emerald-600">
+                        <ShieldCheck className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Vendor Verification</p>
+                        <div className="mt-1">
+                          <VendorVerificationBadge 
+                            user={sellerProfile || ((product as any).sellerVerified ? { isVerified: true, profileCompleted: true } as any : undefined)}
+                            size="xs"
+                          />
+                        </div>
                       </div>
                     </div>
                     {product.type === "good" && (

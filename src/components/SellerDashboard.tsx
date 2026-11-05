@@ -23,6 +23,7 @@ import LiveRiderTrackingModal from "./LiveRiderTrackingModal";
 import SalesAnalytics from "./SalesAnalytics";
 import DashboardSlideshow from "./DashboardSlideshow";
 import { deduplicateLogisticsCompanies, filterActiveLogisticsCompanies } from "../utils/logisticsDeduplication";
+import { calculateVendorProfileProgress } from "../utils/vendorVerification";
 import { 
   LayoutDashboard, 
   LayoutGrid,
@@ -360,15 +361,9 @@ export default function SellerDashboard({
     }
   };
 
-  React.useEffect(() => {
-    // Show complete profile popup if profile is incomplete
-    if (currentUser && currentUser.profileCompleted === false) {
-      const timer = setTimeout(() => setShowCompleteProfile(true), 1500);
-      return () => clearTimeout(timer);
-    } else if (currentUser?.profileCompleted) {
-      setShowCompleteProfile(false);
-    }
-  }, [currentUser?.profileCompleted]);
+  const profileProgress = React.useMemo(() => {
+    return calculateVendorProfileProgress(currentUser);
+  }, [currentUser]);
 
   const [requestingPayout, setRequestingPayout] = React.useState(false);
 
@@ -885,6 +880,80 @@ export default function SellerDashboard({
                 </button>
               </div>
             </div>
+
+            {/* Dynamic Profile Completion Progress Card - Remains until 100% complete */}
+            {profileProgress.percentage < 100 && (
+              <div className="bg-white dark:bg-zinc-900 border border-slate-200/90 dark:border-zinc-800 rounded-[2rem] p-6 shadow-sm relative overflow-hidden">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+                  <div className="flex items-center gap-3.5">
+                    <div className={cn(
+                      "w-12 h-12 rounded-2xl flex items-center justify-center font-black text-sm border shadow-xs shrink-0",
+                      profileProgress.badgeTheme.bg,
+                      profileProgress.badgeTheme.text,
+                      profileProgress.badgeTheme.border
+                    )}>
+                      {profileProgress.percentage}%
+                    </div>
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-base font-black text-slate-900 dark:text-white">Profile Setup Progress</h3>
+                        <span className={cn(
+                          "px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border",
+                          profileProgress.badgeTheme.bg,
+                          profileProgress.badgeTheme.text,
+                          profileProgress.badgeTheme.border
+                        )}>
+                          Buyer Status: {profileProgress.badgeText}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                        {profileProgress.percentage === 0 
+                          ? "You haven't completed your profile yet (buyers will see 'Verification Pending'). Setup is optional and does not block selling."
+                          : "Finish remaining details to unlock the 'Verification Complete' badge for campus buyers."}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSubTab("settings")}
+                    className="px-5 py-2.5 bg-[#ff6b00] hover:bg-orange-600 active:scale-95 text-white rounded-xl text-xs font-black uppercase tracking-wider shadow-md transition-all self-start sm:self-auto cursor-pointer border-none shrink-0"
+                  >
+                    Finish Profile ({profileProgress.percentage}%)
+                  </button>
+                </div>
+
+                {/* Animated Progress Bar */}
+                <div className="w-full bg-slate-100 dark:bg-zinc-800 h-3 rounded-full overflow-hidden p-0.5 border border-slate-200/60 dark:border-zinc-700/60 mb-4">
+                  <div 
+                    className="h-full rounded-full bg-gradient-to-r from-orange-500 via-amber-500 to-emerald-500 transition-all duration-700"
+                    style={{ width: `${Math.max(6, profileProgress.percentage)}%` }}
+                  />
+                </div>
+
+                {/* Section Checklist Pills */}
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-1 text-left">
+                  {profileProgress.sections.map((sec) => (
+                    <div
+                      key={sec.id}
+                      className={cn(
+                        "p-2.5 rounded-xl border flex items-center gap-2 transition-all text-xs font-semibold",
+                        sec.isComplete 
+                          ? "bg-emerald-50/60 dark:bg-emerald-950/20 border-emerald-200/70 dark:border-emerald-900/40 text-emerald-800 dark:text-emerald-300"
+                          : "bg-slate-50 dark:bg-zinc-850 border-slate-200/60 dark:border-zinc-800 text-slate-500 dark:text-zinc-400"
+                      )}
+                    >
+                      <div className={cn(
+                        "w-4 h-4 rounded-full flex items-center justify-center shrink-0 text-[10px] font-bold",
+                        sec.isComplete ? "bg-emerald-600 text-white" : "bg-slate-200 dark:bg-zinc-700 text-slate-500"
+                      )}>
+                        {sec.isComplete ? "✓" : "○"}
+                      </div>
+                      <span className="truncate text-[11px]">{sec.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Stats Grid */}
             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
@@ -4832,32 +4901,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
     }
   };
 
-  const isProfileIncomplete = currentUser?.profileCompleted === false;
 
-  if (isProfileIncomplete) {
-    return (
-      <div className="max-w-2xl mx-auto bg-white dark:bg-slate-900 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 p-12 shadow-sm text-center">
-        <div className="w-20 h-20 bg-indigo-50 dark:bg-indigo-900/10 text-indigo-600 rounded-3xl flex items-center justify-center mx-auto mb-6">
-          <AlertCircle className="w-10 h-10" />
-        </div>
-        <h3 className="text-2xl font-black text-slate-900 dark:text-white mb-4 tracking-tight">Profile Incomplete</h3>
-        <p className="text-slate-500 dark:text-slate-400 mb-8 font-medium">
-          You must complete your profile (School, State, City, and Delivery Address) before you can list products for sale.
-        </p>
-        <button 
-          onClick={() => {
-            // Signal to parent to switch to settings tab
-            const event = new CustomEvent('switch-seller-tab', { detail: 'settings' });
-            window.dispatchEvent(event);
-          }}
-          className="px-8 py-4 bg-brand-gradient text-white rounded-2xl font-bold text-lg shadow-lg shadow-indigo-200 dark:shadow-indigo-900/20 hover:shadow-indigo-300 transition-all flex items-center justify-center gap-2 mx-auto"
-        >
-          Go to Profile Settings
-          <ArrowRight className="w-5 h-5" />
-        </button>
-      </div>
-    );
-  }
 
   return (
     <div className="max-w-3xl mx-auto bg-gradient-to-b from-white to-slate-50/50 dark:from-zinc-950 dark:to-zinc-900/50 rounded-3xl border border-slate-200 dark:border-zinc-800 p-6 sm:p-10 shadow-2xl transition-all relative overflow-hidden">

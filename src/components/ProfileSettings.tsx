@@ -40,7 +40,9 @@ import {
   ArrowLeft,
   ExternalLink,
   Scan,
-  ScanLine
+  ScanLine,
+  Edit2,
+  Check
 } from "lucide-react";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
 import { compressImage } from "../lib/imageUtils";
@@ -508,6 +510,8 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
   const [isSavingBank, setIsSavingBank] = React.useState(false);
   const [bankSaveSuccess, setBankSaveSuccess] = React.useState(false);
 
+  const [isEditingBank, setIsEditingBank] = React.useState(!user.bankDetails?.accountNumber);
+
   const handleSaveBankDetailsDirectly = async () => {
     const selectedBankName = bankName === "Other" ? customBankName : bankName;
     if (!selectedBankName) {
@@ -548,55 +552,25 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
         else if (bNorm.includes("firstbank")) effectiveCode = "011";
       }
 
-      // 1. Call Backend to create/link Subaccount and Recipient on Paystack
-      const connectRes = await fetch("/api/paystack/connect-recipient", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId: user?.uid,
-          bankName: selectedBankName,
-          bankCode: effectiveCode,
-          accountNumber: cleanAccount,
-          accountName: accountName.trim(),
-          businessName: businessName || user.businessName || accountName.trim(),
-          email: user.email || auth.currentUser?.email || "",
-          percentageCharge: 5
-        })
-      });
-      const connectData = await connectRes.json();
-      
-      if (!connectRes.ok || !connectData.success) {
-        throw new Error(connectData.error || connectData.message || "Failed to link Paystack subaccount. Please ensure bank and account number are correct.");
-      }
-
-      const newRecipientCode = connectData.recipientCode;
-      const newSubaccountCode = connectData.subaccountCode;
-      setSubaccountCode(newSubaccountCode);
-      setRecipientCode(newRecipientCode);
       if (effectiveCode) setBankCode(effectiveCode);
 
       const bankDetailsData = {
         bankName: selectedBankName,
-        bankCode: effectiveCode || connectData.bankDetails?.bankCode || "",
+        bankCode: effectiveCode || "",
         accountNumber: cleanAccount,
         accountName: accountName.trim(),
-        recipientCode: newRecipientCode,
-        subaccountCode: newSubaccountCode,
         verifiedAt: new Date().toISOString()
       };
 
       if (user?.uid) {
-        // 2. Save directly to Firestore
+        // Save directly to Firestore users collection
         const userRef = doc(db, "users", user.uid);
         await updateDoc(userRef, {
           bankDetails: bankDetailsData,
-          paystackConnected: true,
-          recipientCode: newRecipientCode,
-          subaccountCode: newSubaccountCode,
           updatedAt: new Date().toISOString()
         });
 
-        // 3. Persist in localStorage
+        // Persist in localStorage for instant access
         try {
           localStorage.setItem(`shopiversity_bank_details_${user.uid}`, JSON.stringify(bankDetailsData));
         } catch (e) {
@@ -605,11 +579,12 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
       }
 
       setIsAccountVerified(true);
+      setIsEditingBank(false);
       setBankSaveSuccess(true);
       setTimeout(() => setBankSaveSuccess(false), 4000);
     } catch (err: any) {
       console.error("Error saving bank details:", err);
-      setBankVerificationError(err.message || "Failed to save bank details and link Paystack subaccount.");
+      setBankVerificationError(err.message || "Failed to save bank details.");
       alert(err.message || "Failed to save bank details. Please check your bank and account number.");
     } finally {
       setIsSavingBank(false);
@@ -818,10 +793,6 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
     const wasIncomplete = !user.schoolName || !user.state || !user.city || (user.role !== "seller" && !user.deliveryAddress) || (user.role !== "buyer" && !user.verificationIdUrl);
     
     try {
-      if (!username.trim()) {
-        throw new Error("Username is required.");
-      }
-
       if (businessPhone.trim() && (phonePrefix === "+234" || country.toLowerCase() === "nigeria")) {
         const cleanBp = businessPhone.trim().replace(/\D/g, "");
         if (cleanBp.startsWith("0")) {
@@ -897,40 +868,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
       const chosenBank = bankName === "Other" ? customBankName : bankName;
       if (chosenBank || accountNumber || accountName) {
         const cleanAccount = accountNumber.trim().replace(/\D/g, '');
-        let currentSubCode = subaccountCode || user.subaccountCode || user.bankDetails?.subaccountCode || "";
-        let currentRecCode = recipientCode || user.recipientCode || user.bankDetails?.recipientCode || "";
         let currentBankCode = bankCode || user.bankDetails?.bankCode || "";
-
-        if (cleanAccount.length === 10 && accountName.trim() && !currentSubCode) {
-          try {
-            const connectRes = await fetch("/api/paystack/connect-recipient", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                userId: user.uid,
-                bankName: chosenBank,
-                bankCode: currentBankCode,
-                accountNumber: cleanAccount,
-                accountName: accountName.trim(),
-                businessName: businessName || user.businessName || accountName.trim(),
-                email: user.email || auth.currentUser?.email || "",
-                percentageCharge: 5
-              })
-            });
-            const connectData = await connectRes.json();
-            if (connectData.success) {
-              currentSubCode = connectData.subaccountCode || currentSubCode;
-              currentRecCode = connectData.recipientCode || currentRecCode;
-              if (connectData.bankDetails?.bankCode) {
-                currentBankCode = connectData.bankDetails.bankCode;
-              }
-              setSubaccountCode(currentSubCode);
-              setRecipientCode(currentRecCode);
-            }
-          } catch (autoSubErr) {
-            console.warn("Subaccount auto-link on full save notice:", autoSubErr);
-          }
-        }
 
         const bankData: any = {
           bankName: chosenBank,
@@ -939,13 +877,8 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
           accountName: accountName.trim(),
           verifiedAt: user.bankDetails?.verifiedAt || new Date().toISOString()
         };
-        if (currentSubCode) bankData.subaccountCode = currentSubCode;
-        if (currentRecCode) bankData.recipientCode = currentRecCode;
 
         updateData.bankDetails = bankData;
-        if (currentSubCode) updateData.subaccountCode = currentSubCode;
-        if (currentRecCode) updateData.recipientCode = currentRecCode;
-        if (currentSubCode && currentRecCode) updateData.paystackConnected = true;
 
         if (user.uid) {
           try {
@@ -1116,10 +1049,9 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
             )}>
               <status.icon className="w-3 h-3" />
               {status.label}
-              {status.tag === "verified" && <CheckCircle className="w-3 h-3 fill-current" />}
             </div>
           </div>
-          <p className="text-slate-500 dark:text-slate-400 font-medium">@{user.username}</p>
+          <p className="text-slate-500 dark:text-slate-400 font-medium">{user.businessName || user.email}</p>
           <div className="mt-3 flex flex-wrap justify-center sm:justify-start gap-2">
             <span className="text-[10px] font-bold text-purple-600 bg-purple-50 dark:bg-purple-950/20 px-2 py-1 rounded-lg uppercase tracking-wider">
               {user.role}
@@ -1262,58 +1194,30 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
 
               {(displayRole === "seller" || displayRole === "both" || displayRole === "admin") && (
                 <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Business / Store Name</label>
+                  <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Business / Store Name (Optional)</label>
                   <div className="relative">
                     <Building className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                     <input 
                       value={businessName}
                       onChange={(e) => setBusinessName(e.target.value)}
                       placeholder="e.g. Acme Hair Dressing, Mama Cass, Apple Shop"
-                      className="w-full h-14 pl-12 pr-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-purple-500 outline-none transition-all text-slate-900 dark:text-white"
+                      className="w-full h-14 pl-12 pr-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-purple-500 outline-none transition-all text-slate-900 dark:text-white font-bold"
                     />
                   </div>
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Full Name</label>
-              <div className="relative">
-                <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                <input 
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  className="w-full h-14 pl-12 pr-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-purple-500 outline-none transition-all text-slate-900 dark:text-white"
-                />
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Full Name</label>
+                <div className="relative">
+                  <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                  <input 
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    className="w-full h-14 pl-12 pr-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-purple-500 outline-none transition-all text-slate-900 dark:text-white font-bold"
+                  />
+                </div>
               </div>
-            </div>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between ml-1">
-                <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest">
-                  Username <span className="text-[10px] font-normal text-slate-400 lowercase">(6 chars)</span>
-                </label>
-                <button
-                  type="button"
-                  onClick={() => setUsername(generateSmartUsername(fullName || user.displayName))}
-                  title="Generate 6-character username based on your name"
-                  className="text-[10px] font-bold text-orange-600 dark:text-orange-400 hover:underline cursor-pointer bg-transparent border-none p-0 flex items-center gap-1"
-                >
-                  <Sparkles className="w-3 h-3" />
-                  Generate 6-char
-                </button>
-              </div>
-              <div className="relative">
-                <AtSign className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                <input 
-                  value={username}
-                  maxLength={6}
-                  onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 6))}
-                  placeholder="e.g. ayo482"
-                  className="w-full h-14 pl-12 pr-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-purple-500 outline-none transition-all text-slate-900 dark:text-white"
-                />
-              </div>
-            </div>
-          </div>
 
           <div className="space-y-2">
             <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Gender</label>
@@ -1505,7 +1409,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
             <div className="space-y-2">
               <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">
-                {displayRole === "seller" ? "Shop/Business Address" : "Delivery Address"}
+                {displayRole === "seller" ? "Shop/Business Address (Optional)" : "Delivery Address"}
               </label>
               <div className="relative">
                 <Navigation className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
@@ -1669,200 +1573,232 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
                 </ul>
               </div>
 
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Bank Name</label>
-                  <div className="relative">
-                    <Building className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                    <div 
-                      onClick={() => setIsBankDropdownOpen(!isBankDropdownOpen)}
-                      className="w-full h-14 pl-12 pr-12 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl flex items-center cursor-pointer hover:bg-white dark:hover:bg-slate-900 transition-all"
+              {!isEditingBank && (user.bankDetails?.accountNumber || accountNumber) ? (
+                <div className="bg-gradient-to-br from-emerald-50/70 to-teal-50/40 dark:from-emerald-950/20 dark:to-teal-950/10 p-6 rounded-3xl border border-emerald-200/80 dark:border-emerald-800/60 shadow-sm space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-emerald-200/60 dark:border-emerald-800/40 pb-4">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-md">
+                        <CheckCircle2 className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <span className="text-xs font-black uppercase tracking-wider text-emerald-800 dark:text-emerald-300">
+                          Verified Bank Details Saved
+                        </span>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                          Your bank account is saved and can be edited anytime.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingBank(true)}
+                      className="px-4 py-2 bg-white dark:bg-slate-900 border border-emerald-300 dark:border-emerald-700/80 rounded-xl text-xs font-bold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-all flex items-center gap-1.5 cursor-pointer shadow-xs self-start sm:self-auto"
                     >
-                      <span className={cn("text-sm font-bold", bankName ? "text-slate-900 dark:text-white" : "text-slate-400")}>
-                        {bankName || "Select Bank"}
-                      </span>
-                    </div>
-                    <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 pointer-events-none" />
-                    
-                    <AnimatePresence>
-                      {isBankDropdownOpen && (
-                        <>
-                          <div className="fixed inset-0 z-[90]" onClick={() => setIsBankDropdownOpen(false)} />
-                          <motion.div 
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: 10 }}
-                            className="absolute z-[100] left-0 right-0 mt-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl overflow-hidden"
-                          >
-                            <div className="p-3 border-b border-slate-100 dark:border-slate-800">
-                              <div className="relative">
-                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                                <input 
-                                  autoFocus
-                                  type="text"
-                                  placeholder="Search bank..."
-                                  value={bankSearchQuery}
-                                  onChange={(e) => setBankSearchQuery(e.target.value)}
-                                  className="w-full h-10 pl-10 pr-4 bg-slate-50 dark:bg-slate-800 border border-slate-100 dark:border-slate-700 rounded-xl text-sm outline-none focus:border-purple-500"
-                                />
-                              </div>
-                            </div>
-                            <div className="max-h-60 overflow-y-auto">
-                              {banks.filter(b => b.name.toLowerCase().includes(bankSearchQuery.toLowerCase())).length === 0 ? (
-                                <div className="p-4 text-center text-xs text-slate-400">No banks found</div>
-                              ) : (
-                                banks.filter(b => b.name.toLowerCase().includes(bankSearchQuery.toLowerCase())).map((bank, index) => (
-                                  <div 
-                                    key={`${bank.code}-${index}`}
-                                    onClick={() => {
-                                      setBankName(bank.name);
-                                      setBankCode(bank.code);
-                                      setIsBankDropdownOpen(false);
-                                      setBankSearchQuery("");
-                                      setAccountName("");
-                                      setIsAccountVerified(false);
-                                      setBankVerificationError("");
-                                    }}
-                                    className="px-4 py-3 hover:bg-purple-50 dark:hover:bg-purple-950/20 cursor-pointer text-sm font-bold text-slate-700 dark:text-slate-300 transition-colors"
-                                  >
-                                    {bank.name}
-                                  </div>
-                                ))
-                              )}
-                            </div>
-                          </motion.div>
-                        </>
-                      )}
-                    </AnimatePresence>
+                      <Edit2 className="w-3.5 h-3.5" />
+                      <span>Edit Bank Details</span>
+                    </button>
                   </div>
-                  {bankName === "Other" && (
-                    <input 
-                      value={customBankName}
-                      onChange={(e) => setCustomBankName(e.target.value)}
-                      className="w-full h-14 px-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-purple-500 outline-none transition-all text-slate-900 dark:text-white font-bold"
-                      placeholder="Enter bank name"
-                    />
-                  )}
-                </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Account Number</label>
-                    <div className="relative">
-                      <Hash className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                      <input 
-                        type="text"
-                        inputMode="numeric"
-                        value={accountNumber}
-                        onChange={(e) => {
-                          const val = e.target.value.replace(/\D/g, '').slice(0, 10);
-                          setAccountNumber(val);
-                          setAccountName("");
-                          setIsAccountVerified(false);
-                          setBankVerificationError("");
-                        }}
-                        className={cn(
-                          "w-full h-14 pl-12 pr-6 bg-slate-50 dark:bg-slate-800 border rounded-2xl focus:bg-white dark:focus:bg-slate-900 outline-none transition-all text-slate-900 dark:text-white font-mono font-bold tracking-wider",
-                          accountNumber.length > 0 && accountNumber.length !== 10 && bankName !== "Other" ? "border-amber-400" : "border-slate-200 dark:border-slate-700 focus:border-purple-500"
-                        )}
-                        placeholder="10-digit NUBAN number"
-                      />
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+                    <div className="p-3 bg-white/80 dark:bg-slate-900/80 rounded-2xl border border-emerald-100 dark:border-emerald-900/40">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Bank Name</p>
+                      <p className="text-sm font-extrabold text-slate-900 dark:text-white mt-0.5">{bankName || user.bankDetails?.bankName}</p>
                     </div>
-                    <p className="text-[11px] text-slate-400 ml-1 font-medium">Standard 10-digit Nigerian NUBAN account number</p>
+                    <div className="p-3 bg-white/80 dark:bg-slate-900/80 rounded-2xl border border-emerald-100 dark:border-emerald-900/40">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Account Number</p>
+                      <p className="text-sm font-mono font-black text-slate-900 dark:text-white mt-0.5 tracking-wider">{accountNumber || user.bankDetails?.accountNumber}</p>
+                    </div>
+                    <div className="p-3 bg-white/80 dark:bg-slate-900/80 rounded-2xl border border-emerald-100 dark:border-emerald-900/40">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Account Name</p>
+                      <p className="text-sm font-extrabold text-emerald-700 dark:text-emerald-300 mt-0.5 truncate">{accountName || user.bankDetails?.accountName}</p>
+                    </div>
                   </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
                   <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Account Name</label>
-                    <div className="relative flex gap-2">
-                      <div className="relative flex-1">
-                        <UserCheck className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                    <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Bank Name</label>
+                    <div className="relative">
+                      <Building className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                      <div 
+                        onClick={() => setIsBankDropdownOpen(!isBankDropdownOpen)}
+                        className="w-full h-14 pl-12 pr-12 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl flex items-center cursor-pointer hover:bg-white dark:hover:bg-slate-900 transition-all"
+                      >
+                        <span className={cn("text-sm font-bold", bankName ? "text-slate-900 dark:text-white" : "text-slate-400")}>
+                          {bankName || "Select Bank"}
+                        </span>
+                      </div>
+                      <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 pointer-events-none" />
+                      
+                      <AnimatePresence>
+                        {isBankDropdownOpen && (
+                          <>
+                            <div className="fixed inset-0 z-[90]" onClick={() => setIsBankDropdownOpen(false)} />
+                            <motion.div 
+                              initial={{ opacity: 0, y: 10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: 10 }}
+                              className="absolute z-[100] left-0 right-0 mt-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl overflow-hidden"
+                            >
+                              <div className="p-3 border-b border-slate-100 dark:border-slate-800">
+                                <div className="relative">
+                                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                                  <input 
+                                    autoFocus
+                                    type="text"
+                                    placeholder="Search bank..."
+                                    value={bankSearchQuery}
+                                    onChange={(e) => setBankSearchQuery(e.target.value)}
+                                    className="w-full h-10 pl-10 pr-4 bg-slate-50 dark:bg-slate-800 border border-slate-100 dark:border-slate-700 rounded-xl text-sm outline-none focus:border-purple-500"
+                                  />
+                                </div>
+                              </div>
+                              <div className="max-h-60 overflow-y-auto">
+                                {banks.filter(b => b.name.toLowerCase().includes(bankSearchQuery.toLowerCase())).length === 0 ? (
+                                  <div className="p-4 text-center text-xs text-slate-400">No banks found</div>
+                                ) : (
+                                  banks.filter(b => b.name.toLowerCase().includes(bankSearchQuery.toLowerCase())).map((bank, index) => (
+                                    <div 
+                                      key={`${bank.code}-${index}`}
+                                      onClick={() => {
+                                        setBankName(bank.name);
+                                        setBankCode(bank.code);
+                                        setIsBankDropdownOpen(false);
+                                        setBankSearchQuery("");
+                                        setAccountName("");
+                                        setIsAccountVerified(false);
+                                        setBankVerificationError("");
+                                      }}
+                                      className="px-4 py-3 hover:bg-purple-50 dark:hover:bg-purple-950/20 cursor-pointer text-sm font-bold text-slate-700 dark:text-slate-300 transition-colors"
+                                    >
+                                      {bank.name}
+                                    </div>
+                                  ))
+                                )}
+                              </div>
+                            </motion.div>
+                          </>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                    {bankName === "Other" && (
+                      <input 
+                        value={customBankName}
+                        onChange={(e) => setCustomBankName(e.target.value)}
+                        className="w-full h-14 px-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-purple-500 outline-none transition-all text-slate-900 dark:text-white font-bold"
+                        placeholder="Enter bank name"
+                      />
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Account Number</label>
+                      <div className="relative">
+                        <Hash className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                         <input 
                           type="text"
-                          value={accountName}
+                          inputMode="numeric"
+                          value={accountNumber}
                           onChange={(e) => {
-                            setAccountName(e.target.value);
+                            const val = e.target.value.replace(/\D/g, '').slice(0, 10);
+                            setAccountNumber(val);
+                            setAccountName("");
+                            setIsAccountVerified(false);
                             setBankVerificationError("");
                           }}
-                          className="w-full h-14 pl-12 pr-6 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-2xl outline-none text-slate-900 dark:text-white font-bold focus:border-purple-500"
-                          placeholder="Verified Account Name"
+                          className={cn(
+                            "w-full h-14 pl-12 pr-6 bg-slate-50 dark:bg-slate-800 border rounded-2xl focus:bg-white dark:focus:bg-slate-900 outline-none transition-all text-slate-900 dark:text-white font-mono font-bold tracking-wider",
+                            accountNumber.length > 0 && accountNumber.length !== 10 && bankName !== "Other" ? "border-amber-400" : "border-slate-200 dark:border-slate-700 focus:border-purple-500"
+                          )}
+                          placeholder="10-digit NUBAN number"
                         />
                       </div>
+                      <p className="text-[11px] text-slate-400 ml-1 font-medium">Standard 10-digit Nigerian NUBAN account number</p>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 dark:text-slate-200 uppercase tracking-widest ml-1">Account Name</label>
+                      <div className="relative flex gap-2">
+                        <div className="relative flex-1">
+                          <UserCheck className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                          <input 
+                            type="text"
+                            value={accountName}
+                            onChange={(e) => {
+                              setAccountName(e.target.value);
+                              setBankVerificationError("");
+                            }}
+                            className="w-full h-14 pl-12 pr-6 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-2xl outline-none text-slate-900 dark:text-white font-bold focus:border-purple-500"
+                            placeholder="Verified Account Name"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleVerifyAccount}
+                          disabled={isVerifying || accountNumber.length !== 10 || !bankName}
+                          className="px-6 h-14 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl font-bold text-xs text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950/20 transition-all disabled:opacity-50 cursor-pointer shrink-0 shadow-sm"
+                        >
+                          {isVerifying ? <Loader2 className="w-4 h-4 animate-spin" /> : "Verify"}
+                        </button>
+                      </div>
+                      {bankVerificationError && (
+                        <p className="text-xs text-red-500 font-bold mt-1.5 flex items-center gap-1.5">
+                          <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
+                          <span>{bankVerificationError}</span>
+                        </p>
+                      )}
+                      {isAccountVerified && accountName && (
+                        <p className="text-xs text-emerald-600 dark:text-emerald-400 font-bold mt-1.5 flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 shrink-0" />
+                          <span>Official Name: {accountName}</span>
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Save Bank Details Action Bar */}
+                  <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-purple-50/50 dark:bg-purple-950/20 p-4 rounded-2xl border border-purple-100 dark:border-purple-900/40">
+                    <div className="text-xs text-slate-600 dark:text-slate-300 font-medium">
+                      {isAccountVerified && accountName ? (
+                        <span className="text-purple-700 dark:text-purple-300 font-bold block">Account verified as: {accountName}</span>
+                      ) : (
+                        <span>Select your bank, enter 10-digit account number, click "Verify", then "Save Bank Details".</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {user.bankDetails?.accountNumber && (
+                        <button
+                          type="button"
+                          onClick={() => setIsEditingBank(false)}
+                          className="px-4 py-3 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all cursor-pointer shadow-xs"
+                        >
+                          Cancel
+                        </button>
+                      )}
                       <button
                         type="button"
-                        onClick={handleVerifyAccount}
-                        disabled={isVerifying || accountNumber.length !== 10 || !bankName}
-                        className="px-6 h-14 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl font-bold text-xs text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950/20 transition-all disabled:opacity-50 cursor-pointer shrink-0 shadow-sm"
+                        onClick={handleSaveBankDetailsDirectly}
+                        disabled={isSavingBank || !bankName || accountNumber.length !== 10 || !accountName}
+                        className="px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer border-none shrink-0"
                       >
-                        {isVerifying ? <Loader2 className="w-4 h-4 animate-spin" /> : "Verify"}
+                        {isSavingBank ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : bankSaveSuccess ? (
+                          <>
+                            <CheckCircle2 className="w-4 h-4" />
+                            <span>Bank Details Saved!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Save className="w-4 h-4" />
+                            <span>Save Bank Details</span>
+                          </>
+                        )}
                       </button>
                     </div>
-                    {bankVerificationError && (
-                      <p className="text-xs text-red-500 font-bold mt-1.5 flex items-center gap-1.5">
-                        <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
-                        <span>{bankVerificationError}</span>
-                      </p>
-                    )}
-                    {isAccountVerified && accountName && (
-                      <p className="text-xs text-emerald-600 dark:text-emerald-400 font-bold mt-1.5 flex items-center gap-1.5">
-                        <CheckCircle2 className="w-4 h-4 shrink-0" />
-                        <span>Official Name: {accountName}</span>
-                      </p>
-                    )}
                   </div>
                 </div>
-
-                {/* Save Bank Details Row */}
-                <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-purple-50/50 dark:bg-purple-950/20 p-4 rounded-2xl border border-purple-100 dark:border-purple-900/40">
-                  <div className="text-xs text-slate-600 dark:text-slate-300 font-medium flex flex-col sm:flex-row sm:items-center gap-2">
-                    {accountName && (subaccountCode || user.subaccountCode) ? (
-                      <div className="space-y-1">
-                        <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1.5">
-                          <CheckCircle2 className="w-4 h-4 shrink-0" />
-                          <span>Paystack Subaccount Linked & Active</span>
-                        </span>
-                        <div className="flex flex-wrap gap-2 text-[10px] font-mono text-slate-500 dark:text-slate-400">
-                          {(subaccountCode || user.subaccountCode) && (
-                            <span className="px-2 py-0.5 bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 rounded font-semibold">
-                              Subaccount: {subaccountCode || user.subaccountCode}
-                            </span>
-                          )}
-                          {(recipientCode || user.recipientCode) && (
-                            <span className="px-2 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded font-semibold">
-                              Recipient: {recipientCode || user.recipientCode}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    ) : isAccountVerified && accountName ? (
-                      <div className="space-y-0.5">
-                        <span className="text-purple-700 dark:text-purple-300 font-bold block">Account verified as: {accountName}</span>
-                        <span className="text-[11px] text-slate-500">Click "Save & Link Subaccount" to connect directly to Paystack.</span>
-                      </div>
-                    ) : (
-                      <span>Select bank, enter 10-digit account number, click "Verify", then "Save & Link Subaccount".</span>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleSaveBankDetailsDirectly}
-                    disabled={isSavingBank || !bankName || accountNumber.length !== 10 || !accountName}
-                    className="px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer border-none shrink-0"
-                  >
-                    {isSavingBank ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : bankSaveSuccess ? (
-                      <>
-                        <CheckCircle2 className="w-4 h-4" />
-                        <span>Subaccount Linked & Saved!</span>
-                      </>
-                    ) : (
-                      <>
-                        <Save className="w-4 h-4" />
-                        <span>Save & Link Subaccount</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
+              )}
 
                 <div className="pt-8 border-t border-slate-100 dark:border-slate-800 space-y-4">
                   <div className="flex items-center justify-between">

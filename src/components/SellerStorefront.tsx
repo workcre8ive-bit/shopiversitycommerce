@@ -25,6 +25,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/utils";
 import { ProductCard, ProductCardSkeleton } from "./ProductCard";
+import VendorVerificationBadge from "./VendorVerificationBadge";
 
 interface SellerStorefrontProps {
   sellerId: string;
@@ -266,6 +267,8 @@ export default function SellerStorefront({ sellerId, currentUser, previewSetting
             </p>
           )}
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
+            <VendorVerificationBadge user={seller} size="sm" />
+            <span className="text-slate-300 dark:text-slate-700">•</span>
             <div className="flex items-center gap-1 text-amber-500">
               <Star className="w-4 h-4 fill-current" />
               <span className="text-xs sm:text-sm font-black">4.9</span>
