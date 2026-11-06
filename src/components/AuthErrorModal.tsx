@@ -84,7 +84,7 @@ export default function AuthErrorModal({
   const modalContent = (
     <AnimatePresence>
       <div 
-        className="fixed inset-0 z-[999999] overflow-y-auto overscroll-contain flex flex-col items-center justify-start p-4 sm:p-6 pt-8 sm:pt-12 md:pt-16"
+        className="fixed inset-0 z-[999999] overflow-y-auto overscroll-contain flex flex-col items-center justify-start p-3 sm:p-4 pt-3 sm:pt-4 md:pt-6"
         role="dialog"
         aria-modal="true"
       >
@@ -94,16 +94,16 @@ export default function AuthErrorModal({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           onClick={onClose}
-          className="fixed inset-0 bg-black/75 backdrop-blur-md"
+          className="fixed inset-0 bg-black/80 backdrop-blur-md"
         />
 
-        {/* Modal Card - positioned up at top of viewport, fully visible without clipping */}
+        {/* Modal Card - positioned UP at top of viewport, fully visible without scrolling or cut-off */}
         <motion.div
-          initial={{ opacity: 0, scale: 0.95, y: -24 }}
+          initial={{ opacity: 0, scale: 0.96, y: -20 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.95, y: -24 }}
-          transition={{ type: "spring", stiffness: 380, damping: 28 }}
-          className="relative w-full max-w-md my-0 bg-white dark:bg-zinc-900 rounded-[2rem] border border-slate-200 dark:border-zinc-800 p-6 sm:p-7 shadow-2xl z-10 text-center space-y-4 max-h-[90vh] overflow-y-auto"
+          exit={{ opacity: 0, scale: 0.96, y: -20 }}
+          transition={{ type: "spring", stiffness: 400, damping: 30 }}
+          className="relative w-full max-w-md my-0 bg-white dark:bg-zinc-900 rounded-2xl sm:rounded-3xl border border-slate-200 dark:border-zinc-800 p-5 sm:p-6 shadow-2xl z-10 text-center space-y-3.5"
         >
           {/* Close button */}
           <button

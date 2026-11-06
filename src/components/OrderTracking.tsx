@@ -29,6 +29,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { cn, getOrderDeliveryPin } from "../lib/utils";
 import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
 import { usePaystackPayment } from "../hooks/usePaystackPayment";
+import { getSyncPaystackPublicKey } from "../utils/paystackConfig";
 import ReceiptModal from "./ReceiptModal";
 import ReviewSuccessModal from "./ReviewSuccessModal";
 import RefundRequestModal from "./RefundRequestModal";
@@ -78,7 +79,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
     reference: `ORD_${Date.now()}`,
     email: auth.currentUser?.email || "",
     amount: (orderToPay?.totalPrice || 0) * 100,
-    publicKey: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || "",
+    publicKey: getSyncPaystackPublicKey(),
   };
 
   const initializePayment = usePaystackPayment(basePaystackConfig);
@@ -435,11 +436,13 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
         } catch (dbErr) {
           console.warn("Direct Firestore update fallback error:", dbErr);
         }
-        setOrders(prev => prev.map(o => o.id === verifyingOrder.id ? { ...o, ...updatePayload } : o));
+        const completedOrderId = verifyingOrder.id;
+        setOrders(prev => prev.map(o => o.id === completedOrderId ? { ...o, ...updatePayload } : o));
         await processDeliveryConfirmation(verifyingOrder);
         setShowIdVerification(false);
         setVerifyingOrder(null);
         setProductIdInput("");
+        setReviewingOrderId(completedOrderId);
       }
     } catch (err: any) {
       console.error("Delivery confirmation error:", err);
@@ -450,9 +453,16 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
   };
 
   const submitReview = async (order: Order) => {
-    if (!auth.currentUser || !reviewComment.trim()) return;
+    if (!auth.currentUser) return;
     
     setSubmittingReview(true);
+    const finalComment = reviewComment.trim() || (
+      reviewRating === 5 ? "Excellent experience, highly recommended!" :
+      reviewRating === 4 ? "Great product and smooth campus delivery!" :
+      reviewRating === 3 ? "Good purchase, arrived as expected." :
+      reviewRating === 2 ? "Fair experience." : "Could be better."
+    );
+
     try {
       await addDoc(collection(db, "reviews"), {
         orderId: order.id,
@@ -460,7 +470,7 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
         buyerId: auth.currentUser.uid,
         buyerName: currentUser?.displayName || "Anonymous",
         rating: reviewRating,
-        comment: reviewComment,
+        comment: finalComment,
         createdAt: new Date().toISOString()
       });
 
@@ -660,8 +670,8 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
         createdAt: new Date().toISOString()
       });
 
-      alert("Order completed! You can now leave a review for this product.");
-      // We stay on the current tab so the user can see the status reflected as "completed"
+      // Automatically trigger rating popup for buyer upon order completion
+      setReviewingOrderId(order.id);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `orders/${order.id}`);
     } finally {
@@ -1766,26 +1776,38 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                           effectiveStatus === "payment_required" || 
                           Boolean(order.buyerDeliveryConfirmed)
                         );
+                        // Stage 4: Product Delivered - customer presses button to confirm delivery
                         const isStage4Complete = isStage3Complete && (
-                          effectiveStatus === "completed" || 
                           Boolean(order.buyerDeliveryConfirmed) || 
+                          effectiveStatus === "completed" || 
                           (order.paymentMethod === "online" && (order.status === "delivered" || effectiveStatus === "delivered"))
                         );
-                        const isStage5Complete = order.status === "completed" || effectiveStatus === "completed";
+                        // Stage 5: Order Complete - for online payment, ticks right after customer confirms product delivered; for POD, ticks after payment
+                        const isStage5Complete = isPod 
+                          ? (order.status === "completed" && (order.paymentStatus === "paid" || Boolean(order.podPaymentVerified)))
+                          : (order.status === "completed" || Boolean(order.buyerDeliveryConfirmed));
 
                         let activeStage = 0;
-                        if (isStage4Complete) activeStage = 4;
-                        else if (isStage3Complete) activeStage = 3;
-                        else if (isStage2Complete) activeStage = 2;
-                        else if (isStage1Complete) activeStage = 1;
+                        if (isStage5Complete) activeStage = 4;
+                        else if (isStage4Complete) activeStage = 3;
+                        else if (isStage3Complete) activeStage = 2;
+                        else if (isStage2Complete) activeStage = 1;
                         else activeStage = 0;
+
+                        const isSeller = order.sellerId === auth.currentUser?.uid || (currentUser?.role === "seller" && order.sellerId === currentUser?.uid);
+                        const isCourier = order.logisticsId === auth.currentUser?.uid || currentUser?.role === "logistics";
+                        const isBuyer = !isSeller && !isCourier;
 
                         const deliverySteps = [
                           { 
                             key: "seller_accepts", 
-                            label: "Vendor Confirmed & Packing", 
-                            desc: "Vendor accepted the order and is preparing items", 
-                            actor: "Vendor", 
+                            label: isBuyer ? "Seller Accepts" : (isSeller ? "Order Accepted" : "Seller Ready"), 
+                            desc: isBuyer 
+                              ? "Seller accepts the order & prepares package" 
+                              : (isSeller 
+                                ? "You accepted the customer's order and prepared package" 
+                                : "Seller prepared order and requested campus courier"), 
+                            actor: isBuyer ? "Seller / Vendor" : (isSeller ? "You (Vendor)" : "Seller"), 
                             icon: CheckCircle,
                             isCompleted: isStage1Complete,
                             isActive: activeStage === 0 && !isStage1Complete,
@@ -1793,11 +1815,13 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                           },
                           { 
                             key: "logistics_accepts", 
-                            label: "Courier Assigned & Accepted", 
-                            desc: order.logisticsName 
-                              ? `${order.logisticsName} accepted vendor dispatch request` 
-                              : "Campus logistics partner accepted vendor dispatch request", 
-                            actor: "Logistics Fleet", 
+                            label: isBuyer ? "Logistics Accepts" : (isSeller ? "Logistics Accepts" : "Gig Accepted"), 
+                            desc: isBuyer 
+                              ? (order.logisticsName ? `${order.logisticsName} accepted seller's delivery request` : "Logistics company accepts seller's delivery request") 
+                              : (isSeller 
+                                ? (order.logisticsName ? `${order.logisticsName} accepted your dispatch request` : "Logistics company accepted your dispatch request") 
+                                : "You accepted the seller's courier delivery gig"), 
+                            actor: isCourier ? "You (Logistics)" : "Logistics Fleet", 
                             icon: Truck,
                             isCompleted: isStage2Complete,
                             isActive: activeStage === 1,
@@ -1805,11 +1829,13 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                           },
                           { 
                             key: "in_transit", 
-                            label: "Package In Transit", 
-                            desc: order.logisticsName 
-                              ? `${order.logisticsName} is on the way with your package` 
-                              : "Logistics courier is on the way with your package", 
-                            actor: "Courier ➔ Customer", 
+                            label: "Product On Its Way", 
+                            desc: isBuyer 
+                              ? "Logistics company informing both buyer and seller (package in transit)" 
+                              : (isSeller 
+                                ? "Logistics company informing both buyer and seller (in transit)" 
+                                : "Package in transit • Informing both buyer and seller"), 
+                            actor: isCourier ? "You ➔ Customer" : "Logistics Courier", 
                             icon: Truck,
                             isCompleted: isStage3Complete,
                             isActive: activeStage === 2,
@@ -1818,8 +1844,12 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                           { 
                             key: "delivered", 
                             label: "Product Delivered", 
-                            desc: "Package arrived at campus destination. Customer confirms receipt", 
-                            actor: "Customer", 
+                            desc: isBuyer 
+                              ? "Buyer presses button to confirm physical package delivery" 
+                              : (isSeller 
+                                ? "Customer receives and inspects package" 
+                                : "Package handed over to customer at campus location"), 
+                            actor: isBuyer ? "You (Buyer)" : "Buyer / Customer", 
                             icon: Package,
                             isCompleted: isStage4Complete,
                             isActive: activeStage === 3,
@@ -1827,10 +1857,10 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
                           },
                           { 
                             key: "completed", 
-                            label: "Order Completed", 
+                            label: "Order Complete", 
                             desc: isPod 
-                              ? "Automatic after Pay on Delivery settlement" 
-                              : "Payment verified & transaction finalized", 
+                              ? "Automatic after payment for payment on delivery" 
+                              : "Automatic after customer confirms delivery • Escrow released", 
                             actor: "Escrow Finalized", 
                             icon: CheckCircle,
                             isCompleted: isStage5Complete,
@@ -2690,6 +2720,103 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
             </motion.div>
           </div>
         )}
+      </AnimatePresence>
+
+      {/* Automatic Rating & Review Popup Modal on Order Completion */}
+      <AnimatePresence>
+        {reviewingOrderId && (() => {
+          const reviewingOrder = orders.find(o => o.id === reviewingOrderId);
+          if (!reviewingOrder) return null;
+
+          return (
+            <div className="fixed inset-0 z-[500] flex items-center justify-center p-4 bg-black/75 backdrop-blur-md">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 15 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 15 }}
+                className="bg-white dark:bg-zinc-900 rounded-3xl p-6 sm:p-7 max-w-md w-full border border-slate-200 dark:border-zinc-800 shadow-2xl space-y-4 text-center relative"
+              >
+                <button
+                  onClick={() => setReviewingOrderId(null)}
+                  className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 dark:hover:text-white rounded-full hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors border-none cursor-pointer"
+                  aria-label="Close"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+
+                <div className="w-14 h-14 bg-amber-50 dark:bg-amber-950/40 text-amber-500 rounded-2xl flex items-center justify-center mx-auto shadow-sm">
+                  <Star className="w-7 h-7 fill-amber-400 text-amber-500" />
+                </div>
+
+                <div className="space-y-1">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-amber-600 dark:text-amber-400 px-3 py-1 bg-amber-50 dark:bg-amber-950/40 rounded-full inline-block">
+                    Order Completed • Review Seller
+                  </span>
+                  <h3 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white">
+                    Rate Your Experience
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-zinc-400 font-medium">
+                    How was your order of <strong className="text-slate-800 dark:text-zinc-200">{reviewingOrder.productName}</strong>?
+                  </p>
+                </div>
+
+                {/* Star Rating Selectors */}
+                <div className="flex items-center justify-center gap-2 py-1">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <button
+                      key={`modal-rating-star-${star}`}
+                      type="button"
+                      onClick={() => setReviewRating(star)}
+                      className="p-1 transition-transform hover:scale-125 cursor-pointer bg-transparent border-none"
+                    >
+                      <Star
+                        className={cn(
+                          "w-7 h-7 transition-colors",
+                          star <= reviewRating
+                            ? "text-amber-400 fill-amber-400"
+                            : "text-slate-200 dark:text-zinc-700"
+                        )}
+                      />
+                    </button>
+                  ))}
+                </div>
+                <div className="text-[11px] font-bold text-amber-600 dark:text-amber-400">
+                  {reviewRating === 5 && "⭐ Excellent - Perfect transaction!"}
+                  {reviewRating === 4 && "⭐ Great - Very satisfied"}
+                  {reviewRating === 3 && "⭐ Good - Met expectations"}
+                  {reviewRating === 2 && "⭐ Fair - Could be improved"}
+                  {reviewRating === 1 && "⭐ Poor - Disappointed"}
+                </div>
+
+                <textarea
+                  rows={3}
+                  value={reviewComment}
+                  onChange={(e) => setReviewComment(e.target.value)}
+                  placeholder="Share a few words about product quality, vendor speed, or packaging..."
+                  className="w-full p-3 bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs text-slate-900 dark:text-white outline-none resize-none focus:border-orange-500 font-sans"
+                />
+
+                <div className="flex gap-2.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setReviewingOrderId(null)}
+                    className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 font-bold text-xs rounded-xl cursor-pointer border-none"
+                  >
+                    Skip For Now
+                  </button>
+                  <button
+                    type="button"
+                    disabled={submittingReview}
+                    onClick={() => submitReview(reviewingOrder)}
+                    className="flex-1 py-2.5 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-bold text-xs rounded-xl shadow-md cursor-pointer border-none flex items-center justify-center gap-1.5"
+                  >
+                    {submittingReview ? <Loader2 className="w-4 h-4 animate-spin" /> : "Submit Rating"}
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          );
+        })()}
       </AnimatePresence>
 
       <ReviewSuccessModal

@@ -2,6 +2,7 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
+import crypto from "crypto";
 import { Resend } from "resend";
 import nodemailer from "nodemailer";
 import cors from "cors";
@@ -34,7 +35,40 @@ async function startServer() {
   });
 
   const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
-  const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
+
+  // Paystack Environment Resolution
+  // Securely resolves secret key without exposing to client, and resolves public key
+  const PAYSTACK_SECRET_KEY = (
+    process.env.PAYSTACK_SECRET_KEY ||
+    process.env.live_paystack_key ||
+    process.env.LIVE_PAYSTACK_KEY ||
+    process.env.PAYSTACK_LIVE_SECRET_KEY ||
+    process.env.PAYSTACK_LIVE_KEY ||
+    process.env.paystack_secret_key ||
+    ""
+  ).trim();
+
+  const PAYSTACK_PUBLIC_KEY = (
+    process.env.VITE_PAYSTACK_PUBLIC_KEY ||
+    process.env.live_public_key ||
+    process.env.LIVE_PUBLIC_KEY ||
+    process.env.PAYSTACK_PUBLIC_KEY ||
+    process.env.VITE_LIVE_PUBLIC_KEY ||
+    process.env.paystack_public_key ||
+    ""
+  ).trim();
+
+  if (PAYSTACK_SECRET_KEY) {
+    console.log(`[PAYSTACK CONFIG] Paystack Secret Key configured (${PAYSTACK_SECRET_KEY.startsWith("sk_live") ? "LIVE mode" : "TEST mode"})`);
+  } else {
+    console.warn("[PAYSTACK CONFIG] Paystack Secret Key not detected on server. Checked: PAYSTACK_SECRET_KEY, live_paystack_key, LIVE_PAYSTACK_KEY.");
+  }
+
+  if (PAYSTACK_PUBLIC_KEY) {
+    console.log(`[PAYSTACK CONFIG] Paystack Public Key configured (${PAYSTACK_PUBLIC_KEY.startsWith("pk_live") ? "LIVE mode" : "TEST mode"})`);
+  } else {
+    console.warn("[PAYSTACK CONFIG] Paystack Public Key not detected on server. Checked: VITE_PAYSTACK_PUBLIC_KEY, live_public_key, LIVE_PUBLIC_KEY.");
+  }
 
   // Brevo Transactional Email & SMS Engine Configuration & Persistent Store
   const BREVO_CONFIG_FILE = path.join(process.cwd(), "brevo-config.json");
@@ -1733,6 +1767,44 @@ Return ONLY a JSON object:
   });
 
   // Paystack API Routes
+  
+  // Safe Public Key retrieval endpoint for client frontend
+  // Never returns the secret key
+  app.get("/api/paystack/public-key", (req, res) => {
+    return res.status(200).json({
+      success: true,
+      publicKey: PAYSTACK_PUBLIC_KEY,
+      configured: Boolean(PAYSTACK_PUBLIC_KEY && PAYSTACK_PUBLIC_KEY.length > 5),
+      mode: PAYSTACK_PUBLIC_KEY.startsWith("pk_live") ? "live" : (PAYSTACK_PUBLIC_KEY.startsWith("pk_test") ? "test" : "unknown")
+    });
+  });
+
+  // Paystack Webhook Handler
+  // Verifies signature with PAYSTACK_SECRET_KEY using HMAC SHA512
+  app.post("/api/paystack/webhook", (req, res) => {
+    const signature = req.headers["x-paystack-signature"];
+    if (PAYSTACK_SECRET_KEY && signature) {
+      try {
+        const hash = crypto
+          .createHmac("sha512", PAYSTACK_SECRET_KEY)
+          .update(JSON.stringify(req.body))
+          .digest("hex");
+        if (hash !== signature) {
+          console.warn("[PAYSTACK WEBHOOK] Invalid signature detected.");
+          return res.status(400).send("Invalid signature");
+        }
+      } catch (cryptoErr) {
+        console.warn("[PAYSTACK WEBHOOK] Signature validation error:", cryptoErr);
+      }
+    }
+
+    const event = req.body;
+    console.log(`[PAYSTACK WEBHOOK] Received event: ${event?.event || "unknown"}`);
+
+    // Acknowledge receipt immediately with 200 OK
+    return res.status(200).json({ status: "success", received: true });
+  });
+
   app.post("/api/paystack/initialize", async (req, res) => {
     if (!PAYSTACK_SECRET_KEY) {
       return res.status(500).json({ error: "Paystack secret key not configured" });

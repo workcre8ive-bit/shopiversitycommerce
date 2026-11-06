@@ -1639,6 +1639,8 @@ export default function App() {
                   initialNeedsProfile={needsProfile} 
                   initialMode={authMode} 
                   initialRole={authRole}
+                  setActiveTab={setActiveTab}
+                  onOpenCookieSettings={() => setIsCookieSettingsOpen(true)}
                   onModeChange={(mode) => {
                     setAuthMode(mode);
                     setActiveTabState(mode === "login" ? "auth" : "signup");
@@ -2448,8 +2450,8 @@ export default function App() {
             )}
           </AnimatePresence>
 
-          {/* Clean modern website footer - hidden on product detail view to avoid duplicate logo in product body */}
-          {!viewingProduct && (
+          {/* Clean modern website footer - hidden on product detail view and auth/signup (AuthPage embeds it directly) */}
+          {!viewingProduct && activeTab !== "auth" && activeTab !== "signup" && (
             <Footer 
               setActiveTab={setActiveTab} 
               activeTab={activeTab} 

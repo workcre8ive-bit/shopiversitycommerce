@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { auth, db } from "../firebase";
 import { collection, query, where, orderBy, onSnapshot, addDoc, doc, getDoc, setDoc, getDocs, updateDoc, deleteDoc } from "firebase/firestore";
 import { usePaystackPayment } from "../hooks/usePaystackPayment";
+import { getSyncPaystackPublicKey } from "../utils/paystackConfig";
 import { toggleWishlist, isProductInWishlist, WISHLIST_UPDATED_EVENT } from "../utils/wishlist";
 
 import { cn, generateSixDigitPin } from "../lib/utils";
@@ -353,7 +354,7 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
     reference: (new Date()).getTime().toString(),
     email: currentUser?.email || auth.currentUser?.email || "guest@campus.com",
     amount: Math.round(ticketPrice * 100),
-    publicKey: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || "",
+    publicKey: getSyncPaystackPublicKey(),
     metadata: {
       custom_fields: []
     }

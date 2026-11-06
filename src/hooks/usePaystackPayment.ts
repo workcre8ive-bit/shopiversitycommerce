@@ -1,7 +1,8 @@
 import PaystackPop from "@paystack/inline-js";
+import { getPaystackPublicKey, getSyncPaystackPublicKey } from "../utils/paystackConfig";
 
 export interface PaystackConfig {
-  publicKey: string;
+  publicKey?: string;
   email: string;
   amount: number; // In kobo (amount in Naira * 100)
   reference?: string;
@@ -17,7 +18,7 @@ export interface PaystackCallbacks extends Partial<PaystackConfig> {
 }
 
 export function usePaystackPayment(config: PaystackConfig) {
-  return (
+  return async (
     optionsOrSuccess?: PaystackCallbacks | ((response: any) => void),
     onCloseParam?: () => void
   ) => {
@@ -37,12 +38,23 @@ export function usePaystackPayment(config: PaystackConfig) {
 
     try {
       const mergedConfig = { ...config, ...overrideConfig };
-      const key = mergedConfig.publicKey || (typeof import.meta !== "undefined" && import.meta.env ? import.meta.env.VITE_PAYSTACK_PUBLIC_KEY : "") || "";
+      
+      // 1. Check synchronous config and client environment
+      let key = (mergedConfig.publicKey || getSyncPaystackPublicKey() || "").trim();
+
+      // 2. If not yet resolved, asynchronously retrieve from backend endpoint (e.g. live_public_key on server)
+      if (!key) {
+        key = (await getPaystackPublicKey()).trim();
+      }
+
       const ref = mergedConfig.reference || mergedConfig.ref || `ORD_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
       const amount = Math.round(mergedConfig.amount);
 
       if (!key) {
-        alert("Paystack Public Key is not configured. Please provide a valid VITE_PAYSTACK_PUBLIC_KEY in your settings or environment variables.");
+        alert(
+          "Paystack Public Key is not configured.\n\n" +
+          "Please add VITE_PAYSTACK_PUBLIC_KEY (or live_public_key) to your Vercel Environment Variables and redeploy."
+        );
         if (onCloseHandler) onCloseHandler();
         return;
       }
@@ -91,4 +103,3 @@ export function usePaystackPayment(config: PaystackConfig) {
 }
 
 export default usePaystackPayment;
-

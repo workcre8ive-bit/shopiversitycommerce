@@ -7,6 +7,7 @@ import { collection, addDoc, doc, updateDoc, getDoc, query, where, getDocs, setD
 import { cn, generateSixDigitPin } from "../lib/utils";
 import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
 import { usePaystackPayment } from "../hooks/usePaystackPayment";
+import { getPaystackPublicKey, getSyncPaystackPublicKey } from "../utils/paystackConfig";
 
 interface CartDrawerProps {
   isOpen: boolean;
@@ -88,7 +89,7 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
     reference: (new Date()).getTime().toString(),
     email: currentUser?.email || auth.currentUser?.email || "",
     amount: Math.round(total * 100), // Paystack amount is in kobo for items subtotal
-    publicKey: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || "",
+    publicKey: getSyncPaystackPublicKey(),
     metadata: {
       custom_fields: []
     }
@@ -445,12 +446,17 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
     }
     
     if (paymentMethod === "online") {
-      if (!import.meta.env.VITE_PAYSTACK_PUBLIC_KEY) {
-        alert("Paystack Public Key is not configured. Please add it to your environment variables.");
+      setLoading(true);
+      const activeKey = await getPaystackPublicKey();
+      if (!activeKey) {
+        setLoading(false);
+        alert(
+          "Paystack Public Key is not configured.\n\n" +
+          "Please add VITE_PAYSTACK_PUBLIC_KEY (or live_public_key) to your Vercel Environment Variables and redeploy."
+        );
         return;
       }
-      setLoading(true);
-      initializePayment({ onSuccess, onClose: onClosePayment });
+      initializePayment({ onSuccess, onClose: onClosePayment, publicKey: activeKey });
     } else {
       // Pay on Delivery
       try {

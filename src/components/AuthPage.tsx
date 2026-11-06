@@ -65,6 +65,7 @@ import { SCHOOL_TYPES, NIGERIAN_SCHOOLS } from "../constants/schools";
 import { NIGERIAN_STATES, STATE_CITIES } from "../constants/locations";
 import TermsAndConditions from "./TermsAndConditions";
 import PrivacyPolicy from "./PrivacyPolicy";
+import Footer from "./Footer";
 import campusMarketTrading from "../assets/images/campus_market_trading_1788161927669.jpg";
 import campusDeliveryRider from "../assets/images/campus_delivery_rider_1788161947290.jpg";
 import campusStudentFashion from "../assets/images/campus_student_fashion_1788161963031.jpg";
@@ -86,7 +87,9 @@ export default function AuthPage({
   onModeChange,
   onGoToMarket,
   onNavigateToLogistics,
-  onVerificationScreenChange
+  onVerificationScreenChange,
+  setActiveTab,
+  onOpenCookieSettings
 }: { 
   initialNeedsProfile?: boolean;
   initialMode?: "login" | "signup";
@@ -95,6 +98,8 @@ export default function AuthPage({
   onGoToMarket?: () => void;
   onNavigateToLogistics?: () => void;
   onVerificationScreenChange?: (isVerifying: boolean) => void;
+  setActiveTab?: (tab: string) => void;
+  onOpenCookieSettings?: () => void;
 }) {
   const handleGoToMarket = () => {
     if (onVerificationScreenChange) {
@@ -686,6 +691,8 @@ export default function AuthPage({
                 }
               } else {
                 // Active profile document exists in Firestore as well. Genuine existing account.
+                setError("This email address is already in use on SHOPIVERSITY. Please switch to Sign In or reset your password.");
+                setFieldErrors({ email: "This email address is already registered." });
                 setErrorPopup({
                   isOpen: true,
                   type: "email_in_use",
@@ -2911,6 +2918,21 @@ export default function AuthPage({
           )}
         </div>
       </motion.div>
+
+      {/* Website Footer on Sign In & Sign Up pages */}
+      <div className="w-full relative z-10 mt-12 sm:mt-16">
+        <Footer 
+          setActiveTab={(tab) => {
+            if (setActiveTab) {
+              setActiveTab(tab);
+            } else {
+              handleGoToMarket();
+            }
+          }} 
+          activeTab={isLogin ? "auth" : "signup"} 
+          onOpenCookieSettings={onOpenCookieSettings}
+        />
+      </div>
     </div>
   );
 }

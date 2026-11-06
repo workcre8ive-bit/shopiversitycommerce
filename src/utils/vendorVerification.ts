@@ -27,9 +27,9 @@ export interface VendorVerificationProgress {
 /**
  * Calculates a vendor's profile completion percentage and determines
  * the three-tier verification badge for buyers:
- * - < 30%: "Verification Pending"
- * - 30% to 79%: "Fairly Verified"
- * - >= 80% or verified: "Verification Complete" (with verification icon)
+ * - < 40%: "Verification Pending"
+ * - 40% to 99%: "Fairly Verified"
+ * - 100%: "Verification Complete" (Strict 100% profile requirement with verification badge)
  */
 export function calculateVendorProfileProgress(user: UserProfile | null | undefined): VendorVerificationProgress {
   if (!user) {
@@ -118,7 +118,8 @@ export function calculateVendorProfileProgress(user: UserProfile | null | undefi
     dotColor: "bg-amber-500",
   };
 
-  if (isFullyComplete || percentage >= 80 || user.isVerified) {
+  // Vendor is verified ONLY if profile is 100 percent complete
+  if (percentage >= 100) {
     tier = "complete";
     badgeText = "Verification Complete";
     badgeTheme = {
@@ -128,7 +129,7 @@ export function calculateVendorProfileProgress(user: UserProfile | null | undefi
       iconColor: "text-emerald-600 dark:text-emerald-400",
       dotColor: "bg-emerald-500",
     };
-  } else if (percentage >= 30) {
+  } else if (percentage >= 40) {
     tier = "fairly";
     badgeText = "Fairly Verified";
     badgeTheme = {
