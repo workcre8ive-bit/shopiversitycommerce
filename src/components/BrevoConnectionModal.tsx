@@ -49,6 +49,7 @@ export default function BrevoConnectionModal({
   const [statusData, setStatusData] = useState<{
     configured: boolean;
     hasKey: boolean;
+    keyType?: string;
     maskedKey: string;
     senderEmail: string;
     senderName: string;
@@ -284,15 +285,20 @@ export default function BrevoConnectionModal({
           {/* Configuration Form */}
           <form onSubmit={handleSaveConfig} className="space-y-4">
             <div>
-              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
-                Brevo API Key (Starts with <code className="text-orange-600 font-mono">xkeysib-</code>)
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1 flex items-center justify-between">
+                <span>Brevo Key (<code className="text-orange-600 font-mono">xkeysib-</code> or <code className="text-orange-600 font-mono">xsmtpsib-</code>)</span>
+                {statusData?.keyType && (
+                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
+                    {statusData.keyType} Active
+                  </span>
+                )}
               </label>
               <div className="relative">
                 <input
                   type={showApiKey ? "text" : "password"}
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={statusData?.hasKey ? `Currently active: ${statusData.maskedKey}` : "xkeysib-..."}
+                  placeholder={statusData?.hasKey ? `Currently active: ${statusData.maskedKey} (${statusData.keyType || "Connected"})` : "xkeysib-... or xsmtpsib-..."}
                   className="w-full pl-4 pr-12 py-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-sm font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all"
                 />
                 <button
@@ -304,7 +310,7 @@ export default function BrevoConnectionModal({
                 </button>
               </div>
               <p className="text-[11px] text-slate-500 mt-1">
-                Stored permanently on the server and applied instantly to email &amp; SMS delivery.
+                Accepts both Brevo REST API keys (<code className="font-mono text-orange-600">xkeysib-</code>) and SMTP passwords (<code className="font-mono text-orange-600">xsmtpsib-</code>).
               </p>
             </div>
 

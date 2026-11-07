@@ -19,20 +19,19 @@ const hasImportMetaUrl = typeof import.meta !== "undefined" && !!import.meta.url
 const _filename = hasImportMetaUrl ? fileURLToPath(import.meta.url) : (typeof __filename !== "undefined" ? __filename : "");
 const _dirname = hasImportMetaUrl ? path.dirname(_filename) : (typeof __dirname !== "undefined" ? __dirname : ".");
 
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
+export const app = express();
+const PORT = Number(process.env.PORT) || 3000;
 
-  app.use(cors());
-  app.use(express.json());
-  
-  // Generic request logger
-  app.use((req, res, next) => {
-    if (req.path.startsWith("/api")) {
-      console.log(`${req.method} ${req.path}`);
-    }
-    next();
-  });
+app.use(cors());
+app.use(express.json());
+
+// Generic request logger
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api")) {
+    console.log(`${req.method} ${req.path}`);
+  }
+  next();
+});
 
   const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
@@ -73,19 +72,62 @@ async function startServer() {
   // Brevo Transactional Email & SMS Engine Configuration & Persistent Store
   const BREVO_CONFIG_FILE = path.join(process.cwd(), "brevo-config.json");
   let runtimeBrevoConfig = {
-    apiKey: process.env.BREVO_API_KEY || "",
-    senderEmail: process.env.BREVO_SENDER_EMAIL || "shopiversitycommerce@gmail.com",
-    senderName: process.env.BREVO_SENDER_NAME || "SHOPIVERSITY Campus Marketplace",
-    smsSender: process.env.BREVO_SMS_SENDER || "SHOPIV"
+    apiKey: (
+      process.env.BREVO_API_KEY ||
+      process.env.brevo_api_key ||
+      process.env.BREVO_KEY ||
+      process.env.brevo_key ||
+      process.env.BREVO_SMTP_KEY ||
+      process.env.brevo_smtp_key ||
+      process.env.VITE_BREVO_API_KEY ||
+      ""
+    ).trim(),
+    senderEmail: process.env.BREVO_SENDER_EMAIL || process.env.brevo_sender_email || "shopiversitycommerce@gmail.com",
+    senderName: process.env.BREVO_SENDER_NAME || process.env.brevo_sender_name || "SHOPIVERSITY Campus Marketplace",
+    smsSender: process.env.BREVO_SMS_SENDER || process.env.brevo_sms_sender || "SHOPIV"
   };
+
+  // Helper to reliably extract the active Brevo key across env vars, persistent file, and custom overrides
+  function getActiveBrevoKey(customKey?: string): string {
+    if (customKey && typeof customKey === "string") {
+      const k = customKey.trim();
+      if (k.length > 6 && k.toLowerCase() !== "test") return k;
+    }
+    const envCandidates = [
+      runtimeBrevoConfig.apiKey,
+      process.env.BREVO_API_KEY,
+      process.env.brevo_api_key,
+      process.env.BREVO_KEY,
+      process.env.brevo_key,
+      process.env.BREVO_SMTP_KEY,
+      process.env.brevo_smtp_key,
+      process.env.VITE_BREVO_API_KEY
+    ];
+    for (const cand of envCandidates) {
+      if (cand && typeof cand === "string") {
+        const trimmed = cand.trim();
+        if (trimmed.length > 6 && trimmed.toLowerCase() !== "test") {
+          return trimmed;
+        }
+      }
+    }
+    return "";
+  }
 
   // Load saved Brevo config from disk if available
   try {
     if (fs.existsSync(BREVO_CONFIG_FILE)) {
       const savedConfig = JSON.parse(fs.readFileSync(BREVO_CONFIG_FILE, "utf-8"));
-      runtimeBrevoConfig = { ...runtimeBrevoConfig, ...savedConfig };
+      if (savedConfig.apiKey && savedConfig.apiKey.trim().length > 6 && savedConfig.apiKey.trim().toLowerCase() !== "test") {
+        runtimeBrevoConfig.apiKey = savedConfig.apiKey.trim();
+      }
+      if (savedConfig.senderEmail && savedConfig.senderEmail.includes("@")) {
+        runtimeBrevoConfig.senderEmail = savedConfig.senderEmail.trim();
+      }
+      if (savedConfig.senderName) runtimeBrevoConfig.senderName = savedConfig.senderName.trim();
+      if (savedConfig.smsSender) runtimeBrevoConfig.smsSender = savedConfig.smsSender.trim();
       console.log("[BREVO PERSISTENCE] Loaded active Brevo settings from brevo-config.json:", {
-        configured: Boolean(runtimeBrevoConfig.apiKey),
+        configured: Boolean(getActiveBrevoKey()),
         senderEmail: runtimeBrevoConfig.senderEmail,
         senderName: runtimeBrevoConfig.senderName,
         smsSender: runtimeBrevoConfig.smsSender
@@ -175,7 +217,7 @@ async function startServer() {
 
   /**
    * Unified Email Sender
-   * Tries Brevo (Sendinblue) first -> then Resend -> then SMTP -> then fallback
+   * Tries Brevo (Sendinblue REST API or Brevo SMTP Relay) -> then Resend -> then SMTP -> then fallback
    */
   async function sendBrevoOrFallbackEmail(options: {
     to: string | string[] | { email: string; name?: string }[];
@@ -188,7 +230,7 @@ async function startServer() {
     tags?: string[];
     customApiKey?: string;
   }): Promise<{ success: boolean; provider: string; messageId?: string; error?: string }> {
-    const activeKey = (options.customApiKey || runtimeBrevoConfig.apiKey || process.env.BREVO_API_KEY || "").trim();
+    const activeKey = getActiveBrevoKey(options.customApiKey);
     const fromName = options.senderName || runtimeBrevoConfig.senderName || "SHOPIVERSITY Campus Marketplace";
     const fromEmail = options.senderEmail || runtimeBrevoConfig.senderEmail || "shopiversitycommerce@gmail.com";
 
@@ -209,10 +251,50 @@ async function startServer() {
 
     let lastError: string | null = null;
 
-    // 1. Try Brevo REST API v3
+    // 1. Try Brevo (Supports both REST API v3 and Brevo SMTP Relay)
     if (activeKey) {
+      const isSmtpKey = activeKey.startsWith("xsmtpsib-");
+
+      // A: If key has the Brevo SMTP password prefix ("xsmtpsib-"), prioritize Brevo SMTP Relay
+      if (isSmtpKey) {
+        try {
+          console.log(`[BREVO SMTP DISPATCHER] Key starts with xsmtpsib-. Connecting to Brevo SMTP Relay (smtp-relay.brevo.com:587) with sender ${fromEmail}...`);
+          const transporter = nodemailer.createTransport({
+            host: "smtp-relay.brevo.com",
+            port: 587,
+            secure: false, // TLS via STARTTLS
+            auth: {
+              user: process.env.BREVO_SMTP_USER || fromEmail,
+              pass: activeKey
+            },
+            tls: {
+              rejectUnauthorized: false
+            }
+          });
+
+          const info = await transporter.sendMail({
+            from: `"${fromName}" <${fromEmail}>`,
+            to: recipients.map(r => r.email).join(", "),
+            subject: options.subject,
+            html: options.htmlContent,
+            text: options.textContent
+          });
+
+          console.log(`[BREVO SMTP SUCCESS] Email successfully sent via Brevo SMTP Relay! MessageId: ${info.messageId}`);
+          return {
+            success: true,
+            provider: "brevo-smtp",
+            messageId: info.messageId
+          };
+        } catch (smtpErr: any) {
+          console.warn(`[BREVO SMTP ERROR] Failed via Brevo SMTP Relay: ${smtpErr.message}`);
+          lastError = `Brevo SMTP Relay: ${smtpErr.message}`;
+        }
+      }
+
+      // B: Try Brevo REST API v3 (standard xkeysib-... API key)
       try {
-        console.log(`[BREVO DISPATCHER] Sending email "${options.subject}" via Brevo to ${recipients.map(r => r.email).join(", ")}`);
+        console.log(`[BREVO REST DISPATCHER] Sending email "${options.subject}" via Brevo REST API v3 to ${recipients.map(r => r.email).join(", ")}`);
         
         const brevoPayload: any = {
           sender: {
@@ -244,7 +326,7 @@ async function startServer() {
         });
 
         const messageId = brevoResponse.data?.messageId || brevoResponse.data?.id || `BREVO_${Date.now()}`;
-        console.log(`[BREVO SUCCESS] Email successfully dispatched! MessageId: ${messageId}`);
+        console.log(`[BREVO SUCCESS] Email successfully dispatched via Brevo REST! MessageId: ${messageId}`);
         return {
           success: true,
           provider: "brevo",
@@ -253,11 +335,47 @@ async function startServer() {
       } catch (brevoErr: any) {
         const errorData = brevoErr.response?.data;
         const msg = errorData?.message || brevoErr.message || "Unknown Brevo error";
-        console.warn(`[BREVO ERROR] Failed sending via Brevo: ${msg}`, errorData || "");
+        console.warn(`[BREVO ERROR] Failed sending via Brevo REST: ${msg}`, errorData || "");
         lastError = `Brevo: ${msg}`;
+
+        // C: If REST failed with unauthorized / key not found, and key might be an SMTP key, attempt Brevo SMTP relay
+        if (!isSmtpKey && (brevoErr.response?.status === 401 || msg.includes("Key not found") || msg.includes("unauthorized"))) {
+          try {
+            console.log(`[BREVO SMTP FALLBACK] REST API returned 401. Attempting Brevo SMTP relay (smtp-relay.brevo.com:587)...`);
+            const transporter = nodemailer.createTransport({
+              host: "smtp-relay.brevo.com",
+              port: 587,
+              secure: false,
+              auth: {
+                user: process.env.BREVO_SMTP_USER || fromEmail,
+                pass: activeKey
+              },
+              tls: {
+                rejectUnauthorized: false
+              }
+            });
+
+            const info = await transporter.sendMail({
+              from: `"${fromName}" <${fromEmail}>`,
+              to: recipients.map(r => r.email).join(", "),
+              subject: options.subject,
+              html: options.htmlContent,
+              text: options.textContent
+            });
+
+            console.log(`[BREVO SMTP FALLBACK SUCCESS] Sent via Brevo SMTP Relay! MessageId: ${info.messageId}`);
+            return {
+              success: true,
+              provider: "brevo-smtp",
+              messageId: info.messageId
+            };
+          } catch (smtpFallErr: any) {
+            console.warn(`[BREVO SMTP FALLBACK ERROR] Also failed on Brevo SMTP: ${smtpFallErr.message}`);
+          }
+        }
       }
     } else {
-      console.log(`[BREVO NOTICE] Brevo API Key not configured in .env or settings. Checking fallback providers...`);
+      console.log(`[BREVO NOTICE] Brevo API Key not configured in .env, Vercel, or UI settings. Checking fallback providers...`);
     }
 
     // 2. Try Resend Fallback
@@ -316,19 +434,23 @@ async function startServer() {
     return {
       success: false,
       provider: "none",
-      error: lastError || "No active email service key (BREVO_API_KEY / RESEND_API_KEY) found."
+      error: lastError || "Brevo is not configured yet. Please configure BREVO_API_KEY in Vercel/environment, or connect it in your Dashboard Settings."
     };
   }
 
   // Brevo Status & Config Endpoints
   app.get("/api/brevo/status", (req, res) => {
-    const key = (runtimeBrevoConfig.apiKey || process.env.BREVO_API_KEY || "").trim();
+    const key = getActiveBrevoKey();
     const hasKey = key.length > 5;
+    const isSmtp = key.startsWith("xsmtpsib-");
+    const isApi = key.startsWith("xkeysib-");
+    const keyType = isSmtp ? "Brevo SMTP Key" : isApi ? "Brevo REST API Key" : (hasKey ? "Brevo API Key" : "None");
     const maskedKey = hasKey ? `${key.substring(0, 8)}••••••••${key.slice(-4)}` : "";
 
     return res.status(200).json({
       configured: hasKey,
       hasKey,
+      keyType,
       maskedKey,
       senderEmail: runtimeBrevoConfig.senderEmail,
       senderName: runtimeBrevoConfig.senderName,
@@ -377,12 +499,12 @@ async function startServer() {
     const { apiKey, senderEmail, senderName, testRecipientEmail } = req.body;
     const targetEmail = (testRecipientEmail || "shopiversitycommerce@gmail.com").trim();
 
-    const testKey = apiKey ? String(apiKey).trim() : (runtimeBrevoConfig.apiKey || process.env.BREVO_API_KEY || "").trim();
+    const testKey = getActiveBrevoKey(apiKey);
 
     if (!testKey) {
       return res.status(400).json({
         success: false,
-        error: "Brevo API Key is required to test the connection. Please provide your Brevo API key (starts with xkeysib-)."
+        error: "Brevo API Key is required to test the connection. Please provide your Brevo API key (starts with xkeysib- or xsmtpsib-) or add BREVO_API_KEY to your environment variables."
       });
     }
 
@@ -4320,24 +4442,30 @@ const FALLBACK_BANKS = [
   // Serve static assets from public directory
   app.use(express.static(path.join(process.cwd(), "public")));
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+  export async function startServer() {
+    // Vite middleware for development
+    if (process.env.NODE_ENV !== "production") {
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } else {
+      const distPath = path.join(process.cwd(), "dist");
+      app.use(express.static(distPath));
+      app.get("*", (req, res) => {
+        res.sendFile(path.join(distPath, "index.html"));
+      });
+    }
+
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${PORT}`);
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
-}
+  // Only start standalone listener when not in Vercel serverless environment
+  if (process.env.VERCEL !== "1" && !process.env.NOW_REGION) {
+    startServer();
+  }
 
-startServer();
+  export default app;
