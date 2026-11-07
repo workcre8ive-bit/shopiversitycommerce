@@ -1454,8 +1454,8 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                             <Truck className="w-5 h-5" />
                           </div>
                           <div>
-                            <p className="text-[10px] font-black uppercase tracking-widest mb-0.5">Campus Delivery</p>
-                            <p className="text-xs font-bold">₦{product.deliveryOptions?.deliveryPrice || 500} • To your {product.location || "nearest landmark"}</p>
+                            <p className="text-[10px] font-black uppercase tracking-widest mb-0.5">Campus Logistics Delivery</p>
+                            <p className="text-xs font-bold">Courier Rate Determined at Dispatch • To your campus address</p>
                           </div>
                         </div>
                       )}
@@ -2127,11 +2127,18 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                                 onAddToCart(product);
                                 onClose();
                               }}
-                              disabled={product.type === "good" && product.stock === 0}
-                              className="w-full h-16 bg-brand-gradient text-white rounded-2xl font-bold text-lg shadow-lg shadow-indigo-200 dark:shadow-indigo-900/20 hover:shadow-indigo-300 transition-all active:scale-[0.98] flex items-center justify-center gap-3 mb-10 disabled:opacity-50"
+                              disabled={product.type === "good" && (product.stock === 0 || product.status === "inactive")}
+                              className={cn(
+                                "w-full h-16 rounded-2xl font-bold text-lg transition-all active:scale-[0.98] flex items-center justify-center gap-3 mb-10 shadow-lg",
+                                (product.type === "good" && (product.stock === 0 || product.status === "inactive"))
+                                  ? "bg-slate-300 dark:bg-zinc-800 text-slate-500 dark:text-zinc-500 cursor-not-allowed shadow-none"
+                                  : "bg-brand-gradient text-white shadow-indigo-200 dark:shadow-indigo-900/20 hover:shadow-indigo-300"
+                              )}
                             >
                               <ShoppingCart className="w-6 h-6" />
-                              Add to Cart
+                              {(product.type === "good" && (product.stock === 0 || product.status === "inactive"))
+                                ? "Inactive to Buy (Out of Stock)"
+                                : "Add to Cart"}
                             </button>
                           )
                         )

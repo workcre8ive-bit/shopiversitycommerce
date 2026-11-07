@@ -158,6 +158,7 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
         let dbSellerName = "Merchant";
         let dbSellerPhone = "";
         let dbSellerAddress = "";
+        let dbSellerEmail = "";
         try {
           const sellerSnap = await getDoc(doc(db, "users", item.sellerId));
           if (sellerSnap.exists()) {
@@ -165,6 +166,7 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
             dbSellerName = sData.displayName || "Merchant";
             dbSellerPhone = sData.phoneNumber || sData.phone || "";
             dbSellerAddress = sData.deliveryAddress || sData.location || sData.campus || "";
+            dbSellerEmail = sData.email || "";
           }
         } catch (err) {
           console.error("Error fetching seller profile details:", err);
@@ -194,6 +196,7 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
           buyerPhone: currentUser?.phoneNumber || "N/A",
           sellerId: item.sellerId,
           sellerName: dbSellerName,
+          sellerEmail: dbSellerEmail,
           sellerPhone: dbSellerPhone,
           sellerAddress: dbSellerAddress,
           productId: item.productId,
@@ -265,9 +268,14 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
         }
 
         try {
-          await updateDoc(productRef, {
+          const updatePayload: any = {
             stock: newStock
-          });
+          };
+          if (newStock <= 0) {
+            updatePayload.status = "inactive";
+            updatePayload.outOfStockAt = new Date().toISOString();
+          }
+          await updateDoc(productRef, updatePayload);
         } catch (error) {
           handleFirestoreError(error, OperationType.UPDATE, `products/${item.productId}`);
         }
@@ -327,7 +335,7 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
           }
         }
 
-        // 3. Notify seller of the order
+        // 3. Notify seller of the order in Firestore & send Brevo Email Notifications
         try {
           await addDoc(collection(db, "notifications"), {
             userId: item.sellerId,
@@ -341,13 +349,88 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
           handleFirestoreError(error, OperationType.CREATE, "notifications/order");
         }
 
+        // Brevo Automated Email A: Order Confirmation to Buyer
+        const buyerEmail = currentUser?.email || auth.currentUser?.email;
+        if (buyerEmail) {
+          fetch("/api/send-order-status", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              orderId,
+              recipientEmail: buyerEmail,
+              recipientName: currentUser?.displayName || "Student",
+              buyerName: currentUser?.displayName || "Student",
+              sellerName: dbSellerName,
+              productName: item.name,
+              quantity: item.quantity,
+              totalPrice: itemTotal,
+              paymentMethod,
+              deliveryType,
+              status: isPaid ? "Payment Secured & Placed" : "Order Placed",
+              statusTitle: isPaid ? "Order Placed & Payment Secured in Escrow" : "Order Placed Successfully",
+              statusMessage: isPaid
+                ? `Thank you for your order! Your payment of ₦${itemTotal.toLocaleString()} has been safely vaulted in SHOPIVERSITY Escrow. Merchant ${dbSellerName} has been notified to prepare your item.`
+                : `Thank you for your order! Your request for "${item.name}" (x${item.quantity}) has been sent to merchant ${dbSellerName}. Payment is due on delivery.`,
+              deliveryOtp,
+              idempotencyKey: `order_placed_${orderId}_buyer`
+            })
+          }).catch(e => console.warn("[BREVO NOTICE] Buyer order placement email dispatch:", e));
+        }
+
+        // Brevo Automated Email B: Official Escrow Receipt to Buyer (if paid online)
+        if (isPaid && buyerEmail) {
+          fetch("/api/send-receipt", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              orderId,
+              recipientEmail: buyerEmail,
+              recipientName: currentUser?.displayName || "Student",
+              order: {
+                uniqueOrderId,
+                productName: item.name,
+                quantity: item.quantity,
+                totalPrice: itemTotal,
+                deliveryType,
+                campus: currentUser?.campus || "Campus",
+                sellerName: dbSellerName,
+                createdAt: new Date().toISOString()
+              }
+            })
+          }).catch(e => console.warn("[BREVO NOTICE] Buyer payment receipt email dispatch:", e));
+        }
+
+        // Brevo Automated Email C: Notification to Seller
+        if (dbSellerEmail) {
+          fetch("/api/send-order-status", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              orderId,
+              recipientEmail: dbSellerEmail,
+              recipientName: dbSellerName,
+              buyerName: currentUser?.displayName || "Student Buyer",
+              sellerName: dbSellerName,
+              productName: item.name,
+              quantity: item.quantity,
+              totalPrice: itemTotal,
+              paymentMethod,
+              deliveryType,
+              status: "New Order Received",
+              statusTitle: `🎉 New Order Received for "${item.name}"`,
+              statusMessage: `Congratulations! A student (${currentUser?.displayName || "Customer"}) placed an order for ${item.name} (x${item.quantity}) totaling ₦${itemTotal.toLocaleString()}. Please open your Seller Dashboard to accept and fulfill this order.`,
+              idempotencyKey: `order_received_${orderId}_seller`
+            })
+          }).catch(e => console.warn("[BREVO NOTICE] Seller new order email dispatch:", e));
+        }
+
         // 4. Notify seller if stock is low or finished
         if (newStock <= 0) {
           try {
             await addDoc(collection(db, "notifications"), {
               userId: item.sellerId,
-              title: "Out of Stock!",
-              message: `Your product ${item.name} is now out of stock.`,
+              title: "⚠️ Product Out of Stock - 3 Days to Refill!",
+              message: `Your product "${item.name}" has completely sold out and is now inactive to buy. Please refill your stock within 3 days (72 hours) in your Seller Dashboard or it will be automatically removed from the marketplace.`,
               type: "stock",
               isRead: false,
               createdAt: new Date().toISOString()

@@ -670,6 +670,53 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
         createdAt: new Date().toISOString()
       });
 
+      // Brevo Automated Transactional Email to Buyer on Order Completion
+      const buyerTargetEmail = (order as any).buyerEmail || auth.currentUser?.email;
+      if (buyerTargetEmail) {
+        fetch("/api/send-order-status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            orderId: order.id,
+            recipientEmail: buyerTargetEmail,
+            recipientName: order.buyerName || "Customer",
+            buyerName: order.buyerName || "Customer",
+            sellerName: order.sellerName || "Merchant",
+            productName: order.productName,
+            quantity: order.quantity || 1,
+            totalPrice: order.totalPrice,
+            deliveryType: order.deliveryType,
+            status: "completed",
+            statusTitle: "🎉 Order Completed Successfully!",
+            statusMessage: `You have successfully confirmed handover for "${order.productName}" (x${order.quantity || 1}). Funds have been credited to the merchant from escrow. You have a 72-hour window for any refund claims. Thank you for shopping on SHOPIVERSITY!`,
+            idempotencyKey: `order_completed_${order.id}_buyer`
+          })
+        }).catch(e => console.warn("[BREVO NOTICE] Order completed email to buyer err:", e));
+      }
+
+      // Brevo Automated Transactional Email to Seller on Order Completion
+      if ((order as any).sellerEmail) {
+        fetch("/api/send-order-status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            orderId: order.id,
+            recipientEmail: (order as any).sellerEmail,
+            recipientName: order.sellerName || "Merchant",
+            buyerName: order.buyerName || "Customer",
+            sellerName: order.sellerName || "Merchant",
+            productName: order.productName,
+            quantity: order.quantity || 1,
+            totalPrice: order.totalPrice,
+            deliveryType: order.deliveryType,
+            status: "completed",
+            statusTitle: "💰 Order Completed & Funds Released to You",
+            statusMessage: `The buyer confirmed receipt of "${order.productName}". Payment of ₦${order.totalPrice.toLocaleString()} is now ready for withdrawal in your Seller Dashboard earnings pool!`,
+            idempotencyKey: `order_completed_${order.id}_seller`
+          })
+        }).catch(e => console.warn("[BREVO NOTICE] Order completed email to seller err:", e));
+      }
+
       // Automatically trigger rating popup for buyer upon order completion
       setReviewingOrderId(order.id);
     } catch (error) {

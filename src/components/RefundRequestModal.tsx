@@ -14,6 +14,8 @@ import {
   UserCheck
 } from "lucide-react";
 import { cn } from "../lib/utils";
+import { auth, db } from "../firebase";
+import { doc, getDoc } from "firebase/firestore";
 
 interface RefundRequestModalProps {
   order: Order | null;
@@ -138,12 +140,29 @@ export default function RefundRequestModal({
     setErrorMessage(null);
 
     try {
+      // Look up seller email from Firestore if available
+      let sellerEmail = "";
+      try {
+        if (order.sellerId) {
+          const sSnap = await getDoc(doc(db, "users", order.sellerId));
+          if (sSnap.exists()) {
+            sellerEmail = sSnap.data().email || "";
+          }
+        }
+      } catch (e) {
+        // quiet fallback
+      }
+
+      const buyerEmail = auth.currentUser?.email || (order as any).buyerEmail || "";
+
       const payload = {
         orderId: order.id,
         buyerId: order.buyerId,
         buyerName: order.buyerName,
+        buyerEmail,
         sellerId: order.sellerId,
         sellerName: order.sellerName || "Vendor",
+        sellerEmail,
         logisticsId: order.logisticsId || null,
         logisticsName: order.logisticsName || null,
         originalOrderTotal: orderTotal,

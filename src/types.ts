@@ -158,6 +158,14 @@ export interface Product {
   collectionType?: string;
   businessAddress?: string;
   pickupSchool?: string | null;
+  outOfStockAt?: string | null;
+  isArchived?: boolean;
+  status?: "active" | "inactive";
+  pickupState?: string;
+  pickupLga?: string;
+  schoolAddress?: string;
+  schoolLocation?: string;
+  pickupPolicyAccepted?: boolean;
 }
 
 export interface Order {

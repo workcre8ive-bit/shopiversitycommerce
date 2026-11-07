@@ -102,7 +102,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { cn, getOrderSellerHandoverPin } from "../lib/utils";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
 import { compressImage } from "../lib/imageUtils";
-import { NIGERIAN_STATES, STATE_CITIES, NIGERIAN_LGAS, CITY_STREETS } from "../constants/locations";
+import { NIGERIAN_STATES, STATE_CITIES, NIGERIAN_LGAS, CITY_STREETS, POPULAR_SCHOOL_PICKUP_LOCATIONS, formatAvailability } from "../constants/locations";
 import ProfileSettings from "./ProfileSettings";
 import StorefrontSettingsTab from "./StorefrontSettingsTab";
 import ReceiptModal from "./ReceiptModal";
@@ -547,7 +547,7 @@ export default function SellerDashboard({
 
       await updateDoc(doc(db, "orders", orderId), updateData);
       
-      // Notify buyer
+      // Notify buyer in Firestore
       await addDoc(collection(db, "notifications"), {
         userId: order.buyerId,
         title: status === "paid" ? "Payment Confirmed!" : `Order ${status.replace(/_/g, ' ')}!`,
@@ -558,6 +558,56 @@ export default function SellerDashboard({
         isRead: false,
         createdAt: new Date().toISOString()
       });
+
+      // Brevo Automated Transactional Email to Buyer
+      try {
+        let buyerTargetEmail = (order as any).buyerEmail;
+        if (!buyerTargetEmail && order.buyerId) {
+          const bSnap = await getDoc(doc(db, "users", order.buyerId));
+          if (bSnap.exists()) {
+            buyerTargetEmail = bSnap.data().email;
+          }
+        }
+
+        if (buyerTargetEmail) {
+          let emailTitle = "Order Status Updated";
+          let emailMessage = `Your order for ${order.productName} has been updated to ${status}.`;
+
+          if (status === "accepted") {
+            emailTitle = "🎉 Seller Accepted Your Order & is Preparing Package";
+            emailMessage = `Great news! Merchant ${order.sellerName || "Seller"} accepted your order for "${order.productName}" (x${order.quantity || 1}) and is preparing the package.`;
+          } else if (status === "paid" || updateData.status === "completed") {
+            emailTitle = "✅ Payment Confirmed & Order Completed!";
+            emailMessage = `Payment confirmed for "${order.productName}". Your order is officially completed and protected by SHOPIVERSITY Escrow.`;
+          } else if (status === "start_dispatch" || status === "Out To Pickup Station") {
+            emailTitle = "📦 Product On Its Way to Pickup Point";
+            emailMessage = `Your product "${order.productName}" has been packed and is on its way to the designated campus pickup point.`;
+          }
+
+          fetch("/api/send-order-status", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              orderId,
+              recipientEmail: buyerTargetEmail,
+              recipientName: order.buyerName || "Customer",
+              buyerName: order.buyerName || "Customer",
+              sellerName: order.sellerName || "Seller",
+              productName: order.productName,
+              quantity: order.quantity || 1,
+              totalPrice: order.totalPrice,
+              deliveryType: order.deliveryType,
+              status,
+              statusTitle: emailTitle,
+              statusMessage: emailMessage,
+              deliveryOtp: order.deliveryOtp || order.deliveryPin,
+              idempotencyKey: `seller_update_${orderId}_${status}`
+            })
+          }).catch(e => console.warn("[BREVO NOTICE] Order status email dispatch:", e));
+        }
+      } catch (emErr) {
+        console.warn("[BREVO NOTICE] Failed fetching buyer email for status dispatch:", emErr);
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `orders/${orderId}`);
     }
@@ -685,6 +735,20 @@ export default function SellerDashboard({
   const handleEdit = (product: Product) => {
     setEditingProduct(product);
     setActiveSubTab("add-product");
+  };
+
+  const handleRefillStock = async (productId: string, newQty: number) => {
+    try {
+      await updateDoc(doc(db, "products", productId), {
+        stock: newQty,
+        status: "active",
+        outOfStockAt: null,
+        isArchived: false
+      });
+      alert(`Product successfully refilled to ${newQty} units! It is now active on the marketplace.`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `products/${productId}`);
+    }
   };
 
   const handleClearOrders = async () => {
@@ -1107,6 +1171,7 @@ export default function SellerDashboard({
                           product={product} 
                           onDelete={deleteProduct} 
                           onEdit={handleEdit} 
+                          onRefillStock={handleRefillStock}
                         />
                       ))
                     )}
@@ -1314,6 +1379,7 @@ export default function SellerDashboard({
                     product={product} 
                     onDelete={deleteProduct} 
                     onEdit={handleEdit} 
+                    onRefillStock={handleRefillStock}
                   />
                 ))
               )}
@@ -3598,9 +3664,24 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
   );
 }
 
-function ProductRow({ product, onDelete, onEdit, onRestore, isRestoring, isDeletedView }: any) {
+function ProductRow({ product, onDelete, onEdit, onRestore, onRefillStock, isRestoring, isDeletedView }: any) {
+  const isOutOfStock = product.type === "good" && (product.stock <= 0 || product.status === "inactive");
+  const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+  const outTime = product.outOfStockAt ? new Date(product.outOfStockAt).getTime() : Date.now();
+  const expiresAt = outTime + THREE_DAYS_MS;
+  const remainingMs = expiresAt - Date.now();
+  const isDelisted = remainingMs <= 0;
+  const remainingHours = Math.max(0, Math.floor(remainingMs / (1000 * 60 * 60)));
+  const remainingDays = Math.floor(remainingHours / 24);
+  const remHours = remainingHours % 24;
+
   return (
-    <div className="flex items-center justify-between p-3.5 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-800/30 hover:bg-slate-100/50 dark:hover:bg-slate-800/50 transition-all gap-3 min-w-0">
+    <div className={cn(
+      "p-3.5 rounded-2xl border transition-all gap-3 min-w-0 flex flex-col sm:flex-row sm:items-center justify-between",
+      isOutOfStock 
+        ? "border-amber-200 dark:border-amber-900/50 bg-amber-50/20 dark:bg-amber-950/10" 
+        : "border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-800/30 hover:bg-slate-100/50 dark:hover:bg-slate-800/50"
+    )}>
       <div className="flex items-center gap-3 min-w-0 flex-1">
         <div className="w-11 h-11 rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 shrink-0 border border-slate-200/60 dark:border-slate-700/60">
           <img 
@@ -3611,7 +3692,17 @@ function ProductRow({ product, onDelete, onEdit, onRestore, isRestoring, isDelet
           />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate">{product.name}</p>
+          <div className="flex items-center gap-2">
+            <p className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate">{product.name}</p>
+            {isOutOfStock && !isDeletedView && (
+              <span className={cn(
+                "text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded",
+                isDelisted ? "bg-red-600 text-white" : "bg-amber-500 text-white"
+              )}>
+                {isDelisted ? "Removed" : "Sold Out (Inactive)"}
+              </span>
+            )}
+          </div>
           <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
             <span className="text-xs font-black text-indigo-600 dark:text-indigo-400">
               ₦{product.price.toLocaleString()}
@@ -3623,14 +3714,41 @@ function ProductRow({ product, onDelete, onEdit, onRestore, isRestoring, isDelet
               {product.category}
             </span>
             {product.type === "good" && product.category !== "Food & Drinks" && (
-              <span className="text-[9px] font-bold text-slate-500 dark:text-slate-400 shrink-0">
-                • {product.stock} in stock
+              <span className={cn(
+                "text-[9px] font-bold shrink-0",
+                product.stock <= 0 ? "text-red-500 font-black" : "text-slate-500 dark:text-slate-400"
+              )}>
+                • {product.stock <= 0 ? "0 in stock" : `${product.stock} in stock`}
               </span>
             )}
           </div>
+          {isOutOfStock && !isDeletedView && (
+            <p className="text-[10px] text-amber-700 dark:text-amber-400 font-semibold mt-1">
+              {isDelisted
+                ? "Restock window expired (> 3 days). Refill stock to restore to marketplace."
+                : `Refill within ${remainingDays > 0 ? `${remainingDays}d ${remHours}h` : `${remainingHours}h`} before automatic removal.`
+              }
+            </p>
+          )}
         </div>
       </div>
-      <div className="flex items-center gap-1.5 shrink-0">
+      <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+        {isOutOfStock && !isDeletedView && onRefillStock && (
+          <button
+            type="button"
+            onClick={() => {
+              const qtyStr = window.prompt(`Enter refill quantity for ${product.name}:`, "5");
+              if (qtyStr) {
+                const val = parseInt(qtyStr, 10);
+                if (!isNaN(val) && val > 0) onRefillStock(product.id, val);
+              }
+            }}
+            className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-black uppercase tracking-wider flex items-center gap-1 cursor-pointer border-none"
+          >
+            <RotateCcw className="w-3 h-3" />
+            <span>Refill</span>
+          </button>
+        )}
         {isDeletedView ? (
           <div className="flex items-center gap-2">
             <button 
@@ -3672,123 +3790,193 @@ function ProductRow({ product, onDelete, onEdit, onRestore, isRestoring, isDelet
   );
 }
 
-function ProductGridItem({ product, onDelete, onEdit, onRestore, isRestoring, isDeletedView }: any) {
+function ProductGridItem({ product, onDelete, onEdit, onRestore, onRefillStock, isRestoring, isDeletedView }: any) {
+  const isOutOfStock = product.type === "good" && (product.stock <= 0 || product.status === "inactive");
+  const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+  const outTime = product.outOfStockAt ? new Date(product.outOfStockAt).getTime() : Date.now();
+  const expiresAt = outTime + THREE_DAYS_MS;
+  const remainingMs = expiresAt - Date.now();
+  const isDelisted = remainingMs <= 0;
+  const remainingHours = Math.max(0, Math.floor(remainingMs / (1000 * 60 * 60)));
+  const remainingDays = Math.floor(remainingHours / 24);
+  const remHours = remainingHours % 24;
+
   return (
     <div className={cn(
-      "bg-white dark:bg-slate-900 rounded-[2rem] border border-slate-100 dark:border-slate-800 overflow-hidden group shadow-sm hover:shadow-xl transition-all",
+      "bg-white dark:bg-slate-900 rounded-[2rem] border overflow-hidden group shadow-sm hover:shadow-xl transition-all flex flex-col justify-between",
+      isOutOfStock ? "border-amber-200 dark:border-amber-900/60" : "border-slate-100 dark:border-slate-800",
       isDeletedView && "opacity-80 grayscale-[0.5] hover:grayscale-0 hover:opacity-100"
     )}>
-      <div className="aspect-square relative overflow-hidden">
-        <img 
-          src={product.imageUrl || `https://picsum.photos/seed/${product.id}/400/400`} 
-          alt={product.name}
-          className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
-          referrerPolicy="no-referrer"
-        />
-        <div className="absolute top-4 right-4 flex flex-col gap-2 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity z-10">
-          {isDeletedView ? (
-            <>
-              <button 
-                onClick={() => onRestore(product.id)}
-                disabled={isRestoring}
-                className="w-10 h-10 bg-white dark:bg-slate-800 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-emerald-600 shadow-lg disabled:opacity-50"
-                title="Restore Product"
+      <div>
+        <div className="aspect-square relative overflow-hidden">
+          <img 
+            src={product.imageUrl || `https://picsum.photos/seed/${product.id}/400/400`} 
+            alt={product.name}
+            className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+            referrerPolicy="no-referrer"
+          />
+          {isOutOfStock && !isDeletedView && (
+            <div className="absolute top-4 left-4 z-10">
+              <span className={cn(
+                "px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider text-white shadow-md flex items-center gap-1",
+                isDelisted ? "bg-red-600" : "bg-amber-600"
+              )}>
+                <AlertTriangle className="w-3 h-3" />
+                <span>{isDelisted ? "Delisted" : "Sold Out"}</span>
+              </span>
+            </div>
+          )}
+          <div className="absolute top-4 right-4 flex flex-col gap-2 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity z-10">
+            {isDeletedView ? (
+              <>
+                <button 
+                  onClick={() => onRestore(product.id)}
+                  disabled={isRestoring}
+                  className="w-10 h-10 bg-white dark:bg-slate-800 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-emerald-600 shadow-lg disabled:opacity-50"
+                  title="Restore Product"
+                >
+                  {isRestoring ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+                </button>
+                <button 
+                  onClick={() => onDelete(product.id)}
+                  className="w-10 h-10 bg-white dark:bg-slate-800 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-red-700 shadow-lg"
+                  title="Delete Permanently"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </>
+            ) : (
+              <>
+                <button 
+                  onClick={() => onEdit(product)}
+                  className="w-10 h-10 bg-white dark:bg-slate-800 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-indigo-600 shadow-lg"
+                  title="Edit Product"
+                >
+                  <Edit2 className="w-4 h-4" />
+                </button>
+                <button 
+                  onClick={() => onDelete(product.id)}
+                  className="w-10 h-10 bg-white dark:bg-slate-800 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-red-600 shadow-lg"
+                  title="Move to Trash"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </>
+            )}
+          </div>
+          {isDeletedView && (
+            <div className="absolute inset-0 bg-red-900/10 flex items-center justify-center pointer-events-none">
+              <span className="bg-red-600 text-white px-4 py-1 rounded-full text-[10px] font-black uppercase tracking-widest shadow-lg transform -rotate-12">
+                Deleted
+              </span>
+            </div>
+          )}
+        </div>
+        <div className="p-6">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <span className={cn(
+                "text-[10px] font-bold px-2 py-1 rounded-lg uppercase tracking-wider",
+                product.condition === "new" ? "bg-emerald-50 dark:bg-emerald-900/10 text-emerald-600" :
+                product.condition === "refurbished" ? "bg-blue-50 dark:bg-blue-900/10 text-blue-600" : "bg-amber-50 dark:bg-amber-900/10 text-amber-600"
+              )}>
+                {product.condition}
+              </span>
+              <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/10 px-2 py-1 rounded-lg uppercase tracking-wider">
+                {product.category}
+              </span>
+            </div>
+            {product.type === "good" && (
+              <span className={cn(
+                "text-xs font-bold",
+                product.stock <= 0 ? "text-red-500 font-black" : "text-slate-400 dark:text-slate-500"
+              )}>
+                Stock: {product.stock}
+              </span>
+            )}
+          </div>
+          <h5 className="font-bold text-slate-900 dark:text-white mb-1 line-clamp-1">{product.name}</h5>
+          {product.deletedAt && isDeletedView && (
+            <div className="flex items-center gap-1.5 mb-2 text-red-500">
+              <Clock className="w-3 h-3" />
+              <p className="text-[9px] font-bold uppercase tracking-wider">
+                Deleted {new Date(product.deletedAt).toLocaleDateString()}
+              </p>
+            </div>
+          )}
+          {!isDeletedView && product.serialNumber && (
+            <p className="text-[10px] font-mono text-slate-500 mb-2">SN: {product.serialNumber}</p>
+          )}
+          <div className="flex items-center gap-2">
+            <p className="text-lg font-black text-indigo-600">₦{product.price.toLocaleString()}</p>
+            {product.type === "service" && product.pricingType && product.pricingType !== "fixed" && (
+              <span className="text-[10px] font-bold text-slate-400 uppercase">/ {product.pricingType}</span>
+            )}
+          </div>
+
+          {/* 3-day countdown & restock alert banner */}
+          {isOutOfStock && !isDeletedView && (
+            <div className={cn(
+              "mt-3 p-3 rounded-xl border text-xs space-y-1",
+              isDelisted 
+                ? "bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-900/40 text-red-700 dark:text-red-300" 
+                : "bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900/40 text-amber-800 dark:text-amber-300"
+            )}>
+              <div className="flex items-center gap-1.5 font-black uppercase tracking-wider text-[10px]">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                <span>{isDelisted ? "Removed from Marketplace" : "Sold Out (Inactive to Buy)"}</span>
+              </div>
+              <p className="text-[11px] leading-relaxed">
+                {isDelisted
+                  ? "3 days restock window expired. Refill stock to restore this product to the active marketplace."
+                  : `Refill within ${remainingDays > 0 ? `${remainingDays}d ${remHours}h` : `${remainingHours}h`} before automatic removal from marketplace.`
+                }
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="p-6 pt-0">
+        {!isDeletedView && (
+          <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex flex-col gap-2">
+            {isOutOfStock && onRefillStock && (
+              <button
+                type="button"
+                onClick={() => {
+                  const qtyStr = window.prompt(`Enter refill quantity for ${product.name}:`, "5");
+                  if (qtyStr) {
+                    const val = parseInt(qtyStr, 10);
+                    if (!isNaN(val) && val > 0) onRefillStock(product.id, val);
+                  }
+                }}
+                className="w-full h-11 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm cursor-pointer border-none"
               >
-                {isRestoring ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Refill Stock & Reactivate</span>
               </button>
-              <button 
-                onClick={() => onDelete(product.id)}
-                className="w-10 h-10 bg-white dark:bg-slate-800 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-red-700 shadow-lg"
-                title="Delete Permanently"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            </>
-          ) : (
-            <>
+            )}
+            <div className="flex gap-2">
               <button 
                 onClick={() => onEdit(product)}
-                className="w-10 h-10 bg-white dark:bg-slate-800 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-indigo-600 shadow-lg"
-                title="Edit Product"
+                className="flex-1 h-12 bg-indigo-600 hover:bg-indigo-750 text-white rounded-xl font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 border-none shadow-sm cursor-pointer"
               >
-                <Edit2 className="w-4 h-4" />
+                <Edit2 className="w-3.5 h-3.5" />
+                <span>Edit Listing</span>
               </button>
               <button 
                 onClick={() => onDelete(product.id)}
-                className="w-10 h-10 bg-white dark:bg-slate-800 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-red-600 shadow-lg"
-                title="Move to Trash"
+                className="w-12 h-12 bg-red-50 dark:bg-red-950/20 text-red-600 dark:text-red-400 rounded-xl flex items-center justify-center hover:bg-red-100 dark:hover:bg-red-900/30 transition-all border-none cursor-pointer"
+                title="Delete Listing"
               >
-                <Trash2 className="w-4 h-4" />
+                <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
               </button>
-            </>
-          )}
-        </div>
-        {isDeletedView && (
-          <div className="absolute inset-0 bg-red-900/10 flex items-center justify-center pointer-events-none">
-            <span className="bg-red-600 text-white px-4 py-1 rounded-full text-[10px] font-black uppercase tracking-widest shadow-lg transform -rotate-12">
-              Deleted
-            </span>
-          </div>
-        )}
-      </div>
-      <div className="p-6">
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-2">
-            <span className={cn(
-              "text-[10px] font-bold px-2 py-1 rounded-lg uppercase tracking-wider",
-              product.condition === "new" ? "bg-emerald-50 dark:bg-emerald-900/10 text-emerald-600" :
-              product.condition === "refurbished" ? "bg-blue-50 dark:bg-blue-900/10 text-blue-600" : "bg-amber-50 dark:bg-amber-900/10 text-amber-600"
-            )}>
-              {product.condition}
-            </span>
-            <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/10 px-2 py-1 rounded-lg uppercase tracking-wider">
-              {product.category}
-            </span>
-          </div>
-          {product.type === "good" && (
-            <span className="text-xs font-bold text-slate-400 dark:text-slate-500">Stock: {product.stock}</span>
-          )}
-        </div>
-        <h5 className="font-bold text-slate-900 dark:text-white mb-1 line-clamp-1">{product.name}</h5>
-        {product.deletedAt && isDeletedView && (
-          <div className="flex items-center gap-1.5 mb-2 text-red-500">
-            <Clock className="w-3 h-3" />
-            <p className="text-[9px] font-bold uppercase tracking-wider">
-              Deleted {new Date(product.deletedAt).toLocaleDateString()}
-            </p>
-          </div>
-        )}
-        {!isDeletedView && product.serialNumber && (
-          <p className="text-[10px] font-mono text-slate-500 mb-2">SN: {product.serialNumber}</p>
-        )}
-        <div className="flex items-center gap-2">
-          <p className="text-lg font-black text-indigo-600">₦{product.price.toLocaleString()}</p>
-          {product.type === "service" && product.pricingType && product.pricingType !== "fixed" && (
-            <span className="text-[10px] font-bold text-slate-400 uppercase">/ {product.pricingType}</span>
-          )}
-        </div>
-        
-        {!isDeletedView && (
-          <div className="mt-6 pt-6 border-t border-slate-100 dark:border-slate-800 flex gap-2">
-            <button 
-              onClick={() => onEdit(product)}
-              className="flex-1 h-12 bg-indigo-600 hover:bg-indigo-750 text-white rounded-xl font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 border-none shadow-sm cursor-pointer"
-            >
-              <Edit2 className="w-3.5 h-3.5" />
-              <span>Edit Listing</span>
-            </button>
-            <button 
-              onClick={() => onDelete(product.id)}
-              className="w-12 h-12 bg-red-50 dark:bg-red-950/20 text-red-600 dark:text-red-400 rounded-xl flex items-center justify-center hover:bg-red-100 dark:hover:bg-red-900/30 transition-all border-none cursor-pointer"
-              title="Delete Listing"
-            >
-              <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
-            </button>
+            </div>
           </div>
         )}
 
         {isDeletedView && (
-          <div className="mt-6 pt-6 border-t border-slate-50 dark:border-slate-800 flex gap-2">
+          <div className="mt-4 pt-4 border-t border-slate-50 dark:border-slate-800 flex gap-2">
             <button 
               onClick={() => onRestore(product.id)}
               disabled={isRestoring}
@@ -3926,9 +4114,11 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
   const [deliveryOptions, setDeliveryOptions] = React.useState({
     delivery: editingProduct?.deliveryOptions?.delivery ?? true,
     pickup: editingProduct?.deliveryOptions?.pickup ?? true,
-    deliveryPrice: editingProduct?.deliveryOptions?.deliveryPrice || 500
+    deliveryPrice: 0
   });
-  const [deliveryPriceInput, setDeliveryPriceInput] = React.useState(editingProduct?.deliveryOptions?.deliveryPrice !== undefined ? editingProduct.deliveryOptions.deliveryPrice.toString() : "500");
+  const [pickupPolicyAccepted, setPickupPolicyAccepted] = React.useState<boolean>(
+    editingProduct?.pickupPolicyAccepted ?? true
+  );
   const [deliveryTime, setDeliveryTime] = React.useState(editingProduct?.deliveryTime?.toString() || "1");
   const [deliveryTimeUnit, setDeliveryTimeUnit] = React.useState<"hours" | "days" | "weeks">(editingProduct?.deliveryTimeUnit || "days");
   const [location, setLocation] = React.useState(editingProduct?.location || "");
@@ -3937,23 +4127,28 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
   const [priceBefore, setPriceBefore] = React.useState(editingProduct?.priceBefore?.toString() || "");
   const [collectionType, setCollectionType] = React.useState(editingProduct?.collectionType || "");
   const [manualBusinessAddress, setManualBusinessAddress] = React.useState(editingProduct?.businessAddress || "");
+  
+  // Structured School Pickup Inputs
   const [addrCountry, setAddrCountry] = React.useState("Nigeria");
-  const [addrState, setAddrState] = React.useState("");
-  const [addrLga, setAddrLga] = React.useState("");
-  const [addrCity, setAddrCity] = React.useState("");
-  const [addrStreet, setAddrStreet] = React.useState("");
-  const [addrSchool, setAddrSchool] = React.useState("");
-  const [addrSuggestions, setAddrSuggestions] = React.useState<any[]>([]);
-  const [isSearchingSuggestions, setIsSearchingSuggestions] = React.useState(false);
-  const [lgaPlacesSearch, setLgaPlacesSearch] = React.useState("");
-  const [lgaPlacesSuggestions, setLgaPlacesSuggestions] = React.useState<any[]>([]);
-  const [isSearchingLgaPlaces, setIsSearchingLgaPlaces] = React.useState(false);
-  const justSelected = React.useRef(false);
-  const [formStep, setFormStep] = React.useState<"details" | "pricing" | "logistics" | "images">("details");
+  const [addrState, setAddrState] = React.useState(editingProduct?.pickupState || "");
+  const [addrLga, setAddrLga] = React.useState(editingProduct?.pickupLga || "");
+  const [schoolAddress, setSchoolAddress] = React.useState(
+    editingProduct?.schoolAddress || editingProduct?.businessAddress || ""
+  );
+  const [schoolLocationPreset, setSchoolLocationPreset] = React.useState<string>(
+    editingProduct?.schoolLocation && POPULAR_SCHOOL_PICKUP_LOCATIONS.includes(editingProduct.schoolLocation)
+      ? editingProduct.schoolLocation
+      : editingProduct?.schoolLocation
+        ? "✍️ Other / Custom School Location..."
+        : "School Main Gate / Security Post"
+  );
+  const [schoolLocationCustom, setSchoolLocationCustom] = React.useState<string>(
+    editingProduct?.schoolLocation && !POPULAR_SCHOOL_PICKUP_LOCATIONS.includes(editingProduct.schoolLocation)
+      ? editingProduct.schoolLocation
+      : ""
+  );
 
-  const [hasInitializedAddress, setHasInitializedAddress] = React.useState(false);
-  const [campusSearchQuery, setCampusSearchQuery] = React.useState("");
-  const [showCampusDropdown, setShowCampusDropdown] = React.useState(false);
+  const [formStep, setFormStep] = React.useState<"details" | "pricing" | "logistics" | "images">("details");
 
   const [logisticsType, setLogisticsType] = React.useState<"registered" | "custom">(editingProduct?.logisticsType || "custom");
   const [selectedLogisticsCompanyId, setSelectedLogisticsCompanyId] = React.useState<string>(editingProduct?.logisticsCompanyId || "");
@@ -3990,7 +4185,6 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
         qSnap.forEach((doc) => {
           list.push({ id: doc.id, ...doc.data() });
         });
-        // Deduplicate companies and filter out deleted/orphaned accounts in product setup
         const deduped = await filterActiveLogisticsCompanies(list);
         setAllLogisticsCompanies(deduped);
       } catch (err) {
@@ -4003,284 +4197,61 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
   }, [db]);
 
   const filteredLogisticsCompanies = React.useMemo(() => {
-    const currentSchool = (addrSchool || currentUser?.campus || "").trim().toLowerCase();
+    const currentSchool = (currentUser?.campus || "").trim().toLowerCase();
     if (!currentSchool) return allLogisticsCompanies;
     return allLogisticsCompanies.filter((company) => {
       return company.coveredCampuses?.some(
         (camp: string) => camp.trim().toLowerCase() === currentSchool
       );
     });
-  }, [allLogisticsCompanies, addrSchool, currentUser?.campus]);
+  }, [allLogisticsCompanies, currentUser?.campus]);
 
-  // Sync state if product editing shifts
+  // Initializing address from editingProduct or user profile
   React.useEffect(() => {
-    setHasInitializedAddress(false);
-  }, [editingProduct?.id]);
-
-  React.useEffect(() => {
-    if (hasInitializedAddress) return;
-
-    if (editingProduct?.location) {
-      const parts = editingProduct.location.split(",").map((p: any) => p.trim());
-      const hasNigeria = parts[parts.length - 1]?.toLowerCase() === "nigeria";
-      const actualParts = hasNigeria ? parts.slice(0, parts.length - 1) : parts;
-      
-      let state = "";
-      let lga = "";
-      let city = "";
-      let street = "";
-      
-      if (actualParts.length > 0) {
-        const statePart = actualParts[actualParts.length - 1] || "";
-        state = statePart.replace(/\s+State$/i, "").trim();
-      }
-      if (actualParts.length > 1) {
-        const lgaPart = actualParts[actualParts.length - 2] || "";
-        lga = lgaPart.replace(/\s+LGA$/i, "").trim();
-      }
-      if (actualParts.length > 2) {
-        city = actualParts[actualParts.length - 3] || "";
-      }
-      if (actualParts.length > 3) {
-        street = actualParts.slice(0, actualParts.length - 3).join(", ");
-      } else if (actualParts.length === 3) {
-        street = actualParts[0];
-      } else if (actualParts.length === 2) {
-        street = actualParts[0];
-      } else if (actualParts.length === 1) {
-        street = actualParts[0];
-      }
-      
-      setAddrCountry("Nigeria");
-      const matchedState = NIGERIAN_STATES.find(s => s.toLowerCase() === state.toLowerCase()) || "";
-      setAddrState(matchedState);
-      
-      if (matchedState) {
-        const lgasForState = NIGERIAN_LGAS[matchedState] || [];
-        const matchedLga = lgasForState.find(l => l.toLowerCase() === lga.toLowerCase() || l.replace(/\s+LGA$/i, "").toLowerCase() === lga.toLowerCase()) || "";
-        setAddrLga(matchedLga);
-        
-        const citiesForState = STATE_CITIES[matchedState] || [];
-        const matchedCity = citiesForState.find(c => c.toLowerCase() === city.toLowerCase()) || city || "";
-        setAddrCity(matchedCity);
-      } else {
-        setAddrLga("");
-        setAddrCity(city);
-      }
-      
-      setAddrStreet(street);
-      const school = editingProduct?.pickupSchool || currentUser?.campus || "";
-      setAddrSchool(school);
-      setCampusSearchQuery(school);
-      setHasInitializedAddress(true);
-    } else {
-      setAddrCountry("Nigeria");
-      setAddrState("");
-      setAddrLga("");
-      setAddrCity("");
-      setAddrStreet("");
-      setAddrSchool("");
-      setCampusSearchQuery("");
-      setHasInitializedAddress(true);
-    }
-  }, [editingProduct, currentUser, hasInitializedAddress]);
-
-  React.useEffect(() => {
-    if (!addrState && !addrLga && !addrCity && !addrStreet && !addrSchool) return;
-    
-    // Store front or house address remains in the full stored location text
-    const parts = [];
-    if (addrStreet) parts.push(addrStreet);
-    if (addrSchool) parts.push(addrSchool);
-    if (addrCity) parts.push(addrCity);
-    if (addrLga) parts.push(addrLga.endsWith("LGA") ? addrLga : `${addrLga} LGA`);
-    if (addrState) parts.push(addrState.endsWith("State") ? addrState : `${addrState} State`);
-    parts.push(addrCountry);
-    const compiled = parts.join(", ");
-    
-    setLocation(compiled);
-
-    // Pinpoint exact requested pickup location address on map
-    const pinpointParts = [];
-    if (addrStreet) pinpointParts.push(addrStreet);
-    if (manualBusinessAddress) pinpointParts.push(manualBusinessAddress);
-    if (addrSchool) pinpointParts.push(addrSchool);
-    if (addrCity) pinpointParts.push(addrCity);
-    if (addrLga) pinpointParts.push(addrLga.endsWith("LGA") ? addrLga : `${addrLga} LGA`);
-    if (addrState) pinpointParts.push(addrState.endsWith("State") ? addrState : `${addrState} State`);
-    pinpointParts.push(addrCountry);
-    const pinpointCompiled = pinpointParts.join(", ");
-
-    const delayDebounceFn = setTimeout(() => {
-      if (pinpointCompiled.trim().length > 6) {
-        verifyLocationAddress(pinpointCompiled);
-      }
-    }, 1500);
-
-    return () => clearTimeout(delayDebounceFn);
-  }, [addrCountry, addrState, addrLga, addrCity, addrStreet, addrSchool, manualBusinessAddress]);
-
-  React.useEffect(() => {
-    if (!addrStreet || addrStreet.trim().length < 3) {
-      setAddrSuggestions([]);
-      return;
-    }
-    if (justSelected.current) {
-      justSelected.current = false;
-      return;
-    }
-
-    const delayQuery = setTimeout(async () => {
-      setIsSearchingSuggestions(true);
-      try {
-        const queryStr = `${addrStreet}${addrCity ? ' ' + addrCity : ''}${addrState ? ' ' + addrState : ''}, Nigeria`;
-        const url = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&q=${encodeURIComponent(queryStr)}&countrycodes=ng&limit=5`;
-        const res = await fetch(url, {
-          headers: {
-            "Accept-Language": "en",
-            "User-Agent": "Shopiversity-Campus-App"
-          }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data && Array.isArray(data)) {
-            setAddrSuggestions(data);
-          }
-        }
-      } catch (err) {
-        // Quiet fallback when network or Nominatim fetch is blocked
-        setAddrSuggestions([]);
-      } finally {
-        setIsSearchingSuggestions(false);
-      }
-    }, 500);
-
-    return () => clearTimeout(delayQuery);
-  }, [addrStreet]);
-
-  const handleSelectSuggestion = (item: any) => {
-    justSelected.current = true;
-    const addr = item.address || {};
-    
-    // Determine street address
-    const streetParts = [];
-    if (addr.house_number) streetParts.push(addr.house_number);
-    if (addr.road) {
-      streetParts.push(addr.road);
-    } else if (item.display_name) {
-      const firstSegment = item.display_name.split(",")[0];
-      if (firstSegment) streetParts.push(firstSegment);
-    }
-    const finalStreet = streetParts.join(" ") || addrStreet;
-    setAddrStreet(finalStreet);
-
-    // Determine state
-    if (addr.state) {
-      const stateClean = addr.state.replace(/\s+State$/i, "").trim();
-      const matchedState = NIGERIAN_STATES.find(
-        s => s.toLowerCase() === stateClean.toLowerCase()
-      );
-      if (matchedState) {
-        setAddrState(matchedState);
-        
-        // Determine LGA
-        const lgasForState = NIGERIAN_LGAS[matchedState] || [];
-        const possibleCounty = (addr.county || addr.suburb || "").replace(/\s+LGA$/i, "").trim().toLowerCase();
-        const matchedLga = lgasForState.find(
-          l => l.toLowerCase() === possibleCounty || l.replace(/\s+LGA$/i, "").toLowerCase() === possibleCounty
-        );
-        if (matchedLga) {
-          setAddrLga(matchedLga);
-        } else if (lgasForState.length > 0) {
-          setAddrLga(lgasForState[0]);
+    if (editingProduct) {
+      if (editingProduct.pickupState) setAddrState(editingProduct.pickupState);
+      if (editingProduct.pickupLga) setAddrLga(editingProduct.pickupLga);
+      if (editingProduct.schoolAddress) setSchoolAddress(editingProduct.schoolAddress);
+      if (editingProduct.schoolLocation) {
+        if (POPULAR_SCHOOL_PICKUP_LOCATIONS.includes(editingProduct.schoolLocation)) {
+          setSchoolLocationPreset(editingProduct.schoolLocation);
+          setSchoolLocationCustom("");
+        } else {
+          setSchoolLocationPreset("✍️ Other / Custom School Location...");
+          setSchoolLocationCustom(editingProduct.schoolLocation);
         }
       }
-    }
-
-    // Determine city
-    const possibleCity = addr.city || addr.town || addr.village || addr.suburb || addr.neighbourhood || "";
-    if (possibleCity) {
-      setAddrCity(possibleCity);
-    }
-
-    // Determine coordinates
-    if (item.lat && item.lon) {
-      const coords = { lat: parseFloat(item.lat), lng: parseFloat(item.lon) };
-      setPickupCoordinates(coords);
-      setMapCenter(coords);
-    }
-
-    setAddrSuggestions([]);
-  };
-
-  const triggerOsmLgaFallback = async (queryStr: string) => {
-    setIsSearchingLgaPlaces(true);
-    try {
-      const url = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&q=${encodeURIComponent(queryStr)}&countrycodes=ng&limit=6`;
-      const res = await fetch(url, {
-        headers: {
-          "Accept-Language": "en",
-          "User-Agent": "Shopiversity-Campus-App"
-        }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data && Array.isArray(data)) {
-          const mapped = data.map((item: any) => ({
-            display_name: item.display_name,
-            main_text: item.name || item.display_name.split(",")[0],
-            lat: item.lat,
-            lon: item.lon,
-            address: item.address,
-            source: "osm"
-          }));
-          setLgaPlacesSuggestions(mapped);
-        }
+      if (editingProduct.pickupPolicyAccepted !== undefined) {
+        setPickupPolicyAccepted(editingProduct.pickupPolicyAccepted);
       }
-    } catch (err) {
-      setLgaPlacesSuggestions([]);
-    } finally {
-      setIsSearchingLgaPlaces(false);
+    } else if (currentUser) {
+      if (currentUser.state && NIGERIAN_STATES.includes(currentUser.state)) {
+        setAddrState(currentUser.state);
+        const lgas = NIGERIAN_LGAS[currentUser.state] || [];
+        if (lgas.length > 0) setAddrLga(lgas[0]);
+      }
+      if (currentUser.deliveryAddress) {
+        setSchoolAddress(currentUser.deliveryAddress);
+      }
     }
-  };
+  }, [editingProduct, currentUser]);
 
-  const triggerDefaultLgaPlaces = async () => {
-    if (!addrState || !addrLga) return;
-    setIsSearchingLgaPlaces(true);
-    const queryStr = `${addrLga}, ${addrState}, Nigeria`;
-    await triggerOsmLgaFallback(queryStr);
-  };
-
-  const handleSelectLgaPlaceOption = async (item: any) => {
-    setAddrStreet(item.main_text || item.display_name);
-    setLgaPlacesSearch(item.main_text || item.display_name);
-    
-    if (item.lat && item.lon) {
-      const coords = { lat: parseFloat(item.lat), lng: parseFloat(item.lon) };
-      setPickupCoordinates(coords);
-      setMapCenter(coords);
-    }
-
-    setLgaPlacesSuggestions([]);
-  };
-
+  // Compile pickup location automatically from structured inputs
   React.useEffect(() => {
-    if (!addrState || !addrLga) {
-      setLgaPlacesSuggestions([]);
-      return;
+    const locName = schoolLocationPreset === "✍️ Other / Custom School Location..."
+      ? (schoolLocationCustom || "Campus Area")
+      : schoolLocationPreset;
+    const parts = [
+      locName,
+      schoolAddress,
+      addrLga ? `${addrLga} LGA` : "",
+      addrState ? `${addrState} State` : "",
+      "Nigeria"
+    ].filter(Boolean);
+    if (parts.length > 0) {
+      setLocation(parts.join(", "));
     }
-    if (!lgaPlacesSearch || lgaPlacesSearch.trim().length < 2) {
-      return;
-    }
-
-    const delayQuery = setTimeout(async () => {
-      setIsSearchingLgaPlaces(true);
-      const queryStr = `${lgaPlacesSearch}, ${addrLga}, ${addrState}, Nigeria`;
-      await triggerOsmLgaFallback(queryStr);
-    }, 400);
-
-    return () => clearTimeout(delayQuery);
-  }, [lgaPlacesSearch, addrLga, addrState]);
+  }, [addrState, addrLga, schoolAddress, schoolLocationPreset, schoolLocationCustom]);
 
   const [images, setImages] = React.useState<string[]>(editingProduct?.imageUrls || (editingProduct?.imageUrl ? [editingProduct.imageUrl] : []));
   
@@ -4291,11 +4262,6 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
   const [pickupCoordinates, setPickupCoordinates] = React.useState<{ lat: number; lng: number } | null>(
     editingProduct?.pickupCoordinates || null
   );
-  const [mapCenter, setMapCenter] = React.useState<{ lat: number; lng: number }>(
-    editingProduct?.pickupCoordinates || { lat: 6.5157, lng: 3.3896 }
-  );
-  const [geocodingError, setGeocodingError] = React.useState<string>("");
-  const [isVerifyingAddress, setIsVerifyingAddress] = React.useState<boolean>(false);
 
   React.useEffect(() => {
     if (!editingProduct) {
@@ -4307,40 +4273,6 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
       );
     }
   }, [currentUser, editingProduct]);
-
-  const verifyLocationAddress = async (addressString: string) => {
-    if (!addressString || !addressString.trim()) {
-      setGeocodingError("Please enter a valid address.");
-      return;
-    }
-    
-    setIsVerifyingAddress(true);
-    setGeocodingError("");
-    
-    try {
-      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressString)}&limit=1`;
-      const res = await fetch(url, {
-        headers: {
-          "Accept-Language": "en",
-          "User-Agent": "Shopiversity-Campus-App"
-        }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data && data.length > 0) {
-          const item = data[0];
-          const coords = { lat: parseFloat(item.lat), lng: parseFloat(item.lon) };
-          setPickupCoordinates(coords);
-          setMapCenter(coords);
-          setGeocodingError("");
-        }
-      }
-    } catch (osmErr) {
-      // Quiet fallback
-    } finally {
-      setIsVerifyingAddress(false);
-    }
-  };
 
   // Location is pre-filled and compiled coordinates via granular states above
 
@@ -4690,6 +4622,35 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
       return;
     }
 
+    // At least one fulfillment method must be selected for goods or physical services
+    if (type === "good") {
+      if (!deliveryOptions.delivery && !deliveryOptions.pickup) {
+        setError("Please select at least one fulfillment option: Logistics Delivery or Campus Pickup.");
+        return;
+      }
+      if (deliveryOptions.pickup) {
+        if (!addrState || !addrLga) {
+          setError("Please select the State and Local Government Area (LGA) for campus pickup.");
+          return;
+        }
+        const finalSchoolLoc = schoolLocationPreset === "✍️ Other / Custom School Location..." 
+          ? schoolLocationCustom.trim() 
+          : schoolLocationPreset;
+        if (!finalSchoolLoc) {
+          setError("Please select or enter the specific campus location for pickup (e.g., School Main Gate, SUB).");
+          return;
+        }
+        if (!schoolAddress.trim()) {
+          setError("Please enter the specific campus address/hall/department for pickup.");
+          return;
+        }
+        if (!pickupPolicyAccepted) {
+          setError("You must acknowledge and accept the Campus Pickup Safety & Liability Policy before listing this item.");
+          return;
+        }
+      }
+    }
+
     const pNow = parseFloat(price);
     const pBefore = parseFloat(priceBefore);
     if (!isNaN(pBefore) && pBefore > 0 && !isNaN(pNow) && pBefore < pNow) {
@@ -4698,42 +4659,19 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
       return;
     }
 
-    // Validation of pickup/meetup coordinates using geocoder if enabled on submit
-    let addressToVerify = location.trim();
-    if (type === "service" && !addressToVerify) {
-      addressToVerify = (currentUser?.deliveryAddress || "").trim();
-    }
+    const finalSchoolLocation = schoolLocationPreset === "✍️ Other / Custom School Location..." 
+      ? schoolLocationCustom.trim() 
+      : schoolLocationPreset;
 
-    if (deliveryOptions.pickup && addressToVerify) {
-      if (!pickupCoordinates) {
-        try {
-          const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressToVerify)}&limit=1`;
-          const res = await fetch(url, {
-            headers: {
-              "Accept-Language": "en",
-              "User-Agent": "Shopiversity-Campus-App"
-            }
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (data && data.length > 0) {
-              const item = data[0];
-              const coords = { lat: parseFloat(item.lat), lng: parseFloat(item.lon) };
-              setPickupCoordinates(coords);
-              setMapCenter(coords);
-            }
-          }
-        } catch (osmErr) {
-          // Quiet background fallback
-        }
-      }
-    }
+    const computedPickupAddress = [
+      finalSchoolLocation,
+      schoolAddress.trim(),
+      addrLga ? `${addrLga} LGA` : "",
+      addrState ? `${addrState} State` : "",
+      "Nigeria"
+    ].filter(Boolean).join(", ");
 
-    // Validation: School matches location
-    const schoolMatched = !currentUser?.campus || !addressToVerify || addressToVerify.toLowerCase().includes(currentUser.campus.toLowerCase());
-    
-    // If not matched, we just warn or auto-append rather than blocking
-    let finalLocation = addressToVerify || currentUser?.campus || "";
+    let finalLocation = computedPickupAddress || location.trim() || currentUser?.campus || "";
     
     setLoading(true);
     setLoadingMessage("AI Verifying compliance & Google search matching...");
@@ -4815,12 +4753,11 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
         subjectTaught: category === "Academic & Tutoring" ? subjectTaught : null,
         subjectsWithPrices: category === "Academic & Tutoring" ? subjectsWithPrices : null,
         certificateUrl: type === "service" ? (certificateUrl || null) : null,
-        pickupCoordinates: (deliveryOptions.pickup && pickupCoordinates) ? pickupCoordinates : null,
+        pickupCoordinates: null,
         deliveryOptions: type === "good" ? {
-          ...deliveryOptions,
-          deliveryPrice: logisticsType === "registered" 
-            ? (allLogisticsCompanies.find(c => c.id === selectedLogisticsCompanyId)?.baseDeliveryPrice || 0)
-            : deliveryOptions.deliveryPrice
+          delivery: !!deliveryOptions.delivery,
+          pickup: !!deliveryOptions.pickup,
+          deliveryPrice: 0 // Delivery price is set by logistics company
         } : (computedServiceType === "digital" ? {
           delivery: false,
           pickup: false,
@@ -4830,12 +4767,16 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
           pickup: true,
           deliveryPrice: 0
         } : {
-          delivery: deliveryOptions.delivery,
+          delivery: !!deliveryOptions.delivery,
           pickup: true,
-          deliveryPrice: logisticsType === "registered" 
-            ? (allLogisticsCompanies.find(c => c.id === selectedLogisticsCompanyId)?.baseDeliveryPrice || 0)
-            : deliveryOptions.deliveryPrice
+          deliveryPrice: 0
         }),
+        // Structured Campus Pickup Fields
+        pickupState: addrState || null,
+        pickupLga: addrLga || null,
+        schoolAddress: schoolAddress.trim() || null,
+        schoolLocation: finalSchoolLocation || null,
+        pickupPolicyAccepted: !!pickupPolicyAccepted,
         logisticsType,
         logisticsCompanyId: logisticsType === "registered" ? selectedLogisticsCompanyId : null,
         logisticsCompanyName: logisticsType === "registered" ? (allLogisticsCompanies.find(c => c.id === selectedLogisticsCompanyId)?.companyName || null) : null,
@@ -4858,7 +4799,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
         priceBefore: parseFloat(priceBefore) || 0,
         collectionType: collectionType.trim(),
         businessAddress: manualBusinessAddress.trim(),
-        pickupSchool: addrSchool || null,
+        pickupSchool: currentUser?.campus || finalSchoolLocation || null,
         
         // Dynamic Specific Fields
         digitalFormat: computedServiceType === "digital" ? digitalFormat : null,
@@ -5108,9 +5049,8 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                       setDeliveryOptions({
                         delivery: true,
                         pickup: true,
-                        deliveryPrice: 500
+                        deliveryPrice: 0
                       });
-                      setDeliveryPriceInput("500");
                       setDeliveryTime("1");
                       setDeliveryTimeUnit("days");
                       setLocation("");
@@ -5121,18 +5061,15 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                       setManualBusinessAddress("");
                       setAddrState("");
                       setAddrLga("");
-                      setAddrCity("");
-                      setAddrStreet("");
-                      setAddrSchool("");
-                      setCampusSearchQuery("");
+                      setSchoolAddress("");
+                      setSchoolLocationPreset(POPULAR_SCHOOL_PICKUP_LOCATIONS[0] || "");
+                      setSchoolLocationCustom("");
+                      setPickupPolicyAccepted(false);
                       setImages([]);
                       setSubjectTaught("");
                       setSubjectsWithPrices([{ name: "", price: "" }]);
                       setCertificateUrl("");
                       setPickupCoordinates(null);
-                      setMapCenter({ lat: 6.5157, lng: 3.3896 });
-                      setGeocodingError("");
-                      setIsVerifyingAddress(false);
                     }}
                     className="w-full py-3.5 bg-brand-gradient hover:-translate-y-0.5 text-white rounded-2xl font-black text-xs uppercase tracking-[0.2em] shadow-lg shadow-purple-200 dark:shadow-purple-950/20 transition-all"
                   >
@@ -5573,7 +5510,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
         {!isFoodAndDrinks && (
           <div className="space-y-2">
             <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">
-              {category === "Academic & Tutoring" ? "Home Teaching (In-person) Availability" : "Available for Delivery/Pickup in"}
+              {category === "Academic & Tutoring" ? "Home Teaching (In-person) Availability" : "Available for Delivery / Pickup in"}
             </label>
             <div className="flex gap-3">
               <input 
@@ -5582,18 +5519,27 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                 min="1"
                 value={deliveryTime}
                 onChange={(e) => setDeliveryTime(e.target.value)}
-                className="w-24 h-14 px-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-indigo-500 outline-none transition-all text-slate-900 dark:text-white placeholder:text-slate-400"
+                className="w-24 h-14 px-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-indigo-500 outline-none transition-all text-slate-900 dark:text-white placeholder:text-slate-400 font-bold"
               />
               <select 
                 value={deliveryTimeUnit}
                 onChange={(e) => setDeliveryTimeUnit(e.target.value as any)}
-                className="flex-1 h-14 px-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-indigo-500 outline-none transition-all appearance-none text-slate-900 dark:text-white"
+                className="flex-1 h-14 px-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-indigo-500 outline-none transition-all appearance-none text-slate-900 dark:text-white font-bold"
               >
-                <option value="hours" className="bg-white dark:bg-slate-900">Hours</option>
-                <option value="days" className="bg-white dark:bg-slate-900">Days</option>
-                <option value="weeks" className="bg-white dark:bg-slate-900">Weeks</option>
+                <option value="hours" className="bg-white dark:bg-slate-900">
+                  {Number(deliveryTime) === 1 ? "1 Hour" : "Hours"}
+                </option>
+                <option value="days" className="bg-white dark:bg-slate-900">
+                  {Number(deliveryTime) === 1 ? "1 Day" : "Days"}
+                </option>
+                <option value="weeks" className="bg-white dark:bg-slate-900">
+                  {Number(deliveryTime) === 1 ? "1 Week" : "Weeks"}
+                </option>
               </select>
             </div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 font-semibold ml-1">
+              Availability Notice: Ready within {formatAvailability(deliveryTime, deliveryTimeUnit)}
+            </p>
           </div>
         )}
 
@@ -5694,97 +5640,142 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
             <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">
               Fulfillment Options
             </label>
-            <div className="p-6 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-[2rem] space-y-4 shadow-sm">
-              {/* Option 1: Home Delivery / Home Service */}
+            <div className="p-6 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-[2rem] space-y-5 shadow-sm">
+              <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                Choose how buyers can receive your product. You can select <strong>Campus Courier Delivery</strong>, <strong>Physical Pickup</strong>, or <strong>both</strong>.
+              </p>
+
+              {/* Option 1: Logistics Services (Courier Delivery) */}
               {type !== "service" && (
-                <>
-                  <div className="flex items-center justify-between gap-4">
-                    <label className="flex items-center gap-3 cursor-pointer group">
-                      <div className="relative flex items-center justify-center">
-                        <input 
-                          type="checkbox"
-                          checked={deliveryOptions.delivery}
-                          onChange={(e) => {
-                            setDeliveryOptions(prev => ({ ...prev, delivery: e.target.checked }));
-                            setLogisticsType("custom");
-                          }}
-                          className="peer h-6 w-6 appearance-none rounded-lg border-2 border-slate-200 dark:border-slate-200/20 checked:border-indigo-500 checked:bg-indigo-500 transition-all"
-                        />
-                        <CheckCircle className="absolute h-4 w-4 text-white opacity-0 peer-checked:opacity-100 transition-opacity" />
-                      </div>
-                      <div>
-                        <span className="text-sm font-bold text-slate-700 dark:text-slate-300 group-hover:text-indigo-600 transition-colors block">
-                          Home Delivery
-                        </span>
-                        <span className="text-[10px] text-slate-400 block font-bold">Deliver directly to the buyer's spot or hostel</span>
-                      </div>
-                    </label>
-                  </div>
+                <div className="space-y-3">
+                  <label className="flex items-start gap-3 cursor-pointer group">
+                    <div className="relative flex items-center justify-center mt-0.5">
+                      <input 
+                        type="checkbox"
+                        checked={deliveryOptions.delivery}
+                        onChange={(e) => {
+                          setDeliveryOptions(prev => ({ ...prev, delivery: e.target.checked }));
+                        }}
+                        className="peer h-6 w-6 appearance-none rounded-lg border-2 border-slate-200 dark:border-slate-700 checked:border-indigo-500 checked:bg-indigo-500 transition-all cursor-pointer"
+                      />
+                      <CheckCircle className="absolute h-4 w-4 text-white opacity-0 peer-checked:opacity-100 transition-opacity pointer-events-none" />
+                    </div>
+                    <div>
+                      <span className="text-sm font-bold text-slate-800 dark:text-slate-200 group-hover:text-indigo-600 transition-colors block">
+                        Logistics Services (Campus Courier Delivery)
+                      </span>
+                      <span className="text-[11px] text-slate-400 block font-medium">
+                        Courier dispatch delivers directly to buyer's hostel or campus spot.
+                      </span>
+                    </div>
+                  </label>
 
                   {deliveryOptions.delivery && (
-                    <div className="mt-2 p-4 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-4">
-                      <div className="flex items-center justify-between gap-4">
-                        <div>
-                          <span className="text-xs font-bold text-slate-700 dark:text-slate-300 block">Home Delivery Fee</span>
-                          <span className="text-[9px] text-slate-400 block">Type the amount you charge for this delivery</span>
-                        </div>
-                        <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 shrink-0">
-                          <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Fee: ₦</span>
-                          <input 
-                            type="text"
-                            inputMode="numeric"
-                            value={deliveryPriceInput}
-                            onChange={(e) => {
-                              const valText = e.target.value.replace(/[^0-9]/g, "");
-                              setDeliveryPriceInput(valText);
-                              const parsedVal = valText === "" ? 0 : parseInt(valText, 10);
-                              setDeliveryOptions(prev => ({ ...prev, deliveryPrice: parsedVal }));
-                            }}
-                            className="w-20 bg-transparent text-sm font-bold text-slate-900 dark:text-white outline-none"
-                            placeholder="0"
-                          />
+                    <div className="p-4 bg-blue-50/70 dark:bg-blue-950/20 rounded-2xl border border-blue-200/60 dark:border-blue-900/40 space-y-3">
+                      <div className="flex items-start gap-2.5">
+                        <Truck className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+                        <div className="text-xs text-blue-900 dark:text-blue-200">
+                          <p className="font-bold">Courier-Determined Delivery Pricing</p>
+                          <p className="text-[11px] text-blue-700 dark:text-blue-300 mt-0.5 leading-relaxed">
+                            Delivery fees are determined and billed directly by the courier/logistics company based on standard campus transit rates, not set by the vendor.
+                          </p>
                         </div>
                       </div>
+
+                      {filteredLogisticsCompanies.length > 0 && (
+                        <div className="pt-2 border-t border-blue-200/50 dark:border-blue-900/30">
+                          <label className="text-[10px] font-black text-blue-800 dark:text-blue-300 uppercase tracking-wider block mb-1">
+                            Registered Logistics Partner (Optional)
+                          </label>
+                          <select
+                            value={selectedLogisticsCompanyId}
+                            onChange={(e) => {
+                              setSelectedLogisticsCompanyId(e.target.value);
+                              setLogisticsType(e.target.value ? "registered" : "custom");
+                            }}
+                            className="w-full h-11 px-3 bg-white dark:bg-slate-900 border border-blue-200 dark:border-blue-800 rounded-xl text-xs font-semibold text-slate-800 dark:text-white outline-none"
+                          >
+                            <option value="">Standard Campus Courier Fleet</option>
+                            {filteredLogisticsCompanies.map(c => (
+                              <option key={c.id} value={c.id}>
+                                {c.companyName} ({c.baseDeliveryPrice ? `₦${c.baseDeliveryPrice.toLocaleString()}` : "Standard rate"})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
                     </div>
                   )}
-                  
                   <hr className="border-slate-100 dark:border-slate-800" />
-                </>
+                </div>
               )}
               
-              {/* Option 2: Physical Meet */}
-              <div>
-                <label className="flex items-center gap-3 cursor-pointer group">
-                  <div className="relative flex items-center justify-center">
+              {/* Option 2: Physical Pickup / Meetup */}
+              <div className="space-y-3">
+                <label className="flex items-start gap-3 cursor-pointer group">
+                  <div className="relative flex items-center justify-center mt-0.5">
                     <input 
                       type="checkbox"
                       checked={deliveryOptions.pickup}
                       onChange={(e) => setDeliveryOptions(prev => ({ ...prev, pickup: e.target.checked }))}
-                      className="peer h-6 w-6 appearance-none rounded-lg border-2 border-slate-200 dark:border-slate-700 checked:border-indigo-500 checked:bg-indigo-500 transition-all"
+                      className="peer h-6 w-6 appearance-none rounded-lg border-2 border-slate-200 dark:border-slate-700 checked:border-indigo-500 checked:bg-indigo-500 transition-all cursor-pointer"
                     />
-                    <CheckCircle className="absolute h-4 w-4 text-white opacity-0 peer-checked:opacity-100 transition-opacity" />
+                    <CheckCircle className="absolute h-4 w-4 text-white opacity-0 peer-checked:opacity-100 transition-opacity pointer-events-none" />
                   </div>
                   <div>
-                    <span className="text-sm font-bold text-slate-700 dark:text-slate-300 group-hover:text-indigo-600 transition-colors block">
-                      {type === "service" ? "Service Venue (Physical Meetup / Pickup)" : "Physical Meet (In-Person / Local Pickup)"}
+                    <span className="text-sm font-bold text-slate-800 dark:text-slate-200 group-hover:text-indigo-600 transition-colors block">
+                      {type === "service" ? "Service Venue (Physical Meetup / Pickup)" : "Campus Pickup (In-Person / Physical Exchange)"}
                     </span>
-                    <span className="text-[10px] text-slate-400 block font-bold">Meetup exchange or physical service meetup on campus</span>
+                    <span className="text-[11px] text-slate-400 block font-medium">
+                      In-person exchange or service meeting conducted safely within campus grounds.
+                    </span>
                   </div>
                 </label>
               </div>
             </div>
             
             {(!deliveryOptions.delivery && !deliveryOptions.pickup) && (
-              <p className="text-[10px] font-bold text-red-500 ml-1">Please select at least one fulfillment option</p>
+              <div className="p-3 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900/40 rounded-xl flex items-center gap-2 text-xs font-bold text-red-600 dark:text-red-400">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>Please select at least one fulfillment option: Logistics Delivery, Campus Pickup, or both.</span>
+              </div>
             )}
 
-            {/* If physical meet is chosen then service location should show up */}
+            {/* When In-Person Pickup is selected */}
             {deliveryOptions.pickup && (
               <div className="space-y-4 mt-4">
-                <div className="p-5 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4 shadow-sm">
-                  <div className="flex items-center gap-2 mb-1 border-b border-slate-100 dark:border-slate-800 pb-2">
+                {/* Campus Pickup Safety & Liability Policy Card */}
+                <div className="p-5 bg-amber-500/10 dark:bg-amber-500/15 border-2 border-amber-500/40 rounded-2xl space-y-3 shadow-sm">
+                  <div className="flex items-center gap-2 text-amber-800 dark:text-amber-300 font-extrabold text-xs uppercase tracking-wide">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                    <span>Campus Pickup Safety & Liability Policy</span>
+                  </div>
+                  <p className="text-xs text-amber-950 dark:text-amber-200 leading-relaxed font-medium">
+                    All physical pickup addresses and handovers <strong>must strictly take place within or directly around the school/campus premises</strong> (e.g. school main gates, central library quad, student union building, faculty complexes, or hostel porter lodges).
+                  </p>
+                  <p className="text-[11px] text-amber-900 dark:text-amber-300/90 leading-relaxed font-semibold">
+                    ⚠️ <strong>Liability Disclaimer:</strong> If either the buyer or the seller chooses to go against this policy and conducts meetings or transactions outside the school area, <strong>Shopiversity shall NOT be held responsible or liable for any loss, damage, theft, fraud, or incident</strong>. Always prioritize safety and meet in populated campus areas during daylight hours.
+                  </p>
+                  <label className="flex items-center gap-2.5 pt-2 border-t border-amber-500/20 cursor-pointer group">
+                    <input 
+                      type="checkbox"
+                      checked={pickupPolicyAccepted}
+                      onChange={(e) => setPickupPolicyAccepted(e.target.checked)}
+                      className="h-4 w-4 rounded border-2 border-amber-500 text-amber-600 focus:ring-amber-500 cursor-pointer"
+                    />
+                    <span className="text-xs font-bold text-amber-950 dark:text-amber-100 group-hover:text-amber-800">
+                      I confirm this pickup address is within/around school grounds and accept the campus liability policy
+                    </span>
+                  </label>
+                </div>
+
+                {/* Structured Pickup Address Inputs */}
+                <div className="p-6 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-4 shadow-sm">
+                  <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
                     <MapPin className="w-4 h-4 text-[#ff6b00]" />
-                    <span className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">Pickup Address Details (Nigeria)</span>
+                    <span className="text-xs font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
+                      Campus Pickup Address Details (Nigeria)
+                    </span>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -5803,23 +5794,18 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
 
                     {/* State Option */}
                     <div className="space-y-1.5">
-                      <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider ml-1">State</label>
+                      <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider ml-1">State *</label>
                       <select 
-                        required={false}
                         value={addrState}
                         onChange={(e) => {
                           const stateVal = e.target.value;
                           setAddrState(stateVal);
-                          // Auto set first LGA of the new state
                           const stateLgas = NIGERIAN_LGAS[stateVal] || [];
                           setAddrLga(stateLgas[0] || "");
-                          // Auto set first City of the new state
-                          const stateCities = STATE_CITIES[stateVal] || [];
-                          setAddrCity(stateCities[0] || "");
                         }}
-                        className="w-full h-11 px-4 bg-slate-50 dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:bg-white dark:focus:bg-slate-900 focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white font-semibold shadow-sm"
+                        className="w-full h-11 px-4 bg-white dark:bg-slate-900 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white font-semibold shadow-sm"
                       >
-                        <option value="">select state</option>
+                        <option value="">Select Nigerian State</option>
                         {NIGERIAN_STATES.map((s, idx) => (
                           <option key={`seller-state-${s}-${idx}`} value={s}>{s}</option>
                         ))}
@@ -5828,351 +5814,86 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
 
                     {/* LGA Option */}
                     <div className="space-y-1.5">
-                      <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider ml-1">Local Government (LGA)</label>
+                      <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider ml-1">Local Government Area (LGA) *</label>
                       <select 
-                        required={false}
                         value={addrLga}
                         onChange={(e) => setAddrLga(e.target.value)}
                         disabled={!addrState}
-                        className="w-full h-11 px-4 bg-slate-50 dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:bg-white dark:focus:bg-slate-900 focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white font-semibold disabled:opacity-50 shadow-sm"
+                        className="w-full h-11 px-4 bg-white dark:bg-slate-900 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white font-semibold disabled:opacity-50 shadow-sm"
                       >
-                        <option value="">select local government</option>
+                        <option value="">Select LGA</option>
                         {addrState && (NIGERIAN_LGAS[addrState] || []).map((l, idx) => (
                           <option key={`seller-lga-${l}-${idx}`} value={l}>{l}</option>
                         ))}
                       </select>
                     </div>
 
-                    {/* City Option */}
+                    {/* Location in the school (Popular Presets + Custom Option) */}
                     <div className="space-y-1.5">
-                      <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider ml-1">City / Town</label>
-                      <div className="flex gap-2">
-                        <select 
-                          value={STATE_CITIES[addrState]?.includes(addrCity) ? addrCity : "custom"}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            if (val === "custom") {
-                              setAddrCity("");
-                            } else {
-                              setAddrCity(val);
-                            }
-                          }}
-                          disabled={!addrState}
-                          className="flex-1 h-11 px-3 bg-slate-50 dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:bg-white dark:focus:bg-slate-900 focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white font-semibold disabled:opacity-50 shadow-sm"
-                        >
-                          <option value="">select town/ city</option>
-                          {addrState && (STATE_CITIES[addrState] || []).map((c, idx) => (
-                            <option key={`seller-city-${c}-${idx}`} value={c}>{c}</option>
-                          ))}
-                          <option value="custom">✍️ Custom City...</option>
-                        </select>
-                        
-                        {(!STATE_CITIES[addrState]?.includes(addrCity) || addrCity === "") && (
-                          <input 
-                            type="text"
-                            placeholder="Type City..."
-                            value={addrCity}
-                            onChange={(e) => setAddrCity(e.target.value)}
-                            className="w-1/2 h-11 px-3 bg-slate-50 dark:bg-slate-800 border-2 border-[#ff6b00]/60 rounded-xl focus:bg-white dark:focus:bg-slate-900 focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white font-semibold shadow-sm"
-                          />
-                        )}
-                      </div>
-                    </div>
-
-                    {/* GA/LGA Address/Spot search with map suggestions */}
-                    {addrState && addrLga && (
-                      <div className="space-y-1.5 sm:col-span-2 col-span-1 relative bg-orange-50/20 dark:bg-orange-950/5 p-4 rounded-xl border border-orange-200/40 dark:border-orange-800/10">
-                        <label className="text-[10px] font-black text-[#ff6b00] dark:text-orange-400 uppercase tracking-wider block ml-1">
-                          🔍 Google Map Address Options in {addrLga} LGA (Type/Search to pinpoint & select)
-                        </label>
-                        <div className="relative mt-1">
-                          <input 
-                            type="text"
-                            placeholder={`e.g. Type popular markets, landmarks or streets in ${addrLga}...`}
-                            value={lgaPlacesSearch}
-                            onChange={(e) => setLgaPlacesSearch(e.target.value)}
-                            onFocus={() => {
-                              if (!lgaPlacesSearch) {
-                                triggerDefaultLgaPlaces();
-                              }
-                            }}
-                            className="w-full h-11 pl-10 pr-4 bg-white dark:bg-slate-900 border-2 border-slate-200 dark:border-slate-800 rounded-xl focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white font-semibold shadow-sm"
-                          />
-                          <div className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">
-                            🔍
-                          </div>
-                          {isSearchingLgaPlaces && (
-                            <div className="absolute right-3.5 top-1/2 -translate-y-1/2">
-                              <Loader2 className="w-4 h-4 text-[#ff6b00] animate-spin" />
-                            </div>
-                          )}
-                        </div>
-
-                        {lgaPlacesSuggestions.length > 0 && (
-                          <div className="absolute z-50 left-4 right-4 top-full mt-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-2xl max-h-56 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
-                            {lgaPlacesSuggestions.map((item, index) => (
-                              <button
-                                key={`lga-place-${index}`}
-                                type="button"
-                                onMouseDown={() => handleSelectLgaPlaceOption(item)}
-                                className="w-full text-left px-4 py-3 text-xs font-semibold hover:bg-orange-50/50 dark:hover:bg-orange-95/20 text-slate-700 dark:text-slate-300 transition-colors flex items-start gap-2 border-none outline-none cursor-pointer"
-                              >
-                                <span className="text-[#ff6b00] text-sm leading-none shrink-0 mt-0.5">📍</span>
-                                <div className="flex-1 min-w-0">
-                                  <p className="font-extrabold truncate text-slate-900 dark:text-slate-100">{item.main_text}</p>
-                                  <p className="text-[10px] text-slate-450 dark:text-slate-500 truncate mt-0.5">{item.display_name}</p>
-                                </div>
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                        <p className="text-[9px] text-slate-400 dark:text-slate-500 font-bold ml-1 mt-1">
-                          Typing here searches the Google map for exact landmarks inside {addrLga}. Selecting an option pinpoints it and populates the street address box below!
-                        </p>
-                      </div>
-                    )}
-
-                    {/* School/Campus Option (With Search Input) */}
-                    <div className="space-y-1.5 sm:col-span-2 col-span-1 relative">
                       <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider ml-1">
-                        Campus / School Option (Pickup Location)
+                        Location in the School (Popular Spots) *
                       </label>
-                      <div className="relative">
-                        <input 
-                          type="text"
-                          placeholder="Type or search your school/campus..."
-                          value={campusSearchQuery}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setCampusSearchQuery(val);
-                            setAddrSchool(val); // Sync to value
-                            setShowCampusDropdown(true);
-                          }}
-                          onFocus={() => setShowCampusDropdown(true)}
-                          onBlur={() => {
-                            // Slight delay to allow clicking options before dropdown closes
-                            setTimeout(() => setShowCampusDropdown(false), 250);
-                          }}
-                          className="w-full h-11 px-4 bg-slate-50 dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:bg-white dark:focus:bg-slate-900 focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white font-semibold shadow-sm"
-                        />
-                        {campusSearchQuery && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setCampusSearchQuery("");
-                              setAddrSchool("");
-                            }}
-                            className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-304 px-2.5 py-1 rounded-lg font-black transition-all cursor-pointer"
-                          >
-                            Clear
-                          </button>
-                        )}
-                      </div>
-                      
-                      {showCampusDropdown && (
-                        <div className="absolute z-50 left-0 right-0 top-full mt-1.5 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl max-h-56 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
-                          <button
-                            type="button"
-                            onMouseDown={() => {
-                              setAddrSchool("");
-                              setCampusSearchQuery("");
-                              setShowCampusDropdown(false);
-                            }}
-                            className="w-full text-left px-4 py-3 text-xs font-semibold hover:bg-orange-50/50 dark:hover:bg-orange-950/20 text-slate-400 dark:text-slate-500 transition-colors"
-                          >
-                            -- Direct Pickup (No Specific Campus) --
-                          </button>
-                          {NIGERIAN_CAMPUSES.filter(camp => 
-                            camp.toLowerCase().includes(campusSearchQuery.toLowerCase())
-                          ).slice(0, 20).map((camp, campIdx) => (
-                            <button
-                              key={`camp-opt-${camp}-${campIdx}`}
-                              type="button"
-                              onMouseDown={() => {
-                                setAddrSchool(camp);
-                                setCampusSearchQuery(camp);
-                                setShowCampusDropdown(false);
-                              }}
-                              className={`w-full text-left px-4 py-3 text-xs font-semibold transition-colors flex items-center justify-between border-none outline-none cursor-pointer ${
-                                addrSchool === camp 
-                                  ? "bg-orange-50 text-[#ff6b00] dark:bg-orange-950/20" 
-                                  : "hover:bg-slate-50 dark:hover:bg-zinc-800 text-slate-700 dark:text-slate-300"
-                              }`}
-                            >
-                              <span className="truncate pr-4">🏫 {camp}</span>
-                              {addrSchool === camp && <Check className="w-4 h-4 text-[#ff6b00] flex-shrink-0" />}
-                            </button>
-                          ))}
-                          {NIGERIAN_CAMPUSES.filter(camp => 
-                            camp.toLowerCase().includes(campusSearchQuery.toLowerCase())
-                          ).length === 0 && (
-                            <div className="px-4 py-3 text-xs text-slate-400 font-bold text-center">
-                              No matching campuses found. You can type custom school above!
-                            </div>
-                          )}
-                        </div>
-                      )}
+                      <select
+                        value={schoolLocationPreset}
+                        onChange={(e) => {
+                          setSchoolLocationPreset(e.target.value);
+                          if (e.target.value !== "✍️ Other / Custom School Location...") {
+                            setSchoolLocationCustom("");
+                          }
+                        }}
+                        className="w-full h-11 px-3 bg-white dark:bg-slate-900 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white font-semibold shadow-sm"
+                      >
+                        {POPULAR_SCHOOL_PICKUP_LOCATIONS.map((preset, idx) => (
+                          <option key={`pickup-loc-preset-${idx}`} value={preset}>
+                            {preset}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   </div>
 
-                  {/* Street & Estate Options */}
-                  <div className="space-y-1.5 relative">
-                    <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider ml-1">Street / House Address or Estate Name</label>
-                    <div className="relative">
+                  {/* Custom School Location Input if "Other" is chosen */}
+                  {schoolLocationPreset === "✍️ Other / Custom School Location..." && (
+                    <div className="space-y-1.5 pt-1">
+                      <label className="text-[10px] font-black text-[#ff6b00] uppercase tracking-wider ml-1">
+                        Type Your Custom School Area / Landmark *
+                      </label>
                       <input 
                         type="text"
-                        required={false}
-                        value={addrStreet}
-                        onChange={(e) => setAddrStreet(e.target.value)}
-                        className="w-full h-11 px-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:bg-white dark:focus:bg-slate-900 focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white placeholder:text-slate-400"
-                        placeholder="e.g. 15 Herbert Macaulay Way, Yaba, or Unilag Staff Estate"
+                        value={schoolLocationCustom}
+                        onChange={(e) => setSchoolLocationCustom(e.target.value)}
+                        placeholder="e.g., Faculty of Engineering Front Foyer, Hall 2 Common Room, etc."
+                        className="w-full h-11 px-4 bg-white dark:bg-slate-900 border-2 border-[#ff6b00]/60 rounded-xl focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white font-semibold shadow-sm"
                       />
-                      {isSearchingSuggestions && (
-                        <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                          <Loader2 className="w-4 h-4 text-[#ff6b00] animate-spin" />
-                        </div>
-                      )}
                     </div>
+                  )}
 
-                    {/* Autocomplete Suggestions Menu Dropdown */}
-                    {addrSuggestions.length > 0 && (
-                      <div className="absolute z-50 left-0 right-0 top-full mt-1.5 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl max-h-56 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
-                        {addrSuggestions.map((item, index) => (
-                          <button
-                            key={`addr-suggest-${item.place_id || index}-${index}`}
-                            type="button"
-                            onClick={() => handleSelectSuggestion(item)}
-                            className="w-full text-left px-4 py-3 text-xs font-semibold hover:bg-orange-50/50 dark:hover:bg-orange-950/20 text-slate-700 dark:text-slate-300 transition-colors flex items-start gap-2 border-none outline-none cursor-pointer"
-                          >
-                            <span className="text-orange-500 text-sm leading-none shrink-0 mt-0.5">📍</span>
-                            <span className="line-clamp-2 leading-relaxed">{item.display_name}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Manual Business Address Input */}
-                  <div className="space-y-1.5 pt-2 border-t border-slate-100 dark:border-zinc-800/65">
-                    <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider ml-1">Seller's Business Address (Manual Input)</label>
+                  {/* Address in the School */}
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider ml-1">
+                      Address in the School (Hall, Department, Room, or Block) *
+                    </label>
                     <input 
                       type="text"
-                      className="w-full h-11 px-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:bg-white dark:focus:bg-slate-900 focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white placeholder:text-slate-400"
-                      placeholder="e.g. Block C, Shop 4, Campus Shopping Complex, Lagos"
-                      value={manualBusinessAddress}
-                      onChange={(e) => setManualBusinessAddress(e.target.value)}
+                      value={schoolAddress}
+                      onChange={(e) => setSchoolAddress(e.target.value)}
+                      placeholder="e.g. Hall 3 Room 12, Department of Chemistry Block B, or Campus Staff Quarter 4"
+                      className="w-full h-11 px-4 bg-white dark:bg-slate-900 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white font-semibold shadow-sm"
                     />
                   </div>
 
-                  {/* Address Summary Preview */}
+                  {/* Compiled Address Summary Preview (No Map Needed) */}
                   {location && (
-                    <div className="p-3 bg-slate-100 dark:bg-slate-800/40 rounded-xl text-xs font-medium text-slate-600 dark:text-slate-400 border border-dotted border-slate-200 dark:border-slate-700 flex items-start gap-2">
-                      <span className="text-[#ff6b00] text-lg leading-none mt-0.5">📍</span>
-                      <div>
-                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Full Compiled Address</span>
-                        <p className="font-semibold text-slate-850 dark:text-slate-200 mt-0.5">{location}</p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div className="space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest block ml-1">
-                      {type === "service" ? "Requested Service Location for Google Map Pinpoint" : "Campus Pickup / Delivery Location (Instant 1-Click Select)"}
-                    </span>
-                  </div>
-
-                  {/* Campus Quick Landmark Hotspots */}
-                  <div className="space-y-1 bg-slate-50 dark:bg-slate-800/60 p-3 rounded-2xl border border-slate-200/80 dark:border-slate-800">
-                    <p className="text-[10px] font-extrabold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                      ⚡ Quick Campus Hotspots (Tap to set pickup spot instantly):
-                    </p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {[
-                        { label: "SUB / Student Union Gate", spot: "Student Union Building (SUB) Complex Gate" },
-                        { label: "Main University Gate", spot: "Main Campus Entrance & Gate Pickup Bay" },
-                        { label: "Central Library Quad", spot: "University Main Library Front Square" },
-                        { label: "Hostel Quad / Block A", spot: "Student Hostel Complex Main Car Park" },
-                        { label: "Faculty of Eng. Car Park", spot: "Engineering Complex & Lecture Theater" },
-                        { label: "Campus Shopping Mall", spot: "Commercial Bank & Shopping Center" }
-                      ].map((item, idx) => (
-                        <button
-                          key={`spot-chip-${idx}`}
-                          type="button"
-                          onClick={() => {
-                            const fullLoc = `${item.spot}${addrSchool ? `, ${addrSchool}` : ""}${addrCity ? `, ${addrCity}` : ""}`;
-                            setLocation(fullLoc);
-                            verifyLocationAddress(fullLoc);
-                          }}
-                          className="px-2.5 py-1.5 bg-white dark:bg-slate-900 hover:bg-orange-50 dark:hover:bg-orange-950/30 text-slate-700 dark:text-slate-300 hover:text-[#ff6b00] border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] font-extrabold transition-all shadow-2xs cursor-pointer flex items-center gap-1"
-                        >
-                          <span>📍</span>
-                          <span>{item.label}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  
-                  <div className="flex gap-2">
-                    <input 
-                      type="text"
-                      value={location}
-                      onChange={(e) => setLocation(e.target.value)}
-                      required={false}
-                      className="flex-1 h-12 px-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:bg-white dark:focus:bg-slate-900 focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white font-semibold"
-                      placeholder={type === "service" ? "e.g. Hostels Block A Room 204 or Campus Salon" : "e.g. Block C Shop 4, Campus Shopping Complex, Unilag Gate"}
-                    />
-                    <button 
-                      type="button"
-                      onClick={() => {
-                        const pinpointParts = [];
-                        if (manualBusinessAddress) pinpointParts.push(manualBusinessAddress);
-                        if (location && location !== manualBusinessAddress) pinpointParts.push(location);
-                        if (addrSchool) pinpointParts.push(addrSchool);
-                        if (addrCity) pinpointParts.push(addrCity);
-                        if (addrLga) pinpointParts.push(addrLga.endsWith("LGA") ? addrLga : `${addrLga} LGA`);
-                        if (addrState) pinpointParts.push(addrState.endsWith("State") ? addrState : `${addrState} State`);
-                        if (addrCountry) pinpointParts.push(addrCountry);
-                        const pinpointCompiled = pinpointParts.join(", ");
-                        verifyLocationAddress(pinpointCompiled || location);
-                      }}
-                      className="px-4 h-12 bg-[#ff6b00] hover:bg-orange-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm shrink-0 flex items-center gap-1.5 border-none cursor-pointer outline-none"
-                      disabled={isVerifyingAddress}
-                    >
-                      {isVerifyingAddress ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <MapPin className="w-3.5 h-3.5" />}
-                      Verify Map
-                    </button>
-                  </div>
-
-                  {geocodingError && (
-                    <div className="p-3 bg-red-50 dark:bg-red-900/10 border border-red-100 dark:border-red-900/20 rounded-xl text-[11px] font-bold text-red-600 dark:text-red-400 flex items-center gap-2">
-                      <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
-                      <span>{geocodingError}</span>
-                    </div>
-                  )}
-                  
-                  {location && location.trim() !== "" ? (
-                    <div className="p-4 rounded-2xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-900/40 flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center shrink-0">
-                        <MapPin className="w-5 h-5" />
-                      </div>
+                    <div className="p-3.5 bg-emerald-50/60 dark:bg-emerald-950/20 rounded-xl text-xs font-medium border border-emerald-200/80 dark:border-emerald-800/40 flex items-start gap-2.5">
+                      <span className="text-[#ff6b00] text-base leading-none mt-0.5">📍</span>
                       <div className="min-w-0 flex-1">
-                        <p className="text-[10px] font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
-                          Pickup Location Confirmed
-                        </p>
-                        <p className="text-xs font-bold text-slate-800 dark:text-zinc-200 truncate">
+                        <span className="text-[10px] font-black text-emerald-800 dark:text-emerald-300 uppercase tracking-widest block">
+                          Compiled Campus Pickup Location
+                        </span>
+                        <p className="font-bold text-slate-800 dark:text-slate-200 mt-0.5 break-words">
                           {location}
                         </p>
                       </div>
-                    </div>
-                  ) : (
-                    <div className="rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 h-28 relative mt-2 bg-slate-50/50 dark:bg-slate-900/50 flex flex-col items-center justify-center p-4 text-center">
-                      <MapPin className="w-6 h-6 text-slate-400 dark:text-slate-500 mb-1" />
-                      <p className="text-xs font-bold text-slate-700 dark:text-slate-200">No Pickup Address Set Yet</p>
-                      <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
-                        Enter your hostel, room number, or campus landmark above.
-                      </p>
                     </div>
                   )}
                 </div>

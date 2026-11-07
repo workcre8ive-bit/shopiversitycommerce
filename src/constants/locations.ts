@@ -112,3 +112,29 @@ export const CITY_STREETS: Record<string, string[]> = {
   "Owerri": ["Wetheral Road", "Douglas Road", "Ikenegbu Layout Road", "Orlu Road", "Okigwe Road", "Port Harcourt Road"],
   "Abeokuta": ["Lalubu Street", "Ibara Road", "Kuto Road", "Moshood Abiola Way", "Oke-Mosan Road", "Presidential Boulevard"]
 };
+
+export const POPULAR_SCHOOL_PICKUP_LOCATIONS = [
+  "School Main Gate / Security Post",
+  "University Main Library / Quadrangle",
+  "Student Union Building (SUB)",
+  "Campus Central Cafeteria / Commercial Hub",
+  "Hostel Quadrangle / Hall Porter's Lodge",
+  "Faculty Quadrangle / Lecture Theater Foyer",
+  "Campus Sports Complex / Stadium Gate",
+  "ICT Center / E-Library",
+  "Senate Building / Administrative Block Entrance",
+  "Campus Bank / ATM Gallery Area",
+  "✍️ Other / Custom School Location..."
+];
+
+export function formatAvailability(value?: number | string, unit?: string): string {
+  const num = Number(value) || 1;
+  const cleanUnit = (unit || "days").toLowerCase();
+  if (cleanUnit.startsWith("hour")) {
+    return num === 1 ? "1 hour" : `${num} hours`;
+  }
+  if (cleanUnit.startsWith("week")) {
+    return num === 1 ? "1 week" : `${num} weeks`;
+  }
+  return num === 1 ? "1 day" : `${num} days`;
+}

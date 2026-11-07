@@ -1047,66 +1047,174 @@ async function startServer() {
     });
   });
 
-  // API Routes: 6. Send Order Status Updates (Powered by Brevo)
+  // Idempotency store to prevent duplicate automated transactional emails for the same event
+  const sentEmailEventFingerprints = new Set<string>();
+
+  // API Routes: 6. Comprehensive Transactional Order & Lifecycle Notifications (Powered by Brevo)
   app.post("/api/send-order-status", async (req, res) => {
-    const { orderId, recipientEmail, buyerName, sellerName, status, statusTitle, statusMessage, deliveryOtp } = req.body;
+    const {
+      orderId,
+      recipientEmail,
+      recipientName,
+      buyerName,
+      sellerName,
+      productName,
+      quantity,
+      totalPrice,
+      paymentMethod,
+      deliveryType,
+      status,
+      statusTitle,
+      statusMessage,
+      deliveryOtp,
+      idempotencyKey
+    } = req.body;
 
     if (!recipientEmail || !orderId) {
       return res.status(400).json({ error: "Recipient email and order ID required" });
     }
 
-    const targetEmail = recipientEmail.trim();
-    console.log(`[ORDER NOTIFICATION] Sending status update "${status}" for order ${orderId} to ${targetEmail}`);
+    const targetEmail = recipientEmail.trim().toLowerCase();
+    const eventKey = idempotencyKey || `${orderId}_${status}_${targetEmail}`;
+
+    // Prevent duplicate emails for the exact same event
+    if (sentEmailEventFingerprints.has(eventKey)) {
+      console.log(`[BREVO DEDUPLICATION] Suppressed duplicate email for eventKey: ${eventKey}`);
+      return res.status(200).json({
+        success: true,
+        suppressed: true,
+        message: "Email already dispatched for this lifecycle event."
+      });
+    }
+
+    const cleanOrderId = String(orderId).trim();
+    const itemTitle = productName || "Campus Marketplace Product";
+    const qty = quantity || 1;
+    const priceText = totalPrice ? `₦${Number(totalPrice).toLocaleString()}` : "";
+    const bName = recipientName || buyerName || "Valued Customer";
+    const sName = sellerName || "Campus Merchant";
+
+    // Dynamic banner color and icon based on status
+    let bannerGradient = "linear-gradient(135deg, #0f172a 0%, #1e293b 100%)";
+    let badgeText = "ORDER NOTIFICATION";
+    let badgeColor = "#ff6b00";
+
+    const sLower = String(status || "").toLowerCase();
+    if (sLower.includes("accept") || sLower.includes("placed")) {
+      bannerGradient = "linear-gradient(135deg, #1e293b 0%, #334155 100%)";
+      badgeText = "ORDER CONFIRMED";
+      badgeColor = "#3b82f6";
+    } else if (sLower.includes("transit") || sLower.includes("dispatch") || sLower.includes("way")) {
+      bannerGradient = "linear-gradient(135deg, #312e81 0%, #4338ca 100%)";
+      badgeText = "DISPATCH IN PROGRESS";
+      badgeColor = "#8b5cf6";
+    } else if (sLower.includes("deliver") || sLower.includes("complete") || sLower.includes("paid")) {
+      bannerGradient = "linear-gradient(135deg, #064e3b 0%, #047857 100%)";
+      badgeText = "SUCCESSFUL DELIVERY";
+      badgeColor = "#10b981";
+    }
 
     const htmlContent = `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
+        <!-- Header -->
         <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ff6b00;">
-          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">SHOPIVERSITY</h1>
-          <p style="color: #64748b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Live Order Notification</p>
+          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0; letter-spacing: -0.5px;">SHOPIVERSITY</h1>
+          <p style="color: #64748b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Verified Campus Escrow Network</p>
         </div>
 
-        <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 24px; border-radius: 18px; color: #ffffff; margin: 20px 0;">
-          <div style="display: inline-block; background-color: #ff6b00; color: #ffffff; padding: 3px 10px; border-radius: 999px; font-size: 10px; font-weight: 900; letter-spacing: 1px; margin-bottom: 8px;">
-            ORDER STATUS UPDATE
+        <!-- Hero Status Card -->
+        <div style="background: ${bannerGradient}; padding: 26px; border-radius: 20px; color: #ffffff; margin: 20px 0; text-align: left;">
+          <div style="display: inline-block; background-color: ${badgeColor}; color: #ffffff; padding: 4px 12px; border-radius: 999px; font-size: 10px; font-weight: 900; letter-spacing: 1px; margin-bottom: 12px; text-transform: uppercase;">
+            ${badgeText}
           </div>
-          <h2 style="font-size: 20px; font-weight: 800; margin: 0 0 6px 0; color: #ffffff;">${statusTitle || "Your Order Has Been Updated"}</h2>
-          <p style="color: #94a3b8; font-size: 13px; margin: 0;">
-            Order Reference: <strong style="color: #38bdf8; font-family: monospace;">${orderId}</strong>
+          <h2 style="font-size: 21px; font-weight: 800; margin: 0 0 8px 0; color: #ffffff; line-height: 1.3;">
+            ${statusTitle || "Your Order Has Been Updated"}
+          </h2>
+          <p style="color: #cbd5e1; font-size: 13px; margin: 0; line-height: 1.5;">
+            Order Reference: <strong style="color: #38bdf8; font-family: monospace;">${cleanOrderId}</strong>
           </p>
         </div>
 
-        <div style="background-color: #f8fafc; padding: 18px; border-radius: 16px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
-          <p style="color: #334155; font-size: 14px; line-height: 1.6; margin: 0 0 12px 0;">
-            ${statusMessage || `Your order status has been updated to: <strong>${status}</strong>`}
+        <!-- Detail Box -->
+        <div style="background-color: #f8fafc; padding: 20px; border-radius: 18px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
+          <p style="color: #1e293b; font-size: 14px; line-height: 1.6; margin: 0 0 16px 0;">
+            ${statusMessage || `Your order status is now: <strong>${status}</strong>`}
           </p>
+
+          <table style="width: 100%; border-collapse: collapse; font-size: 13px; color: #475569; margin-top: 12px; border-top: 1px dashed #cbd5e1; padding-top: 12px;">
+            <tr>
+              <td style="padding: 8px 0; font-weight: 600;">Product:</td>
+              <td style="padding: 8px 0; text-align: right; font-weight: 700; color: #0f172a;">${itemTitle} (x${qty})</td>
+            </tr>
+            ${priceText ? `
+            <tr>
+              <td style="padding: 8px 0; font-weight: 600;">Amount:</td>
+              <td style="padding: 8px 0; text-align: right; font-weight: 800; color: #ff6b00;">${priceText}</td>
+            </tr>
+            ` : ""}
+            ${deliveryType ? `
+            <tr>
+              <td style="padding: 8px 0; font-weight: 600;">Fulfillment:</td>
+              <td style="padding: 8px 0; text-align: right; font-weight: 600; color: #0f172a; text-transform: capitalize;">${deliveryType}</td>
+            </tr>
+            ` : ""}
+            <tr>
+              <td style="padding: 8px 0; font-weight: 600;">Merchant / Vendor:</td>
+              <td style="padding: 8px 0; text-align: right; font-weight: 600; color: #0f172a;">${sName}</td>
+            </tr>
+          </table>
+
           ${deliveryOtp ? `
-            <div style="background-color: #ffffff; padding: 14px; border-radius: 12px; border: 2px dashed #ff6b00; text-align: center; margin-top: 14px;">
-              <span style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; display: block; margin-bottom: 4px;">Handover OTP Code:</span>
-              <span style="font-size: 28px; font-weight: 900; letter-spacing: 8px; color: #ff6b00; font-family: monospace;">${deliveryOtp}</span>
-              <span style="font-size: 11px; color: #94a3b8; display: block; margin-top: 4px;">Share this OTP with your courier only upon item inspection.</span>
+            <div style="background-color: #ffffff; padding: 16px; border-radius: 14px; border: 2px dashed #ff6b00; text-align: center; margin-top: 18px;">
+              <span style="font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; display: block; margin-bottom: 4px; letter-spacing: 1px;">
+                Secure Handover Delivery PIN
+              </span>
+              <span style="font-size: 32px; font-weight: 900; letter-spacing: 10px; color: #ff6b00; font-family: monospace;">
+                ${deliveryOtp}
+              </span>
+              <span style="font-size: 11px; color: #94a3b8; display: block; margin-top: 6px;">
+                Provide this PIN to your courier or vendor strictly upon inspecting the received item.
+              </span>
             </div>
           ` : ""}
         </div>
 
+        <!-- Escrow Protection Note -->
+        <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; padding: 14px 18px; border-radius: 14px; margin-bottom: 22px;">
+          <p style="color: #166534; font-size: 12px; font-weight: 700; margin: 0; line-height: 1.5;">
+            🛡️ <strong>SHOPIVERSITY Escrow Protection:</strong> Funds remain securely vaulted in escrow until delivery is verified. You have 72 hours from receipt to inspect goods and raise a dispute if needed.
+          </p>
+        </div>
+
+        <!-- Footer -->
         <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;" />
-        <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">
-          &copy; 2026 SHOPIVERSITY Campus Network. Escrow-Protected Marketplace.
+        <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0; line-height: 1.5;">
+          Need assistance? Reply directly to this email or reach our campus support desk.<br />
+          &copy; 2026 SHOPIVERSITY Campus Network. All rights reserved.
         </p>
       </div>
     `;
 
     const dispatchResult = await sendBrevoOrFallbackEmail({
       to: targetEmail,
-      subject: `📦 Order ${orderId}: ${statusTitle || "Status Updated"}`,
+      subject: `📦 Order ${cleanOrderId}: ${statusTitle || "Status Updated"}`,
       htmlContent,
-      tags: ["order-status", status]
+      tags: ["order-lifecycle", status || "status-update"]
     });
+
+    if (dispatchResult.success) {
+      sentEmailEventFingerprints.add(eventKey);
+      // Clean up cache if it grows over 5000 items
+      if (sentEmailEventFingerprints.size > 5000) {
+        sentEmailEventFingerprints.clear();
+      }
+    }
 
     return res.status(200).json({
       success: dispatchResult.success,
       provider: dispatchResult.provider,
       messageId: dispatchResult.messageId,
-      message: `Status email sent to ${targetEmail}`
+      message: `Status email dispatched to ${targetEmail} via ${dispatchResult.provider.toUpperCase()}`
     });
   });
 
@@ -3240,6 +3348,71 @@ const FALLBACK_BANKS = [
         }
       }
 
+      // Automated Brevo Transactional Email: Notify Buyer that refund is lodged
+      const buyerEmail = (req.body.buyerEmail || "").trim();
+      if (buyerEmail) {
+        sendBrevoOrFallbackEmail({
+          to: buyerEmail,
+          subject: `🛡️ Refund Request Lodged: Order ${orderId.slice(0, 8)}`,
+          htmlContent: `
+            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
+              <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ff6b00;">
+                <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">SHOPIVERSITY</h1>
+                <p style="color: #64748b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Escrow Dispute & Refund Desk</p>
+              </div>
+              <div style="background: linear-gradient(135deg, #7c2d12 0%, #9a3412 100%); padding: 24px; border-radius: 18px; color: #ffffff; margin: 20px 0;">
+                <div style="display: inline-block; background-color: #f97316; color: #ffffff; padding: 3px 10px; border-radius: 999px; font-size: 10px; font-weight: 900; letter-spacing: 1px; margin-bottom: 8px;">
+                  REFUND REQUEST LODGED
+                </div>
+                <h2 style="font-size: 20px; font-weight: 800; margin: 0 0 6px 0; color: #ffffff;">Refund Claim Under 24-Hour Review</h2>
+                <p style="color: #fed7aa; font-size: 13px; margin: 0;">Order Reference: <strong style="color: #ffffff; font-family: monospace;">${orderId}</strong></p>
+              </div>
+              <div style="background-color: #f8fafc; padding: 18px; border-radius: 16px; border: 1px solid #e2e8f0; margin-bottom: 20px; font-size: 13px; color: #334155;">
+                <p style="margin: 0 0 10px 0; line-height: 1.6;">Hello <strong>${buyerName || "Student"}</strong>, your refund claim for <strong>₦${amount.toLocaleString()}</strong> has been submitted to the SHOPIVERSITY Dispute Resolution Team.</p>
+                <p style="margin: 0 0 10px 0; line-height: 1.6;"><strong>Reason Category:</strong> ${reasonCategory}<br/><strong>Reason:</strong> ${reason}</p>
+                <div style="background-color: #fff7ed; border-left: 4px solid #ff6b00; padding: 12px; border-radius: 8px; margin: 12px 0;">
+                  <p style="margin: 0; color: #9a3412; font-size: 12px;"><strong>Important Policy:</strong> Per campus safety rules, items must be returned intact and untampered with. Perishable goods or tampered merchandise are strictly non-refundable.</p>
+                </div>
+                <p style="margin: 0; font-size: 12px; color: #64748b;">Target Bank: <strong>${bankName || "Specified Account"}</strong> (Acc: <strong>${accountNumber ? `••••${accountNumber.slice(-4)}` : "Provided"}</strong>)</p>
+              </div>
+              <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">&copy; 2026 SHOPIVERSITY Campus Escrow Network.</p>
+            </div>
+          `,
+          tags: ["refund-request", "escrow-dispute"]
+        }).catch(e => console.warn("[BREVO NOTICE] Buyer refund email err:", e.message));
+      }
+
+      // Automated Brevo Transactional Email: Notify Seller of refund/dispute
+      const sellerEmail = (req.body.sellerEmail || "").trim();
+      if (sellerEmail) {
+        sendBrevoOrFallbackEmail({
+          to: sellerEmail,
+          subject: `⚠️ Refund Claim Lodged: Order ${orderId.slice(0, 8)}`,
+          htmlContent: `
+            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
+              <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ff6b00;">
+                <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">SHOPIVERSITY</h1>
+                <p style="color: #64748b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Merchant Alert Desk</p>
+              </div>
+              <div style="background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); padding: 24px; border-radius: 18px; color: #ffffff; margin: 20px 0;">
+                <div style="display: inline-block; background-color: #f59e0b; color: #ffffff; padding: 3px 10px; border-radius: 999px; font-size: 10px; font-weight: 900; letter-spacing: 1px; margin-bottom: 8px;">
+                  ESCROW SETTLEMENT ON HOLD
+                </div>
+                <h2 style="font-size: 20px; font-weight: 800; margin: 0 0 6px 0; color: #ffffff;">Buyer Filed a Refund Request</h2>
+                <p style="color: #c7d2fe; font-size: 13px; margin: 0;">Order Reference: <strong style="color: #ffffff; font-family: monospace;">${orderId}</strong></p>
+              </div>
+              <div style="background-color: #f8fafc; padding: 18px; border-radius: 16px; border: 1px solid #e2e8f0; margin-bottom: 20px; font-size: 13px; color: #334155;">
+                <p style="margin: 0 0 10px 0; line-height: 1.6;">Hello <strong>${sellerName || "Merchant"}</strong>, buyer ${buyerName || "Customer"} has submitted a refund claim for <strong>₦${amount.toLocaleString()}</strong>.</p>
+                <p style="margin: 0 0 10px 0;"><strong>Category:</strong> ${reasonCategory}<br/><strong>Reason:</strong> "${reason}"</p>
+                <p style="margin: 0; color: #64748b; font-size: 12px;">Escrow disbursement is temporarily held pending 24-hour review. You can respond in your Seller Dashboard with proof of dispatch or inspection.</p>
+              </div>
+              <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">&copy; 2026 SHOPIVERSITY Campus Escrow Network.</p>
+            </div>
+          `,
+          tags: ["refund-seller-notice", "escrow-dispute"]
+        }).catch(e => console.warn("[BREVO NOTICE] Seller refund email err:", e.message));
+      }
+
       return res.status(200).json({
         success: true,
         message: "Refund request submitted successfully. 1.5% processing fee calculated and escrow locked.",
@@ -3358,6 +3531,38 @@ const FALLBACK_BANKS = [
         } catch (dbErr: any) {
           console.warn("[REFUND REVIEW API] Admin DB error:", dbErr.message);
         }
+      }
+
+      // Automated Brevo Transactional Email: Notify Buyer on resolution
+      const buyerEmail = (req.body.buyerEmail || "").trim();
+      if (buyerEmail) {
+        const isApproved = action === "approve" || action === "complete";
+        sendBrevoOrFallbackEmail({
+          to: buyerEmail,
+          subject: `${isApproved ? "✅" : "⚠️"} Refund Update: Order ${orderId.slice(0, 8)} (${newRefundStatus.toUpperCase()})`,
+          htmlContent: `
+            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
+              <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ff6b00;">
+                <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">SHOPIVERSITY</h1>
+                <p style="color: #64748b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Refund & Escrow Settlement</p>
+              </div>
+              <div style="background: ${isApproved ? "linear-gradient(135deg, #064e3b 0%, #047857 100%)" : "linear-gradient(135deg, #1e293b 0%, #334155 100%)"}; padding: 24px; border-radius: 18px; color: #ffffff; margin: 20px 0;">
+                <div style="display: inline-block; background-color: ${isApproved ? "#10b981" : "#f59e0b"}; color: #ffffff; padding: 3px 10px; border-radius: 999px; font-size: 10px; font-weight: 900; letter-spacing: 1px; margin-bottom: 8px;">
+                  REFUND ${newRefundStatus.toUpperCase()}
+                </div>
+                <h2 style="font-size: 20px; font-weight: 800; margin: 0 0 6px 0; color: #ffffff;">${isApproved ? "Refund Processed & Settlement Credited" : "Refund Claim Update"}</h2>
+                <p style="color: #cbd5e1; font-size: 13px; margin: 0;">Order Reference: <strong style="color: #ffffff; font-family: monospace;">${orderId}</strong></p>
+              </div>
+              <div style="background-color: #f8fafc; padding: 18px; border-radius: 16px; border: 1px solid #e2e8f0; margin-bottom: 20px; font-size: 13px; color: #334155;">
+                <p style="margin: 0 0 10px 0; line-height: 1.6;">Your refund claim for Order <strong>#${orderId}</strong> has been processed with status: <strong>${newRefundStatus.toUpperCase()}</strong>.</p>
+                ${finalBuyerDisbursed ? `<p style="margin: 0 0 10px 0; font-size: 15px; font-weight: 800; color: #047857;">Disbursed Amount: ₦${finalBuyerDisbursed.toLocaleString()}</p>` : ""}
+                ${decisionNotes ? `<p style="margin: 0 0 10px 0; color: #475569;"><strong>Review Notes:</strong> ${decisionNotes}</p>` : ""}
+              </div>
+              <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">&copy; 2026 SHOPIVERSITY Campus Escrow Network.</p>
+            </div>
+          `,
+          tags: ["refund-resolved", newRefundStatus]
+        }).catch(e => console.warn("[BREVO NOTICE] Resolution email error:", e.message));
       }
 
       return res.status(200).json({

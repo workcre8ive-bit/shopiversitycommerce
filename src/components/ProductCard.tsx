@@ -130,9 +130,10 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
               </div>
 
               {/* Stock Status Badge (bottom left) */}
-              {product.stock === 0 ? (
-                <div className="absolute bottom-3 left-3 bg-red-600 text-white px-2.5 py-1 rounded-lg text-[8px] font-black uppercase tracking-wider shadow-sm z-10">
-                  Out of Stock
+              {(product.stock === 0 || product.status === "inactive") ? (
+                <div className="absolute bottom-3 left-3 bg-red-600 text-white px-2.5 py-1 rounded-lg text-[8px] font-black uppercase tracking-wider shadow-sm z-10 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                  Inactive to Buy (Sold Out)
                 </div>
               ) : product.stock < 5 ? (
                 <div className="absolute bottom-3 left-3 bg-amber-500 text-white px-2.5 py-1 rounded-lg text-[8px] font-black uppercase tracking-wider shadow-sm z-10">
@@ -225,18 +226,27 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                         onAddToCart(product);
                       }
                     }}
-                    disabled={product.stock === 0}
-                    className="h-[36px] w-full sm:w-auto px-3.5 rounded-xl flex items-center justify-center font-bold text-xs gap-1.5 transition-all duration-300 shadow-sm hover:scale-105 active:scale-95 cursor-pointer border-none text-white shrink-0"
+                    disabled={product.stock === 0 || product.status === "inactive"}
+                    className={cn(
+                      "h-[36px] w-full sm:w-auto px-3.5 rounded-xl flex items-center justify-center font-bold text-xs gap-1.5 transition-all duration-300 shadow-sm shrink-0 border-none",
+                      (product.stock === 0 || product.status === "inactive")
+                        ? "bg-slate-300 dark:bg-zinc-800 text-slate-500 dark:text-zinc-500 cursor-not-allowed opacity-75"
+                        : "hover:scale-105 active:scale-95 cursor-pointer text-white"
+                    )}
                     style={{
-                      backgroundColor: brandColor,
+                      backgroundColor: (product.stock === 0 || product.status === "inactive") ? undefined : brandColor,
                     }}
                     title={
-                      product.category === "Food & Drinks" && product.menuItems && product.menuItems.length > 0 ? "Explore options" : "Add to cart"
+                      (product.stock === 0 || product.status === "inactive") 
+                        ? "Inactive to Buy - Out of Stock" 
+                        : (product.category === "Food & Drinks" && product.menuItems && product.menuItems.length > 0 ? "Explore options" : "Add to cart")
                     }
                   >
                     <ShoppingCart className="w-3.5 h-3.5" />
                     <span>
-                      {product.category === "Food & Drinks" && product.menuItems && product.menuItems.length > 0 ? "Explore" : "Add"}
+                      {(product.stock === 0 || product.status === "inactive")
+                        ? "Sold Out"
+                        : (product.category === "Food & Drinks" && product.menuItems && product.menuItems.length > 0 ? "Explore" : "Add")}
                     </span>
                   </button>
                 ) : (

@@ -987,7 +987,15 @@ export default function App() {
   }, []);
 
   const filteredProducts = Array.from(new Map<string, Product>(products.filter((p) => {
-    if (p.isDeleted || p.isHibernated || (p.stock !== undefined && p.stock <= 0)) return false;
+    // 3-Day stock refill window: if stock reached 0, seller has 3 days (72 hours) to refill before removal from marketplace
+    const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+    const isOutOfStockOver3Days = (p.stock !== undefined && p.stock <= 0) && (
+      p.outOfStockAt 
+        ? (Date.now() - new Date(p.outOfStockAt).getTime() > THREE_DAYS_MS) 
+        : false
+    );
+
+    if (p.isDeleted || p.isHibernated || p.isArchived || isOutOfStockOver3Days) return false;
     
     // If the seller account has been deleted from Firebase, never show it in the app
     if (p.sellerId && existingUserIds.size > 0 && !existingUserIds.has(p.sellerId)) return false;
