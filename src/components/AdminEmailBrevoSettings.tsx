@@ -123,11 +123,12 @@ export default function AdminEmailBrevoSettings() {
     setNotification(null);
 
     try {
-      let endpoint = "/api/brevo/test-connection";
+      let endpoint = "/api/test-email";
       let payload: any = {
         apiKey: apiKey.trim() || undefined,
         senderEmail: senderEmail.trim(),
         senderName: senderName.trim(),
+        recipient: testRecipient.trim(),
         testRecipientEmail: testRecipient.trim()
       };
 

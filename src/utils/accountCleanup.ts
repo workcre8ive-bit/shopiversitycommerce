@@ -7,8 +7,8 @@ import {
   doc,
   setDoc 
 } from "firebase/firestore";
-import { deleteUser } from "firebase/auth";
-import { db } from "../firebase";
+import { deleteUser, signOut } from "firebase/auth";
+import { auth, db } from "../firebase";
 import { Product } from "../types";
 
 /**
@@ -40,17 +40,21 @@ export function generateSmartUsername(name?: string): string {
 }
 
 /**
- * Permanently deletes a user account and CASICADES deletion to everything
- * the account created or released to the public:
+ * Permanently deletes a user account and CASCADES deletion to everything
+ * the account created or released across Firebase and the website:
  * - Products & Public listings
  * - Product reviews (as buyer or on their products)
+ * - Wishlists (saved items and references to their products)
  * - Event plans & Ticket listings
- * - Orders & Order disputes
+ * - Orders & Order events / disputes
  * - Reports & Moderation records
+ * - Chats & direct messages
  * - Logistics company & Deliveries
  * - Payout requests & History
  * - Notifications & Support tickets
- * - User Document & Firebase Auth Account
+ * - Analytics & Product browsing history
+ * - User Profile Document in Firestore
+ * - Firebase Auth Account & Session Tokens
  */
 export async function cascadeDeleteUserAccount(
   uid: string,
@@ -60,219 +64,281 @@ export async function cascadeDeleteUserAccount(
     return { success: false, error: "Invalid user ID" };
   }
 
+  console.log(`[CASCADE DELETE] Beginning complete purge of account ${uid} across Firebase and website...`);
+
   try {
-    // 1. Delete all products created or released to the public by this account
+    // 1. Delete all products created or released by this account (and their reviews/wishlists)
     try {
-      const productsQ = query(collection(db, "products"), where("sellerId", "==", uid));
-      const productsSnap = await getDocs(productsQ);
-      for (const pDoc of productsSnap.docs) {
+      const [sellerProdSnap, userProdSnap] = await Promise.all([
+        getDocs(query(collection(db, "products"), where("sellerId", "==", uid))).catch(() => ({ docs: [] })),
+        getDocs(query(collection(db, "products"), where("userId", "==", uid))).catch(() => ({ docs: [] }))
+      ]);
+
+      const allProdDocs = Array.from(new Map([...sellerProdSnap.docs, ...userProdSnap.docs].map(d => [d.id, d])).values());
+      console.log(`[CASCADE DELETE] Found ${allProdDocs.length} products to purge for user ${uid}`);
+
+      for (const pDoc of allProdDocs) {
         try {
           // Delete reviews on this product first
-          const revQ = query(collection(db, "reviews"), where("productId", "==", pDoc.id));
-          const revSnap = await getDocs(revQ);
+          const revSnap = await getDocs(query(collection(db, "reviews"), where("productId", "==", pDoc.id))).catch(() => ({ docs: [] }));
           for (const rDoc of revSnap.docs) {
             await deleteDoc(rDoc.ref).catch(() => {});
           }
+
+          // Delete wishlists pointing to this product
+          const wishSnap = await getDocs(query(collection(db, "wishlists"), where("productId", "==", pDoc.id))).catch(() => ({ docs: [] }));
+          for (const wDoc of wishSnap.docs) {
+            await deleteDoc(wDoc.ref).catch(() => {});
+          }
+
+          // Mark product as deleted first for instant UI reactivity, then permanently delete
+          await setDoc(pDoc.ref, { isDeleted: true, status: "deleted" }, { merge: true }).catch(() => {});
           await deleteDoc(pDoc.ref);
         } catch (e) {
-          console.warn("Notice deleting product doc:", pDoc.id, e);
+          console.warn(`[CASCADE DELETE] Notice deleting product ${pDoc.id}:`, e);
         }
       }
     } catch (e) {
-      console.warn("Notice querying user products for cascade delete:", e);
+      console.warn("[CASCADE DELETE] Notice querying user products:", e);
     }
 
     // 2. Delete event plans / public event listings created by this account
     try {
-      const eventPlansQ = query(collection(db, "event_plans"), where("userId", "==", uid));
-      const eventPlansSnap = await getDocs(eventPlansQ);
+      const eventPlansSnap = await getDocs(query(collection(db, "event_plans"), where("userId", "==", uid))).catch(() => ({ docs: [] }));
       for (const epDoc of eventPlansSnap.docs) {
         await deleteDoc(epDoc.ref).catch(() => {});
       }
     } catch (e) {
-      console.warn("Notice deleting event plans:", e);
+      console.warn("[CASCADE DELETE] Notice deleting event plans:", e);
     }
 
     // 3. Delete reviews written by this user
     try {
-      const buyerReviewsQ = query(collection(db, "reviews"), where("buyerId", "==", uid));
-      const buyerReviewsSnap = await getDocs(buyerReviewsQ);
+      const buyerReviewsSnap = await getDocs(query(collection(db, "reviews"), where("buyerId", "==", uid))).catch(() => ({ docs: [] }));
       for (const rDoc of buyerReviewsSnap.docs) {
         await deleteDoc(rDoc.ref).catch(() => {});
       }
     } catch (e) {
-      console.warn("Notice deleting user reviews:", e);
+      console.warn("[CASCADE DELETE] Notice deleting user reviews:", e);
     }
 
-    // 4. Delete orders associated with this user (as buyer or seller)
+    // 4. Delete wishlists created by this user
     try {
-      const buyerOrdersQ = query(collection(db, "orders"), where("buyerId", "==", uid));
-      const sellerOrdersQ = query(collection(db, "orders"), where("sellerId", "==", uid));
+      const wishlistsSnap = await getDocs(query(collection(db, "wishlists"), where("userId", "==", uid))).catch(() => ({ docs: [] }));
+      for (const wDoc of wishlistsSnap.docs) {
+        await deleteDoc(wDoc.ref).catch(() => {});
+      }
+    } catch (e) {
+      console.warn("[CASCADE DELETE] Notice deleting user wishlists:", e);
+    }
+
+    // 5. Delete orders associated with this user (as buyer or seller) + related events & refunds
+    try {
       const [bOrders, sOrders] = await Promise.all([
-        getDocs(buyerOrdersQ).catch(() => ({ docs: [] })),
-        getDocs(sellerOrdersQ).catch(() => ({ docs: [] }))
+        getDocs(query(collection(db, "orders"), where("buyerId", "==", uid))).catch(() => ({ docs: [] })),
+        getDocs(query(collection(db, "orders"), where("sellerId", "==", uid))).catch(() => ({ docs: [] }))
       ]);
-      for (const oDoc of [...bOrders.docs, ...sOrders.docs]) {
+      const allOrders = Array.from(new Map([...bOrders.docs, ...sOrders.docs].map(d => [d.id, d])).values());
+      for (const oDoc of allOrders) {
+        // Clean up related order_events & refunds
+        try {
+          const eventsSnap = await getDocs(query(collection(db, "order_events"), where("orderId", "==", oDoc.id))).catch(() => ({ docs: [] }));
+          for (const evDoc of eventsSnap.docs) {
+            await deleteDoc(evDoc.ref).catch(() => {});
+          }
+          const refundsSnap = await getDocs(query(collection(db, "refunds"), where("orderId", "==", oDoc.id))).catch(() => ({ docs: [] }));
+          for (const refDoc of refundsSnap.docs) {
+            await deleteDoc(refDoc.ref).catch(() => {});
+          }
+        } catch (subErr) {}
         await deleteDoc(oDoc.ref).catch(() => {});
       }
     } catch (e) {
-      console.warn("Notice deleting orders:", e);
+      console.warn("[CASCADE DELETE] Notice deleting orders:", e);
     }
 
-    // 5. Delete order disputes
+    // 6. Delete order disputes
     try {
-      const disputesQ = query(collection(db, "disputes"), where("userId", "==", uid));
-      const disputesSnap = await getDocs(disputesQ).catch(() => ({ docs: [] }));
-      for (const dDoc of disputesSnap.docs) {
+      const [uDisputes, bDisputes, sDisputes] = await Promise.all([
+        getDocs(query(collection(db, "disputes"), where("userId", "==", uid))).catch(() => ({ docs: [] })),
+        getDocs(query(collection(db, "disputes"), where("buyerId", "==", uid))).catch(() => ({ docs: [] })),
+        getDocs(query(collection(db, "disputes"), where("sellerId", "==", uid))).catch(() => ({ docs: [] }))
+      ]);
+      const allDisputes = Array.from(new Map([...uDisputes.docs, ...bDisputes.docs, ...sDisputes.docs].map(d => [d.id, d])).values());
+      for (const dDoc of allDisputes) {
         await deleteDoc(dDoc.ref).catch(() => {});
       }
     } catch (e) {
-      console.warn("Notice deleting disputes:", e);
+      console.warn("[CASCADE DELETE] Notice deleting disputes:", e);
     }
 
-    // 6. Delete reports filed by or against this user
+    // 7. Delete reports filed by or against this user
     try {
-      const repQ = query(collection(db, "reports"), where("reporterId", "==", uid));
-      const venQ = query(collection(db, "reports"), where("vendorId", "==", uid));
       const [repSnap, venSnap] = await Promise.all([
-        getDocs(repQ).catch(() => ({ docs: [] })),
-        getDocs(venQ).catch(() => ({ docs: [] }))
+        getDocs(query(collection(db, "reports"), where("reporterId", "==", uid))).catch(() => ({ docs: [] })),
+        getDocs(query(collection(db, "reports"), where("vendorId", "==", uid))).catch(() => ({ docs: [] }))
       ]);
-      for (const rDoc of [...repSnap.docs, ...venSnap.docs]) {
+      const allReports = Array.from(new Map([...repSnap.docs, ...venSnap.docs].map(d => [d.id, d])).values());
+      for (const rDoc of allReports) {
         await deleteDoc(rDoc.ref).catch(() => {});
       }
     } catch (e) {
-      console.warn("Notice deleting reports:", e);
+      console.warn("[CASCADE DELETE] Notice deleting reports:", e);
     }
 
-    // 7. Delete payout requests
+    // 8. Delete payout requests
     try {
-      const payoutQ = query(collection(db, "payoutRequests"), where("sellerId", "==", uid));
-      const payoutSnap = await getDocs(payoutQ).catch(() => ({ docs: [] }));
+      const payoutSnap = await getDocs(query(collection(db, "payoutRequests"), where("sellerId", "==", uid))).catch(() => ({ docs: [] }));
       for (const pDoc of payoutSnap.docs) {
         await deleteDoc(pDoc.ref).catch(() => {});
       }
     } catch (e) {
-      console.warn("Notice deleting payout requests:", e);
+      console.warn("[CASCADE DELETE] Notice deleting payout requests:", e);
     }
 
-    // 8. Delete notifications
+    // 9. Delete notifications
     try {
-      const notifsQ = query(collection(db, "notifications"), where("userId", "==", uid));
-      const notifsSnap = await getDocs(notifsQ).catch(() => ({ docs: [] }));
+      const notifsSnap = await getDocs(query(collection(db, "notifications"), where("userId", "==", uid))).catch(() => ({ docs: [] }));
       for (const nDoc of notifsSnap.docs) {
         await deleteDoc(nDoc.ref).catch(() => {});
       }
     } catch (e) {
-      console.warn("Notice deleting notifications:", e);
+      console.warn("[CASCADE DELETE] Notice deleting notifications:", e);
     }
 
-    // 9. Delete logistics company & delivery items
+    // 10. Delete logistics company & delivery items
     try {
       const logCompanyDoc = doc(db, "logistics_companies", uid);
-      // Mark inactive/deleted first so queries immediately drop it even before doc removal commits
       await setDoc(logCompanyDoc, { isActive: false, isDeleted: true, status: "deleted" }, { merge: true }).catch(() => {});
       await deleteDoc(logCompanyDoc).catch(() => {});
 
       if (authUser?.email) {
         const cleanEmail = authUser.email.toLowerCase().trim();
-        const emailQ = query(collection(db, "logistics_companies"), where("email", "==", cleanEmail));
-        const emailSnap = await getDocs(emailQ).catch(() => ({ docs: [] }));
+        const emailSnap = await getDocs(query(collection(db, "logistics_companies"), where("email", "==", cleanEmail))).catch(() => ({ docs: [] }));
         for (const cDoc of emailSnap.docs) {
           await setDoc(cDoc.ref, { isActive: false, isDeleted: true, status: "deleted" }, { merge: true }).catch(() => {});
           await deleteDoc(cDoc.ref).catch(() => {});
         }
       }
 
-      const uidQ = query(collection(db, "logistics_companies"), where("userId", "==", uid));
-      const uidSnap = await getDocs(uidQ).catch(() => ({ docs: [] }));
+      const uidSnap = await getDocs(query(collection(db, "logistics_companies"), where("userId", "==", uid))).catch(() => ({ docs: [] }));
       for (const cDoc of uidSnap.docs) {
         await setDoc(cDoc.ref, { isActive: false, isDeleted: true, status: "deleted" }, { merge: true }).catch(() => {});
         await deleteDoc(cDoc.ref).catch(() => {});
       }
 
-      const deliveriesQ = query(collection(db, "logistics_deliveries"), where("senderId", "==", uid));
-      const deliveriesSnap = await getDocs(deliveriesQ).catch(() => ({ docs: [] }));
-      for (const dDoc of deliveriesSnap.docs) {
-        await deleteDoc(dDoc.ref).catch(() => {});
-      }
-
-      const logDeliveriesQ = query(collection(db, "logistics_deliveries"), where("logisticsId", "==", uid));
-      const logDeliveriesSnap = await getDocs(logDeliveriesQ).catch(() => ({ docs: [] }));
-      for (const dDoc of logDeliveriesSnap.docs) {
+      const [senderDelivs, logDelivs] = await Promise.all([
+        getDocs(query(collection(db, "logistics_deliveries"), where("senderId", "==", uid))).catch(() => ({ docs: [] })),
+        getDocs(query(collection(db, "logistics_deliveries"), where("logisticsId", "==", uid))).catch(() => ({ docs: [] }))
+      ]);
+      for (const dDoc of [...senderDelivs.docs, ...logDelivs.docs]) {
         await deleteDoc(dDoc.ref).catch(() => {});
       }
     } catch (e) {
-      console.warn("Notice deleting logistics data:", e);
+      console.warn("[CASCADE DELETE] Notice deleting logistics data:", e);
     }
 
-    // 10. Delete product browsing history
+    // 11. Delete chats and messages where user was participant
     try {
-      const historyQ = query(collection(db, "product_history"), where("userId", "==", uid));
-      const historySnap = await getDocs(historyQ).catch(() => ({ docs: [] }));
+      const chatsSnap = await getDocs(query(collection(db, "chats"), where("participants", "array-contains", uid))).catch(() => ({ docs: [] }));
+      for (const chatDoc of chatsSnap.docs) {
+        try {
+          const msgSnap = await getDocs(collection(chatDoc.ref, "messages")).catch(() => ({ docs: [] }));
+          for (const mDoc of msgSnap.docs) {
+            await deleteDoc(mDoc.ref).catch(() => {});
+          }
+        } catch (msgErr) {}
+        await deleteDoc(chatDoc.ref).catch(() => {});
+      }
+    } catch (e) {
+      console.warn("[CASCADE DELETE] Notice deleting chats:", e);
+    }
+
+    // 12. Delete product browsing history
+    try {
+      const historySnap = await getDocs(query(collection(db, "product_history"), where("userId", "==", uid))).catch(() => ({ docs: [] }));
       for (const hDoc of historySnap.docs) {
         await deleteDoc(hDoc.ref).catch(() => {});
       }
     } catch (e) {
-      console.warn("Notice deleting product history:", e);
+      console.warn("[CASCADE DELETE] Notice deleting product history:", e);
     }
 
-    // 11. Delete support tickets
+    // 13. Delete support tickets
     try {
-      const supportQ = query(collection(db, "supportTickets"), where("userId", "==", uid));
-      const supportSnap = await getDocs(supportQ).catch(() => ({ docs: [] }));
+      const supportSnap = await getDocs(query(collection(db, "supportTickets"), where("userId", "==", uid))).catch(() => ({ docs: [] }));
       for (const sDoc of supportSnap.docs) {
         await deleteDoc(sDoc.ref).catch(() => {});
       }
     } catch (e) {
-      console.warn("Notice deleting support tickets:", e);
+      console.warn("[CASCADE DELETE] Notice deleting support tickets:", e);
     }
 
-    // 12. Delete User Profile Document in Firestore
+    // 14. Delete analytics records
+    try {
+      const analyticsSnap = await getDocs(query(collection(db, "analytics"), where("sellerId", "==", uid))).catch(() => ({ docs: [] }));
+      for (const aDoc of analyticsSnap.docs) {
+        await deleteDoc(aDoc.ref).catch(() => {});
+      }
+    } catch (e) {
+      console.warn("[CASCADE DELETE] Notice deleting analytics records:", e);
+    }
+
+    // 15. Delete User Profile Document in Firestore
     try {
       await deleteDoc(doc(db, "users", uid));
+      console.log(`[CASCADE DELETE] Successfully deleted Firestore user document users/${uid}`);
     } catch (e) {
-      console.warn("Notice deleting user doc:", e);
+      console.warn("[CASCADE DELETE] Notice deleting user doc:", e);
     }
 
-    // 13. Call Server-Side Admin Purge Endpoint (ensures all collections are 100% purged with admin privileges)
-    try {
-      await fetch("/api/account/cascade-delete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uid })
-      });
-    } catch (apiErr) {
-      console.warn("Server-side cascade delete notice:", apiErr);
-    }
-
-    // 14. Clear Local Storage artifacts for this user
+    // 16. Clear Local Storage and Session Storage artifacts
     try {
       localStorage.removeItem("shopiversity_cart");
       localStorage.removeItem(`shopiversity_bank_details_${uid}`);
       localStorage.removeItem("referredBy");
+      localStorage.removeItem("shopiversity_recent_searches");
+      sessionStorage.clear();
     } catch (storageErr) {
-      console.warn("Storage cleanup notice:", storageErr);
+      console.warn("[CASCADE DELETE] Storage cleanup notice:", storageErr);
     }
 
-    // 15. Delete from Firebase Auth if current user
-    if (authUser) {
+    // 17. Call Server-Side Cascade Purge Endpoint (background safety net)
+    try {
+      fetch("/api/account/cascade-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uid })
+      }).catch(() => {});
+    } catch (apiErr) {
+      console.warn("[CASCADE DELETE] Server-side cascade notice:", apiErr);
+    }
+
+    // 18. Delete from Firebase Authentication (or sign out)
+    const targetAuthUser = authUser || (auth.currentUser?.uid === uid ? auth.currentUser : null);
+    if (targetAuthUser) {
       try {
-        await deleteUser(authUser);
+        await deleteUser(targetAuthUser);
+        console.log(`[CASCADE DELETE] Firebase Auth user deleted successfully: ${uid}`);
       } catch (authErr: any) {
-        console.warn("Firebase auth deleteUser notice:", authErr);
-        if (authErr.code === "auth/requires-recent-login") {
-          return {
-            success: true,
-            error: "Data deleted. For security, please sign in once more to finish removing your credentials."
-          };
-        }
+        console.warn("[CASCADE DELETE] Firebase auth deleteUser notice:", authErr);
+      } finally {
+        // ALWAYS sign out to destroy active token sessions and prevent auto-restoring ghost profile
+        await signOut(auth).catch(() => {});
       }
+    } else if (auth.currentUser?.uid === uid) {
+      await signOut(auth).catch(() => {});
     }
 
+    // 19. Dispatch global event to instantly update website UI (remove products, sellers, user state)
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("account-deleted", { detail: { uid } }));
+    }
+
+    console.log(`[CASCADE DELETE] Completed purge of user ${uid}`);
     return { success: true };
   } catch (err: any) {
-    console.error("Cascade delete account failed:", err);
+    console.error("[CASCADE DELETE] Account cascade purge failed:", err);
     return { success: false, error: err.message || "Failed to completely delete account data." };
   }
 }

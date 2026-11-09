@@ -287,11 +287,16 @@ export default function LogisticsHub({
         setDeleteCompanyError(res.error);
         return;
       }
+      await signOut(auth).catch(() => {});
+      try {
+        localStorage.clear();
+        sessionStorage.clear();
+      } catch (e) {}
       setCompanyProfile(null);
       setShowDeleteCompanyModal(false);
       setView("splash");
       alert("Your logistics company account has been permanently deleted from Firebase.");
-      window.location.reload();
+      window.location.href = "/";
     } catch (err: any) {
       console.error("Failed to delete company account:", err);
       setDeleteCompanyError(err.message || "Failed to delete account. Please try again.");

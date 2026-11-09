@@ -95,20 +95,24 @@ export default function AuthPage({
   initialMode?: "login" | "signup";
   initialRole?: "buyer" | "seller";
   onModeChange?: (mode: "login" | "signup") => void;
-  onGoToMarket?: () => void;
+  onGoToMarket?: (targetRole?: "buyer" | "seller") => void;
   onNavigateToLogistics?: () => void;
   onVerificationScreenChange?: (isVerifying: boolean) => void;
   setActiveTab?: (tab: string) => void;
   onOpenCookieSettings?: () => void;
 }) {
-  const handleGoToMarket = () => {
+  const handleGoToMarket = (targetRole?: "buyer" | "seller") => {
+    const chosenRole = targetRole || (role === "seller" ? "seller" : "buyer");
     if (onVerificationScreenChange) {
       onVerificationScreenChange(false);
     }
+    if (chosenRole === "seller" && setActiveTab) {
+      setActiveTab("dashboard");
+    }
     if (onGoToMarket) {
-      onGoToMarket();
+      onGoToMarket(chosenRole);
     } else {
-      window.location.href = "/";
+      window.location.href = chosenRole === "seller" ? "/?tab=dashboard" : "/";
     }
   };
 
@@ -1197,7 +1201,7 @@ export default function AuthPage({
         if (onVerificationScreenChange) {
           onVerificationScreenChange(false);
         }
-        handleGoToMarket();
+        handleGoToMarket(role === "seller" ? "seller" : "buyer");
       }, 1200);
     } catch (err: any) {
       console.error("Verification error:", err);

@@ -63,7 +63,8 @@ export default function AdminUserDetailModal({
       if (!uid) return;
       const res = await cascadeDeleteUserAccount(uid);
       if (res.success) {
-        alert("Account and all created content permanently purged from Firebase.");
+        window.dispatchEvent(new CustomEvent('account-deleted', { detail: { uid } }));
+        alert("Account and all created content permanently purged from Firebase and the website.");
         onClose();
       } else {
         alert("Error purging account: " + (res.error || "Unknown error"));

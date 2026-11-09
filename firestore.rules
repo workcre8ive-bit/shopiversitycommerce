@@ -481,7 +481,7 @@ service cloud.firestore {
                       request.resource.data.stock is number &&
                       request.resource.data.stock >= 0
                     );
-      allow delete: if isAuthenticated() && (resource.data.sellerId == request.auth.uid || isAdmin());
+      allow delete: if isAuthenticated() && (resource.data.sellerId == request.auth.uid || isAdmin() || !exists(/databases/$(database)/documents/users/$(resource.data.sellerId)));
     }
 
     match /product_history/{historyId} {
@@ -531,7 +531,7 @@ service cloud.firestore {
           request.resource.data.createdAt == resource.data.createdAt
         )
       );
-      allow delete: if isAdmin();
+      allow delete: if isAdmin() || (isAuthenticated() && (request.auth.uid == resource.data.buyerId || request.auth.uid == resource.data.sellerId));
     }
 
     match /notifications/{notificationId} {
@@ -577,7 +577,7 @@ service cloud.firestore {
       allow get: if isAdmin() || (isAuthenticated() && request.auth.uid == resource.data.sellerId);
       allow list: if isAdminEmail() || (isAuthenticated() && request.auth.uid == resource.data.sellerId);
       allow create: if isAuthenticated() && isValidAnalytics(request.resource.data);
-      allow delete: if isAdmin();
+      allow delete: if isAdmin() || (isAuthenticated() && request.auth.uid == resource.data.sellerId);
     }
 
     match /referralTransactions/{transactionId} {
@@ -593,7 +593,7 @@ service cloud.firestore {
       allow create: if (isAuthenticated() && isValidSupportTicket(request.resource.data) && request.resource.data.userId == request.auth.uid) || 
                       (!isAuthenticated() && isValidSupportTicket(request.resource.data) && request.resource.data.userId == "guest");
       allow update: if isAdmin();
-      allow delete: if isAdmin();
+      allow delete: if isAdmin() || (isAuthenticated() && request.auth.uid == resource.data.userId);
     }
     
     match /logistics_companies/{companyId} {
@@ -621,7 +621,11 @@ service cloud.firestore {
           request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants || 
           isAdmin()
         );
-        allow update, delete: if isAuthenticated() && (request.auth.uid == resource.data.senderId || isAdmin());
+        allow update, delete: if isAuthenticated() && (
+          request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants || 
+          request.auth.uid == resource.data.senderId || 
+          isAdmin()
+        );
       }
     }
 
@@ -635,13 +639,18 @@ service cloud.firestore {
       allow list: if isAuthenticated() && (resource.data.buyerId == request.auth.uid || resource.data.sellerId == request.auth.uid || isAdminEmail());
       allow create: if isAuthenticated();
       allow update: if isAuthenticated() && (resource.data.buyerId == request.auth.uid || resource.data.sellerId == request.auth.uid || isAdmin());
-      allow delete: if isAdmin();
+      allow delete: if isAdmin() || (isAuthenticated() && (resource.data.buyerId == request.auth.uid || resource.data.sellerId == request.auth.uid));
     }
 
     match /order_events/{eventId} {
       allow read, list: if isAuthenticated();
       allow create: if isAuthenticated();
-      allow update, delete: if isAdmin();
+      allow update, delete: if isAdmin() || isAuthenticated();
+    }
+
+    match /disputes/{disputeId} {
+      allow get, list, create: if isAuthenticated();
+      allow update, delete: if isAdmin() || (isAuthenticated() && (resource.data.buyerId == request.auth.uid || resource.data.sellerId == request.auth.uid || resource.data.get('userId', '') == request.auth.uid));
     }
 
     match /wishlists/{wishlistId} {

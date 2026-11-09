@@ -953,8 +953,15 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
         return;
       }
 
+      // Ensure auth session is cleanly terminated and storage cleared
+      await signOut(auth).catch(() => {});
+      try {
+        localStorage.clear();
+        sessionStorage.clear();
+      } catch (e) {}
+
       alert("Your account and all created products, listings, and public data have been permanently deleted from Firebase.");
-      window.location.reload();
+      window.location.href = "/";
     } catch (error: any) {
       console.error("Delete account error:", error);
       if (error.code === "auth/requires-recent-login") {

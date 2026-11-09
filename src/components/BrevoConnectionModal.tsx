@@ -133,13 +133,14 @@ export default function BrevoConnectionModal({
     setNotification(null);
 
     try {
-      const res = await fetch("/api/brevo/test-connection", {
+      const res = await fetch("/api/test-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           apiKey: apiKey.trim() || undefined,
           senderEmail: senderEmail.trim(),
           senderName: senderName.trim(),
+          recipient: testRecipientEmail.trim(),
           testRecipientEmail: testRecipientEmail.trim()
         })
       });

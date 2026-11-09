@@ -791,10 +791,19 @@ export default function App() {
             
             if (profile.state === "Logistics Partner" || profile.role === "logistics") {
               setActiveTab("logistics");
+              initialTabSet.current = true;
             } else if (profile.role === "seller") {
               setActiveRole("seller");
+              if (!initialTabSet.current || activeTab === "auth" || activeTab === "signup") {
+                setActiveTab("dashboard");
+                initialTabSet.current = true;
+              }
             } else {
               setActiveRole("buyer");
+              if (!initialTabSet.current) {
+                setActiveTab("market");
+                initialTabSet.current = true;
+              }
             }
 
             if (!initialTabSet.current) {
@@ -802,14 +811,6 @@ export default function App() {
                 // Keep signup verification screen active
               } else if (profile.state === "Logistics Partner" || profile.role === "logistics" || activeTab === "logistics") {
                 setActiveTab("logistics");
-                initialTabSet.current = true;
-              } else {
-                const startRole = profile.role === "seller" ? "seller" : "buyer";
-                if (startRole === "seller") {
-                  setActiveTab("dashboard");
-                } else {
-                  setActiveTab("market");
-                }
                 initialTabSet.current = true;
               }
               if (profile.theme) {
@@ -869,37 +870,22 @@ export default function App() {
                 return;
               }
 
-              console.log(`[AUTH SYNC] Profile missing in Firestore for authenticated user ${user.uid}. Auto-restoring profile...`);
-              const autoProfile: UserProfile = {
-                uid: user.uid,
-                displayName: user.displayName || (user.email ? user.email.split("@")[0] : "User"),
-                username: ((user.displayName || user.email?.split("@")[0] || "user").replace(/[^a-zA-Z0-9]/g, "").toLowerCase() || "user") + Math.floor(100 + Math.random() * 900),
-                email: user.email?.toLowerCase() || "",
-                phoneNumber: user.phoneNumber || "",
-                gender: "other",
-                role: "both",
-                activeRole: "buyer",
-                referralCode: "SHOP" + Math.random().toString(36).substring(2, 7).toUpperCase(),
-                referredBy: "",
-                referralEarnings: 0,
-                referralCount: 0,
-                schoolType: "",
-                schoolName: "",
-                state: "",
-                city: "",
-                deliveryAddress: "",
-                isVerified: user.emailVerified || false,
-                isSuspended: false,
-                reportCount: 0,
-                createdAt: new Date().toISOString(),
-                verificationIdUrl: "",
-                profileCompleted: false
-              };
-              setDoc(doc(db, "users", user.uid), autoProfile).catch(err => {
-                console.warn("[AUTH SYNC] Failed to auto-restore profile:", err);
-                setCurrentUser(null);
+              // Check if user is actively in the signup or verification flow
+              const isInActiveSignup = isVerifyingNewSignup || 
+                                       activeTab === "signup" || 
+                                       sessionStorage.getItem("shopiversity_in_signup") === "true";
+
+              if (isInActiveSignup) {
                 setAuthLoading(false);
-              });
+                return;
+              }
+
+              // This account was deleted from Firebase or has no profile document!
+              // Sign out immediately so deleted users cannot persist or auto-resurrect on the website
+              console.log(`[AUTH SYNC] Account ${user.uid} does not exist in Firebase Firestore (deleted). Terminating session.`);
+              setCurrentUser(null);
+              setAuthLoading(false);
+              signOut(auth).catch(() => {});
             } else {
               setCurrentUser(null);
               setAuthLoading(false);
@@ -946,6 +932,7 @@ export default function App() {
         const d = { id: doc.id, ...doc.data() } as Product;
         return [d.id, d];
       })).values())
+        .filter(p => !p.isDeleted)
         .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()); 
       setProducts(productsData);
       setLoading(false);
@@ -963,9 +950,32 @@ export default function App() {
         u.state !== "Logistics Partner"
       );
       setSellers(sellersList);
+
+      // Instantly remove products from website state if their seller account was deleted from Firebase
+      setProducts(prev => prev.filter(p => !p.sellerId || uIds.has(p.sellerId)));
     }, (error) => {
       console.error("Error subscribing to users for storefront search:", error);
     });
+
+    const handleAccountDeleted = (e: any) => {
+      const deletedUid = e.detail?.uid;
+      if (!deletedUid) return;
+      console.log(`[ACCOUNT DELETED] Purging all website state for user: ${deletedUid}`);
+      setProducts(prev => prev.filter(p => p.sellerId !== deletedUid));
+      setSellers(prev => prev.filter(s => s.uid !== deletedUid));
+      setExistingUserIds(prev => {
+        const next = new Set(prev);
+        next.delete(deletedUid);
+        return next;
+      });
+      if (currentUser?.uid === deletedUid) {
+        setCurrentUser(null);
+        setActiveRole("buyer");
+        setActiveTab("market");
+        signOut(auth).catch(() => {});
+      }
+    };
+    window.addEventListener('account-deleted', handleAccountDeleted);
 
     return () => {
       window.removeEventListener('view-product-market', handleViewProduct);
@@ -977,6 +987,7 @@ export default function App() {
       window.removeEventListener('switch-active-role', handleSwitchRole);
       window.removeEventListener('edit-seller-product', handleEditSellerProduct);
       window.removeEventListener('switch-tab', handleSwitchTabEvent);
+      window.removeEventListener('account-deleted', handleAccountDeleted);
       unsubscribeAuth();
       if (unsubscribeProfile) unsubscribeProfile();
       if (unsubscribeNotifs) unsubscribeNotifs();
@@ -1656,10 +1667,16 @@ export default function App() {
                   onVerificationScreenChange={(isVerifying) => {
                     setIsVerifyingNewSignup(isVerifying);
                   }}
-                  onGoToMarket={() => {
+                  onGoToMarket={(preferredRole?: "buyer" | "seller") => {
                     setIsVerifyingNewSignup(false);
-                    setActiveRole("buyer");
-                    setActiveTab("market");
+                    const targetRole = preferredRole || (currentUser?.role === "seller" ? "seller" : "buyer");
+                    if (targetRole === "seller") {
+                      setActiveRole("seller");
+                      setActiveTab("dashboard");
+                    } else {
+                      setActiveRole("buyer");
+                      setActiveTab("market");
+                    }
                     setViewingProduct(null);
                     setViewingSellerId(null);
                     setFilterCategory("All");
