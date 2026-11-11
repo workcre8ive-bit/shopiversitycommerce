@@ -7,13 +7,10 @@ import AuthErrorModal from "./AuthErrorModal";
 import { 
   createUserWithEmailAndPassword, 
   signInWithEmailAndPassword, 
-  sendPasswordResetEmail,
-  sendEmailVerification,
   signOut,
   signInWithPopup,
   signInWithRedirect,
-  getRedirectResult,
-  browserPopupRedirectResolver
+  getRedirectResult
 } from "firebase/auth";
 import { 
   doc, 
@@ -176,12 +173,22 @@ export default function LogisticsHub({
     setResetLoading(true);
     setResetError("");
     try {
-      const actionCodeSettings = {
-        url: window.location.origin,
-        handleCodeInApp: false
-      };
-      await sendPasswordResetEmail(auth, resetEmail.trim(), actionCodeSettings);
-      setResetEmailSent(true);
+      const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+      const res = await fetch("/api/send-password-reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: resetEmail.trim(),
+          code: resetCode,
+          resetLink: `${window.location.origin}/?tab=logistics`
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success !== false) {
+        setResetEmailSent(true);
+      } else {
+        setResetError(data.error || "Failed to send reset email via Brevo. Please check your Brevo configuration.");
+      }
     } catch (err: any) {
       console.error("Password reset error:", err);
       if (err.code === "auth/user-not-found") {
@@ -763,23 +770,25 @@ export default function LogisticsHub({
   }, [deliveryHistory, historyStatusFilter, historySearchQuery, historySortBy]);
 
   const processLogisticsGoogleUser = async (user: any) => {
-    const cleanGoogleEmail = (user.email || "").toLowerCase();
+    const cleanGoogleEmail = (user.email || "").toLowerCase().trim();
     
     // 1. Check if logistics company profile already exists
     const companyDoc = await getDoc(doc(db, "logistics_companies", user.uid));
     
     if (companyDoc.exists()) {
       const profile = companyDoc.data() as LogisticsCompany;
-      await setDoc(doc(db, "users", user.uid), {
-        role: "logistics",
-        state: "Logistics Partner",
-        displayName: profile.companyName,
-        businessName: profile.companyName,
-        isVerified: true
-      }, { merge: true }).catch(() => {});
-      setCompanyProfile(profile);
-      setView("dashboard");
-      return;
+      if (profile.isVerified) {
+        await setDoc(doc(db, "users", user.uid), {
+          role: "logistics",
+          state: "Logistics Partner",
+          displayName: profile.companyName,
+          businessName: profile.companyName,
+          isVerified: true
+        }, { merge: true }).catch(() => {});
+        setCompanyProfile(profile);
+        setView("dashboard");
+        return;
+      }
     }
 
     // 2. Check if this email is actively registered to an existing company by email query
@@ -789,16 +798,18 @@ export default function LogisticsHub({
         const snapComp = await getDocs(qComp);
         if (!snapComp.empty) {
           const profile = snapComp.docs[0].data() as LogisticsCompany;
-          await setDoc(doc(db, "users", user.uid), {
-            role: "logistics",
-            state: "Logistics Partner",
-            displayName: profile.companyName,
-            businessName: profile.companyName,
-            isVerified: true
-          }, { merge: true }).catch(() => {});
-          setCompanyProfile(profile);
-          setView("dashboard");
-          return;
+          if (profile.isVerified) {
+            await setDoc(doc(db, "users", user.uid), {
+              role: "logistics",
+              state: "Logistics Partner",
+              displayName: profile.companyName,
+              businessName: profile.companyName,
+              isVerified: true
+            }, { merge: true }).catch(() => {});
+            setCompanyProfile(profile);
+            setView("dashboard");
+            return;
+          }
         }
       } catch (e) {
         console.warn("Logistics Google email check notice:", e);
@@ -816,7 +827,7 @@ export default function LogisticsHub({
       vehicleTypes: selectedVehicles.length > 0 ? selectedVehicles : ["Bike / Motorcycle"],
       coveredCampuses: selectedCampuses.length > 0 ? selectedCampuses : ["University Main Campus"],
       baseDeliveryPrice: Number(basePrice) > 0 ? Number(basePrice) : 500,
-      isVerified: true,
+      isVerified: false, // 6-digit email OTP verification required
       isActive: true,
       createdAt: new Date().toISOString()
     };
@@ -825,7 +836,7 @@ export default function LogisticsHub({
     const referredBy = referralCodeInput.trim() || localStorage.getItem('referredBy');
 
     await Promise.all([
-      setDoc(doc(db, "logistics_companies", user.uid), profile),
+      setDoc(doc(db, "logistics_companies", user.uid), profile, { merge: true }),
       setDoc(doc(db, "users", user.uid), {
         uid: user.uid,
         displayName: profile.companyName,
@@ -837,7 +848,7 @@ export default function LogisticsHub({
         referredBy: referredBy || "",
         referralEarnings: 0,
         referralCount: 0,
-        isVerified: true,
+        isVerified: false,
         isSuspended: false,
         reportCount: 0,
         createdAt: new Date().toISOString(),
@@ -866,8 +877,33 @@ export default function LogisticsHub({
     localStorage.removeItem('referredBy');
 
     setCompanyProfile(profile);
-    setSuccessMsg("Google account successfully linked to Logistics Hub! Welcome.");
-    setView("dashboard");
+
+    // Generate random 6-digit OTP and send via Brevo
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    setGeneratedOtp(otp);
+    setVerificationCode("");
+    setEmail(cleanGoogleEmail || user.email || "");
+    setCompanyName(profile.companyName);
+    setResendCooldown(30);
+
+    try {
+      await fetch("/api/send-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: cleanGoogleEmail,
+          code: otp,
+          userName: profile.companyName,
+          role: "logistics"
+        })
+      });
+      console.log(`[LOGISTICS BREVO] Dispatched verification code to ${cleanGoogleEmail}`);
+    } catch (vErr) {
+      console.warn("Brevo email dispatch notice for logistics:", vErr);
+    }
+
+    setSuccessMsg(`A 6-digit verification code has been dispatched to ${cleanGoogleEmail} via Brevo. Enter it below to activate your Logistics account.`);
+    setView("verify");
   };
 
   // Handle Google Auth (Login or Signup)
@@ -877,26 +913,45 @@ export default function LogisticsHub({
     try {
       let user = null;
       try {
-        const result = await signInWithPopup(auth, googleProvider, browserPopupRedirectResolver);
+        const result = await signInWithPopup(auth, googleProvider);
         user = result.user;
       } catch (popupErr: any) {
+        const code = popupErr?.code || "";
         console.warn("Logistics Google popup notice:", popupErr);
-        if (popupErr.code === "auth/popup-blocked") {
-          setError("Google sign-in popup was blocked by your browser. Please allow popups for this site or use email & password.");
+        if (code === "auth/popup-closed-by-user" || code === "auth/cancelled-popup-request") {
           setLoading(false);
           return;
         }
-        await signInWithRedirect(auth, googleProvider);
-        return;
+        if (code === "auth/unauthorized-domain") {
+          const host = window.location.hostname;
+          setError(`Google Sign-In: The domain "${host}" is not authorized in Firebase. In Firebase Console, go to Authentication -> Settings -> Authorized domains and add "${host}".`);
+          setLoading(false);
+          return;
+        }
+        if (code === "auth/popup-blocked") {
+          const inIframe = typeof window !== "undefined" && window.self !== window.top;
+          if (!inIframe) {
+            await signInWithRedirect(auth, googleProvider);
+            return;
+          } else {
+            setError("Google sign-in popup was blocked by your browser. Please allow popups for this site or use email & password.");
+            setLoading(false);
+            return;
+          }
+        }
+        throw popupErr;
       }
 
       if (user) {
         await processLogisticsGoogleUser(user);
       }
     } catch (err: any) {
-      const errorCode = err.code || "";
+      const errorCode = err?.code || "";
       if (errorCode === "auth/popup-closed-by-user" || errorCode === "auth/cancelled-popup-request") {
-        setError("Sign-in cancelled.");
+        setError("");
+      } else if (errorCode === "auth/unauthorized-domain") {
+        const host = window.location.hostname;
+        setError(`Google Sign-In: The domain "${host}" is not authorized in Firebase. Please add "${host}" to Firebase Console > Authentication > Settings > Authorized Domains.`);
       } else {
         console.error("Google Auth error in LogisticsHub:", err);
         setError(getFirestoreErrorMessage(err) || "Failed to sign in with Google.");
@@ -1144,19 +1199,28 @@ export default function LogisticsHub({
     const cleanEmail = email.trim().toLowerCase();
     setLoading(true);
     try {
-      // Create user in standard firebase auth
-      const userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
-      const user = userCredential.user;
+      // Create user in standard firebase auth if not already signed in with Google
+      let user = auth.currentUser;
+      if (!user) {
+        const userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+        user = userCredential.user;
+      }
 
       try {
-        const actionCodeSettings = {
-          url: window.location.origin,
-          handleCodeInApp: false
-        };
-        await sendEmailVerification(user, actionCodeSettings);
-        console.log(`[FIREBASE AUTH] Logistics signup verification email sent to ${cleanEmail}`);
+        const verifyCode = Math.floor(100000 + Math.random() * 900000).toString();
+        await fetch("/api/send-verification", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: cleanEmail,
+            userName: companyName.trim(),
+            code: verifyCode,
+            role: "logistics"
+          })
+        });
+        console.log(`[BREVO AUTH] Logistics signup verification email dispatched to ${cleanEmail}`);
       } catch (evErr) {
-        console.warn("Logistics sendEmailVerification notice:", evErr);
+        console.warn("Logistics Brevo send-verification notice:", evErr);
       }
 
       const profile: LogisticsCompany = {
@@ -1238,6 +1302,48 @@ export default function LogisticsHub({
     } catch (err: any) {
       console.error("Verification and creation error:", err);
       if (err.code === "auth/email-already-in-use" || err.message?.includes("email-already-in-use")) {
+        try {
+          const [compSnap, userSnap] = await Promise.all([
+            getDocs(query(collection(db, "logistics_companies"), where("email", "==", cleanEmail))).catch(() => ({ empty: true })),
+            getDocs(query(collection(db, "users"), where("email", "==", cleanEmail))).catch(() => ({ empty: true }))
+          ]);
+
+          if (compSnap.empty && userSnap.empty) {
+            const purgeRes = await fetch("/api/account/purge-orphaned-auth", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ email: cleanEmail })
+            });
+            const purgeData = await purgeRes.json();
+            if (purgeData.purged) {
+              const retryCred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+              if (retryCred.user) {
+                const profile: LogisticsCompany = {
+                  id: retryCred.user.uid,
+                  companyName: companyName.trim(),
+                  rcNumber: rcNumber.trim(),
+                  email: cleanEmail,
+                  phoneNumber: phoneNumber.trim(),
+                  officeAddress: officeAddress.trim(),
+                  vehicleTypes: selectedVehicles.length > 0 ? selectedVehicles : ["Bike / Motorcycle"],
+                  coveredCampuses: selectedCampuses.length > 0 ? selectedCampuses : ["University Main Campus"],
+                  baseDeliveryPrice: Number(basePrice) > 0 ? Number(basePrice) : 500,
+                  isVerified: true,
+                  isActive: true,
+                  createdAt: new Date().toISOString()
+                };
+                await setDoc(doc(db, "logistics_companies", retryCred.user.uid), profile);
+                setCompanyProfile(profile);
+                setView("dashboard");
+                setActiveTab("overview");
+                return;
+              }
+            }
+          }
+        } catch (reErr) {
+          console.warn("Logistics re-register notice:", reErr);
+        }
+
         setErrorPopup({
           isOpen: true,
           type: "email_in_use",

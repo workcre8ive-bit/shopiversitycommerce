@@ -1,6 +1,6 @@
 import React from "react";
 import { auth, db } from "./firebase";
-import { onAuthStateChanged, signOut, sendEmailVerification } from "firebase/auth";
+import { onAuthStateChanged, signOut } from "firebase/auth";
 import { 
   collection, 
   query, 
@@ -43,6 +43,7 @@ import RefundPolicy from "./components/RefundPolicy";
 import CookieConsentBanner from "./components/CookieConsentBanner";
 import ReturnPolicyModal from "./components/ReturnPolicyModal";
 import Carousel from "./components/HeroCarousel";
+import { generateSmartUsername } from "./utils/accountCleanup";
 import Logo from "./components/Logo";
 import StickmanLoader from "./components/StickmanLoader";
 import ShopiversityLoader from "./components/ShopiversityLoader";
@@ -328,29 +329,22 @@ export default function App() {
     setIsResendingFirebaseEmail(true);
     setVerificationBannerNotice(null);
     try {
-      const actionCodeSettings = {
-        url: window.location.origin,
-        handleCodeInApp: false
-      };
-      await sendEmailVerification(auth.currentUser, actionCodeSettings);
-      
-      // Also dispatch via Brevo verification API
-      try {
-        const vCode = Math.floor(100000 + Math.random() * 900000).toString();
-        await fetch("/api/send-verification", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            email: auth.currentUser.email,
-            code: vCode,
-            userName: auth.currentUser.displayName || currentUser?.displayName || "Student"
-          })
-        });
-      } catch (bErr) {
-        console.warn("Brevo banner verification resend notice:", bErr);
+      const vCode = Math.floor(100000 + Math.random() * 900000).toString();
+      const res = await fetch("/api/send-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: auth.currentUser.email,
+          code: vCode,
+          userName: auth.currentUser.displayName || currentUser?.displayName || "Student"
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        setVerificationBannerNotice(`Verification email sent to ${auth.currentUser.email} via Brevo! Check your inbox.`);
+      } else {
+        setVerificationBannerNotice(data.error || "Failed to dispatch email via Brevo. Please check your Brevo settings.");
       }
-
-      setVerificationBannerNotice(`Verification email dispatched to ${auth.currentUser.email} via Brevo & Firebase. Check your inbox!`);
       triggerDynamicIsland("Verification email sent! ✉️");
     } catch (err: any) {
       console.error("Error resending verification email:", err);
@@ -800,7 +794,7 @@ export default function App() {
               }
             } else {
               setActiveRole("buyer");
-              if (!initialTabSet.current) {
+              if (!initialTabSet.current || activeTab === "auth" || activeTab === "signup") {
                 setActiveTab("market");
                 initialTabSet.current = true;
               }
@@ -870,18 +864,59 @@ export default function App() {
                 return;
               }
 
-              // Check if user is actively in the signup or verification flow
+              // Check if user is actively in the signup or verification flow or on the auth tab
+              const isRecentAuth = Boolean(
+                user.metadata.creationTime && 
+                (Date.now() - new Date(user.metadata.creationTime).getTime() < 300000)
+              );
               const isInActiveSignup = isVerifyingNewSignup || 
                                        activeTab === "signup" || 
-                                       sessionStorage.getItem("shopiversity_in_signup") === "true";
+                                       activeTab === "auth" ||
+                                       isRecentAuth ||
+                                       sessionStorage.getItem("shopiversity_in_signup") === "true" ||
+                                       sessionStorage.getItem("shopiversity_google_pending") === "true";
 
               if (isInActiveSignup) {
+                // If user authenticated via Google and profile is pending, auto-provision fallback profile
+                if (activeTab === "auth" || activeTab === "signup" || sessionStorage.getItem("shopiversity_google_pending") === "true") {
+                  try {
+                    const googleName = user.displayName || "Shopiversity Member";
+                    const fallbackRole = (sessionStorage.getItem("shopiversity_chosen_role") as any) || "buyer";
+                    const fallbackProfile: UserProfile = {
+                      uid: user.uid,
+                      displayName: googleName,
+                      username: generateSmartUsername(googleName),
+                      email: user.email || "",
+                      phoneNumber: user.phoneNumber || "",
+                      role: fallbackRole,
+                      activeRole: fallbackRole,
+                      referralCode: "U" + Math.random().toString(36).substring(2, 7).toUpperCase(),
+                      referredBy: localStorage.getItem("referredBy") || "",
+                      referralEarnings: 0,
+                      referralCount: 0,
+                      strikeCount: 0,
+                      isVerified: false,
+                      isSuspended: false,
+                      reportCount: 0,
+                      createdAt: new Date().toISOString(),
+                      verificationIdUrl: "",
+                      profileCompleted: false
+                    };
+                    await setDoc(doc(db, "users", user.uid), fallbackProfile, { merge: true });
+                    setCurrentUser(fallbackProfile);
+                    setActiveTab(fallbackRole === "seller" ? "dashboard" : "market");
+                    sessionStorage.removeItem("shopiversity_in_signup");
+                    sessionStorage.removeItem("shopiversity_google_pending");
+                  } catch (autoErr) {
+                    console.warn("Auto-provision profile notice:", autoErr);
+                  }
+                }
                 setAuthLoading(false);
                 return;
               }
 
-              // This account was deleted from Firebase or has no profile document!
-              // Sign out immediately so deleted users cannot persist or auto-resurrect on the website
+              // This account was deleted from Firebase while actively browsing!
+              // Sign out immediately so deleted users cannot persist on the website
               console.log(`[AUTH SYNC] Account ${user.uid} does not exist in Firebase Firestore (deleted). Terminating session.`);
               setCurrentUser(null);
               setAuthLoading(false);
@@ -1646,7 +1681,7 @@ export default function App() {
           )}
 
           <AnimatePresence mode="wait">
-            {(((!currentUser || !auth.currentUser) && isTabRestricted) || isVerifyingNewSignup || (currentUser && !currentUser.isVerified && !auth.currentUser?.emailVerified && currentUser.role !== "admin")) ? (
+            {(((!currentUser || !auth.currentUser) && isTabRestricted) || isVerifyingNewSignup || (currentUser && !currentUser.isVerified && currentUser.role !== "admin")) ? (
               <motion.div
                 key="auth"
                 initial={{ opacity: 0, y: 10 }}

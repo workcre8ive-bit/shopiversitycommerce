@@ -3,8 +3,6 @@ import { auth, db, googleProvider } from "../firebase";
 import { 
   createUserWithEmailAndPassword, 
   signInWithEmailAndPassword,
-  sendPasswordResetEmail,
-  sendEmailVerification,
   updateProfile,
   updateEmail,
   onAuthStateChanged,
@@ -14,7 +12,6 @@ import {
   getRedirectResult,
   signOut,
   deleteUser,
-  browserPopupRedirectResolver,
   RecaptchaVerifier,
   signInWithPhoneNumber,
   type ConfirmationResult
@@ -125,6 +122,9 @@ export default function AuthPage({
     setStep(1);
     setError("");
     setFieldErrors({});
+    if (!loginMode) {
+      setAgreedToTerms(true);
+    }
     if (onModeChange) {
       onModeChange(loginMode ? "login" : "signup");
     }
@@ -208,7 +208,7 @@ export default function AuthPage({
   const [showTerms, setShowTerms] = React.useState(false);
   const [showTermsPage, setShowTermsPage] = React.useState(false);
   const [showPrivacyPage, setShowPrivacyPage] = React.useState(false);
-  const [agreedToTerms, setAgreedToTerms] = React.useState(false);
+  const [agreedToTerms, setAgreedToTerms] = React.useState(true);
   const [isVerifyingId, setIsVerifyingId] = React.useState(false);
   const [idVerificationError, setIdVerificationError] = React.useState("");
 
@@ -248,13 +248,6 @@ export default function AuthPage({
         console.log(`[BREVO RESET] Password reset code dispatched via Brevo to ${resetEmail.trim()}`);
       } catch (brevoErr) {
         console.warn("Brevo password reset dispatch notice:", brevoErr);
-      }
-
-      // 2. Also send standard Firebase password reset link
-      try {
-        await sendPasswordResetEmail(auth, resetEmail.trim(), actionCodeSettings);
-      } catch (fbErr: any) {
-        console.warn("Firebase password reset notice:", fbErr);
       }
 
       setResetEmailSent(true);
@@ -641,16 +634,6 @@ export default function AuthPage({
             const initialDisplayName = role === "seller" ? businessName.trim() : email.trim().split("@")[0];
             await updateProfile(firebaseUser, { displayName: initialDisplayName });
 
-            try {
-              const actionCodeSettings = {
-                url: window.location.origin,
-                handleCodeInApp: false
-              };
-              await sendEmailVerification(firebaseUser, actionCodeSettings);
-              console.log(`[FIREBASE AUTH] Verification email dispatched directly to ${email}`);
-            } catch (evErr) {
-              console.warn("sendEmailVerification notice:", evErr);
-            }
           } catch (createErr: any) {
             if (createErr.code === "auth/email-already-in-use" || createErr.message?.includes("email-already-in-use")) {
               // Check if account was deleted from Firebase Firestore and lingering in Auth
@@ -658,34 +641,63 @@ export default function AuthPage({
               const existingUserSnap = await getDocs(existingUserQ);
 
               if (existingUserSnap.empty) {
-                // The profile document is MISSING in Firestore, but account exists in Firebase Auth!
-                // Try to authenticate with the password the user just entered to restore their profile
+                // The profile document is MISSING in Firestore, meaning this account was deleted from Firebase or website!
+                // The email can now be registered again for ANY role chosen for signup (buyer or seller)!
+                let authenticatedUser: any = null;
                 try {
                   const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
-                  firebaseUser = cred.user;
-                  if (fullName) {
-                    await updateProfile(firebaseUser, { displayName: fullName });
-                  }
-                  console.log(`[AUTH RECOVERY] Authenticated orphaned user ${firebaseUser.uid}. Recreating Firestore profile...`);
+                  authenticatedUser = cred.user;
                 } catch (pwErr) {
-                  // Password didn't match the existing auth account. Offer sign in or password reset via Firebase.
+                  // Password didn't match the old auth record, attempt to purge lingering auth record via server
+                  try {
+                    const purgeRes = await fetch("/api/account/purge-orphaned-auth", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ email: cleanEmail })
+                    });
+                    const purgeData = await purgeRes.json();
+                    if (purgeData.purged) {
+                      const newCred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+                      authenticatedUser = newCred.user;
+                    }
+                  } catch (pErr) {
+                    console.warn("Purge orphaned auth notice:", pErr);
+                  }
+                }
+
+                if (authenticatedUser) {
+                  firebaseUser = authenticatedUser;
+                  const initialDisplayName = role === "seller" ? businessName.trim() : (fullName.trim() || email.trim().split("@")[0]);
+                  await updateProfile(firebaseUser, { displayName: initialDisplayName });
+                  console.log(`[AUTH RE-REGISTRATION] Successfully re-registered deleted account ${cleanEmail} for role: ${role}`);
+                } else {
+                  // If password didn't match and server-side delete didn't run, prompt user to enter their account password to complete registration with their new role, or send a reset code via Brevo
                   setErrorPopup({
                     isOpen: true,
                     type: "profile_missing",
-                    title: "Account Exists but Profile Missing",
-                    message: `An account with "${cleanEmail}" exists in Firebase Authentication, but its database profile was deleted. Please sign in with your password to restore your profile, or send a password reset link to ${cleanEmail}.`,
+                    title: "Re-registering Account",
+                    message: `An authentication login exists for "${cleanEmail}", but its profile was deleted. Please enter your account password to register with your new role (${role === "seller" ? "Seller" : "Buyer"}), or send a password reset code via Brevo.`,
                     email: cleanEmail,
-                    primaryActionLabel: "Sign In to Restore Profile",
+                    primaryActionLabel: "Sign In to Complete Registration",
                     onPrimaryAction: () => {
                       switchAuthMode(true);
                     },
-                    secondaryActionLabel: "Send Reset Link via Firebase",
+                    secondaryActionLabel: "Send Reset Code via Brevo",
                     onSecondaryAction: async () => {
                       try {
-                        await sendPasswordResetEmail(auth, cleanEmail, { url: window.location.origin, handleCodeInApp: false });
-                        setError(`Password reset link sent to ${cleanEmail} via Firebase! Please check your email.`);
+                        const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+                        await fetch("/api/send-password-reset", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            email: cleanEmail,
+                            code: resetCode,
+                            resetLink: `${window.location.origin}/?tab=auth&mode=login`
+                          })
+                        });
+                        setError(`Password reset instructions sent to ${cleanEmail} via Brevo! Please check your email.`);
                       } catch (e: any) {
-                        setError(e.message || "Failed to send reset link via Firebase.");
+                        setError("Failed to send reset code via Brevo.");
                       }
                       setErrorPopup(prev => ({ ...prev, isOpen: false }));
                     }
@@ -707,13 +719,22 @@ export default function AuthPage({
                   onPrimaryAction: () => {
                     switchAuthMode(true);
                   },
-                  secondaryActionLabel: "Reset Password via Firebase",
+                  secondaryActionLabel: "Reset Password via Brevo",
                   onSecondaryAction: async () => {
                     try {
-                      await sendPasswordResetEmail(auth, cleanEmail, { url: window.location.origin, handleCodeInApp: false });
-                      setError(`Password reset link sent to ${cleanEmail} via Firebase! Please check your email.`);
+                      const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+                      await fetch("/api/send-password-reset", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          email: cleanEmail,
+                          code: resetCode,
+                          resetLink: `${window.location.origin}/?tab=auth&mode=login`
+                        })
+                      });
+                      setError(`Password reset instructions sent to ${cleanEmail} via Brevo! Please check your email.`);
                     } catch (e: any) {
-                      setError(e.message || "Failed to send reset link via Firebase.");
+                      setError("Failed to send reset code via Brevo.");
                     }
                     setErrorPopup(prev => ({ ...prev, isOpen: false }));
                   }
@@ -918,13 +939,6 @@ export default function AuthPage({
         setError(`New verification code: ${vData.code || newCode} (Brevo setup mode)`);
       }
       setResendCooldown(30);
-
-      // Also trigger Firebase link in parallel
-      if (currentAuthUser) {
-        try {
-          await sendEmailVerification(currentAuthUser, { url: window.location.origin, handleCodeInApp: false });
-        } catch (e) {}
-      }
     } catch (err: any) {
       console.error("Resend Brevo verification error:", err);
       setError("Failed to resend verification email. Please try again in a moment.");
@@ -1223,12 +1237,23 @@ export default function AuthPage({
   const processGoogleUser = async (user: any) => {
     // Check if user is registered as a Logistics partner
     const cleanGoogleEmail = (user.email || "").toLowerCase();
-    const logisticsCompanyDoc = await getDoc(doc(db, "logistics_companies", user.uid));
-    const userDoc = await getDoc(doc(db, "users", user.uid));
     let isLogisticsEmail = false;
 
-    if (!logisticsCompanyDoc.exists() && cleanGoogleEmail) {
-      try {
+    let userDocExists = false;
+    let userDocData: any = null;
+    try {
+      const userDoc = await getDoc(doc(db, "users", user.uid));
+      if (userDoc.exists()) {
+        userDocExists = true;
+        userDocData = userDoc.data();
+      }
+    } catch (e) {
+      console.warn("User doc lookup notice:", e);
+    }
+
+    try {
+      const logisticsCompanyDoc = await getDoc(doc(db, "logistics_companies", user.uid));
+      if (!logisticsCompanyDoc.exists() && cleanGoogleEmail) {
         const logCompanyQ = query(collection(db, "logistics_companies"), where("email", "==", cleanGoogleEmail));
         const logCompanySnap = await getDocs(logCompanyQ);
         const logUserQ = query(collection(db, "users"), where("email", "==", cleanGoogleEmail), where("role", "==", "logistics"));
@@ -1236,12 +1261,12 @@ export default function AuthPage({
         if (!logCompanySnap.empty || !logUserSnap.empty) {
           isLogisticsEmail = true;
         }
-      } catch (e) {
-        console.warn("Google logistics check notice:", e);
       }
+    } catch (e) {
+      console.warn("Google logistics check notice:", e);
     }
 
-    const isDedicatedLogisticsUser = userDoc.exists() && (userDoc.data()?.role === "logistics" || userDoc.data()?.state === "Logistics Partner") && userDoc.data()?.role !== "buyer" && userDoc.data()?.role !== "seller" && userDoc.data()?.role !== "both";
+    const isDedicatedLogisticsUser = userDocExists && (userDocData?.role === "logistics" || userDocData?.state === "Logistics Partner") && userDocData?.role !== "buyer" && userDocData?.role !== "seller" && userDocData?.role !== "both";
 
     if (isDedicatedLogisticsUser) {
       setErrorPopup({
@@ -1269,13 +1294,14 @@ export default function AuthPage({
       return;
     }
 
-    if (!userDoc.exists()) {
+    if (!userDocExists) {
       const referralCode = generateReferralCode(user.displayName || "USER");
       const referredBy = referralCodeInput || localStorage.getItem('referredBy');
+      const isBuyer = role === "buyer";
       
       const userProfile: UserProfile = {
         uid: user.uid,
-        displayName: user.displayName || "Anonymous",
+        displayName: user.displayName || "Shopiversity Member",
         username: generateSmartUsername(user.displayName || "User"),
         email: user.email || "",
         phoneNumber: user.phoneNumber || "",
@@ -1285,7 +1311,8 @@ export default function AuthPage({
         referredBy: referredBy || "",
         referralEarnings: 0,
         referralCount: 0,
-        isVerified: false, // All users start unverified now
+        strikeCount: 0,
+        isVerified: false, // 6-digit email verification is mandatory
         isSuspended: false,
         reportCount: 0,
         createdAt: new Date().toISOString(),
@@ -1299,41 +1326,75 @@ export default function AuthPage({
         deliveryLocations: "",
         gender: "other"
       };
-      await setDoc(doc(db, "users", user.uid), userProfile);
+      await setDoc(doc(db, "users", user.uid), userProfile, { merge: true });
       
-      // If referred by someone, increment their referral count
+      // If referred by someone, increment their referral count safely
       if (referredBy) {
-        const referrersQ = query(collection(db, "users"), where("referralCode", "==", referredBy));
-        const referrersSnap = await getDocs(referrersQ);
-        if (!referrersSnap.empty) {
-          const referrerDoc = referrersSnap.docs[0];
-          const currentCount = referrerDoc.data().referralCount || 0;
-          await updateDoc(referrerDoc.ref, { referralCount: currentCount + 1 });
+        try {
+          const referrersQ = query(collection(db, "users"), where("referralCode", "==", referredBy));
+          const referrersSnap = await getDocs(referrersQ);
+          if (!referrersSnap.empty) {
+            const referrerDoc = referrersSnap.docs[0];
+            const currentCount = referrerDoc.data().referralCount || 0;
+            await updateDoc(referrerDoc.ref, { referralCount: currentCount + 1 });
+          }
+        } catch (refErr) {
+          console.warn("Referral count notice:", refErr);
         }
       }
       
       localStorage.removeItem('referredBy');
-      
-      // If buyer, skip ID verification and set as verified
-      if (role === "buyer") {
-        await updateDoc(doc(db, "users", user.uid), {
-          isVerified: true
+
+      // Generate 6-digit verification OTP code and dispatch via Brevo
+      const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+      let fallbackCode = "";
+      let isLive = false;
+      let noticeMessage = "";
+      const cleanUserEmail = (user.email || "").trim().toLowerCase();
+
+      try {
+        console.log(`[GOOGLE SIGNUP] Dispatching 6-digit email verification to ${cleanUserEmail}`);
+        const vRes = await fetch("/api/send-verification", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: cleanUserEmail,
+            code: verificationCode,
+            userName: user.displayName || "Shopiversity Member",
+            role: role === "seller" ? "seller" : "buyer"
+          })
         });
-        setIsVerificationChoice(false);
-        setIsVerifyingEmail(false);
-        setIsVerifyingPhone(false);
-        handleGoToMarket();
-        return;
-      } else {
-        // Sellers need verification
-        setIsVerificationChoice(false);
-        setIsVerifyingEmail(false);
-        setIsVerifyingPhone(false);
-        setFullName(user.displayName || ""); // Pre-fill name from Google
-        setIsGoogleSellerVerifying(true);
+        const vData = await vRes.json();
+        if (vData.sent) {
+          isLive = true;
+          noticeMessage = `6-digit verification code dispatched to ${cleanUserEmail}!`;
+        } else {
+          fallbackCode = vData.code || verificationCode;
+          noticeMessage = vData.notice || "Verification code generated.";
+        }
+      } catch (vErr) {
+        console.warn("Google email verification API dispatch notice:", vErr);
+        fallbackCode = verificationCode;
       }
+
+      setEmail(cleanUserEmail);
+      setSentOtpCode(verificationCode);
+      setEnteredOtpCode(fallbackCode || "");
+      setOtpSentVia(isLive ? "brevo" : "fallback");
+      setBrevoNotice(noticeMessage);
+      setVerificationMethod("email");
+      setIsVerifyingEmail(true);
+      setIsVerifyingPhone(false);
+      setIsVerificationChoice(false);
+      setResendCooldown(30);
+      setError("");
+      if (onVerificationScreenChange) {
+        onVerificationScreenChange(true);
+      }
+      setLoading(false);
+      return;
     } else {
-      const profile = userDoc.data() as UserProfile;
+      const profile = userDocData as UserProfile;
       if (profile.isSuspended) {
         await signOut(auth);
         setError("Your account has been suspended for violating SHOPIVERSITY terms.");
@@ -1346,16 +1407,66 @@ export default function AuthPage({
         setLoading(false);
         return;
       }
-      // Only force ID verification on sign-in for Sellers who aren't verified
-      if (!profile.isVerified && profile.role === "seller") {
-        setFullName(profile.displayName);
-        setIsGoogleSellerVerifying(true);
+
+      // If user profile is not yet verified, require 6-digit OTP verification
+      if (!profile.isVerified && profile.role !== "admin") {
+        const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+        let fallbackCode = "";
+        let isLive = false;
+        let noticeMessage = "";
+        const cleanUserEmail = (user.email || profile.email || "").trim().toLowerCase();
+
+        try {
+          console.log(`[EXISTING GOOGLE LOGIN] Dispatching verification code to ${cleanUserEmail}`);
+          const vRes = await fetch("/api/send-verification", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              email: cleanUserEmail,
+              code: verificationCode,
+              userName: profile.displayName || user.displayName || "Shopiversity Member",
+              role: profile.role || role
+            })
+          });
+          const vData = await vRes.json();
+          if (vData.sent) {
+            isLive = true;
+            noticeMessage = `6-digit verification code sent to ${cleanUserEmail}!`;
+          } else {
+            fallbackCode = vData.code || verificationCode;
+            noticeMessage = vData.notice || "Verification code generated.";
+          }
+        } catch (vErr) {
+          console.warn("Google verification dispatch notice:", vErr);
+          fallbackCode = verificationCode;
+        }
+
+        setEmail(cleanUserEmail);
+        setSentOtpCode(verificationCode);
+        setEnteredOtpCode(fallbackCode || "");
+        setOtpSentVia(isLive ? "brevo" : "fallback");
+        setBrevoNotice(noticeMessage);
+        setVerificationMethod("email");
+        setIsVerifyingEmail(true);
+        setIsVerifyingPhone(false);
+        setIsVerificationChoice(false);
+        setResendCooldown(30);
+        setError("");
+        if (onVerificationScreenChange) {
+          onVerificationScreenChange(true);
+        }
         setLoading(false);
         return;
       }
 
-      // Existing verified user logged in via Google: proceed directly to market
-      handleGoToMarket();
+      // Existing verified user logged in via Google: proceed directly to market or dashboard
+      sessionStorage.removeItem("shopiversity_in_signup");
+      sessionStorage.removeItem("shopiversity_google_pending");
+      const targetRole = profile.role === "seller" ? "seller" : "buyer";
+      if (setActiveTab) {
+        setActiveTab(targetRole === "seller" ? "dashboard" : "market");
+      }
+      handleGoToMarket(targetRole);
       return;
     }
   };
@@ -1363,35 +1474,62 @@ export default function AuthPage({
   const handleGoogleSignIn = async () => {
     setError("");
     setLoading(true);
+    sessionStorage.setItem("shopiversity_in_signup", "true");
+    sessionStorage.setItem("shopiversity_google_pending", "true");
+    sessionStorage.setItem("shopiversity_chosen_role", role);
     try {
       let user = null;
       try {
-        const result = await signInWithPopup(auth, googleProvider, browserPopupRedirectResolver);
+        const result = await signInWithPopup(auth, googleProvider);
         user = result.user;
       } catch (popupErr: any) {
-        console.warn("Google popup failed or blocked, attempting redirect fallback:", popupErr);
-        // Fallback to signInWithRedirect for Safari, mobile browsers, or blocked popups
-        await signInWithRedirect(auth, googleProvider);
-        return;
+        const code = popupErr?.code || "";
+        console.warn("Google popup result:", popupErr);
+        if (code === "auth/popup-closed-by-user" || code === "auth/cancelled-popup-request") {
+          setLoading(false);
+          sessionStorage.removeItem("shopiversity_in_signup");
+          sessionStorage.removeItem("shopiversity_google_pending");
+          return;
+        }
+        if (code === "auth/unauthorized-domain") {
+          const host = window.location.hostname;
+          setError(`Google Sign-In: The current domain "${host}" is not listed in your Firebase Authorized Domains. In Firebase Console, go to Authentication -> Settings -> Authorized domains and add "${host}". You can also sign up using Email & Password.`);
+          setLoading(false);
+          sessionStorage.removeItem("shopiversity_in_signup");
+          sessionStorage.removeItem("shopiversity_google_pending");
+          return;
+        }
+        if (code === "auth/popup-blocked") {
+          const inIframe = typeof window !== "undefined" && window.self !== window.top;
+          if (!inIframe) {
+            await signInWithRedirect(auth, googleProvider);
+            return;
+          } else {
+            setError("Google sign-in popup was blocked by your browser. Please allow popups for this site or use Email & Password.");
+            setLoading(false);
+            sessionStorage.removeItem("shopiversity_in_signup");
+            sessionStorage.removeItem("shopiversity_google_pending");
+            return;
+          }
+        }
+        throw popupErr;
       }
 
       if (user) {
         await processGoogleUser(user);
       }
     } catch (err: any) {
-      const errorCode = err.code || "";
-      const errorMessage = err.message || "";
-      
+      sessionStorage.removeItem("shopiversity_in_signup");
+      sessionStorage.removeItem("shopiversity_google_pending");
+      const errorCode = err?.code || "";
       if (errorCode === "auth/popup-closed-by-user" || errorCode === "auth/cancelled-popup-request") {
         setError("");
+      } else if (errorCode === "auth/unauthorized-domain") {
+        const host = window.location.hostname;
+        setError(`Google Sign-In: The domain "${host}" is not authorized in Firebase. Please add "${host}" to Firebase Console > Authentication > Settings > Authorized Domains.`);
       } else {
         console.error("Google Sign-In Error:", err);
-        try {
-          // Ultimate fallback to redirect if popup fails for any other reason
-          await signInWithRedirect(auth, googleProvider);
-        } catch (redirectErr: any) {
-          setError("Google Sign-In failed. Please ensure popups/redirects are allowed or try signing in with email.");
-        }
+        setError(err.message || "Google Sign-In failed. Please try signing in with email & password.");
       }
     } finally {
       setLoading(false);
@@ -2143,7 +2281,7 @@ export default function AuthPage({
                   {isVerificationSuccess ? (
                     <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-800 text-xs font-bold flex items-center justify-center gap-2 animate-in zoom-in-95">
                       <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-                      <span>Email Verified Successfully! Entering marketplace...</span>
+                      <span>{role === "seller" ? "Email Verified Successfully! Entering Vendor Dashboard..." : "Email Verified Successfully! Entering Marketplace..."}</span>
                     </div>
                   ) : (
                     <button
