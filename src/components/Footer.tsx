@@ -6,9 +6,27 @@ interface FooterProps {
   setActiveTab: (tab: string) => void;
   activeTab: string;
   onOpenCookieSettings?: () => void;
+  onLogoClick?: () => void;
+  currentUser?: any;
+  activeRole?: string;
 }
 
-export default function Footer({ setActiveTab, activeTab, onOpenCookieSettings }: FooterProps) {
+export default function Footer({ setActiveTab, activeTab, onOpenCookieSettings, onLogoClick, currentUser, activeRole }: FooterProps) {
+  const handleLogoClick = () => {
+    if (onLogoClick) {
+      onLogoClick();
+      return;
+    }
+    if (currentUser?.state === "Logistics Partner" || currentUser?.role === "logistics") {
+      setActiveTab("logistics");
+    } else if (currentUser?.role === "seller" || activeRole === "seller") {
+      setActiveTab("dashboard");
+    } else {
+      setActiveTab("market");
+    }
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
   return (
     <footer className="bg-slate-900 text-slate-300 border-t border-slate-800 font-sans transition-colors duration-300 mt-12 w-full shrink-0">
       <div className="max-w-7xl mx-auto px-4 py-12 sm:px-6 lg:px-8 pb-16 sm:pb-12">
@@ -16,7 +34,7 @@ export default function Footer({ setActiveTab, activeTab, onOpenCookieSettings }
           {/* Column 1: Brand & Real Business Details */}
           <div className="space-y-4 col-span-1 sm:col-span-2 lg:col-span-1">
             <div className="flex items-center gap-2">
-              <Logo showText={true} />
+              <Logo showText={true} onClick={handleLogoClick} />
             </div>
             <p className="text-xs text-slate-400 leading-relaxed font-medium max-w-sm">
               Shopiversity is the trusted, verified student-to-student marketplace. We enable campus entrepreneurs to build businesses, trade safely, and settle payments through audited escrow protection.

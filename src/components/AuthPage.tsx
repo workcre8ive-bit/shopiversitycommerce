@@ -14,6 +14,8 @@ import {
   deleteUser,
   RecaptchaVerifier,
   signInWithPhoneNumber,
+  sendPasswordResetEmail,
+  fetchSignInMethodsForEmail,
   type ConfirmationResult
 } from "firebase/auth";
 import { doc, setDoc, getDoc, updateDoc, collection, addDoc, query, where, getDocs, deleteDoc } from "firebase/firestore";
@@ -98,13 +100,22 @@ export default function AuthPage({
   setActiveTab?: (tab: string) => void;
   onOpenCookieSettings?: () => void;
 }) {
+  const [role, setRole] = React.useState<"buyer" | "seller">(() => {
+    const saved = typeof window !== "undefined" ? sessionStorage.getItem("shopiversity_chosen_role") : null;
+    return saved === "seller" ? "seller" : (initialRole || "buyer");
+  });
+
   const handleGoToMarket = (targetRole?: "buyer" | "seller") => {
-    const chosenRole = targetRole || (role === "seller" ? "seller" : "buyer");
+    const savedRole = typeof window !== "undefined" ? sessionStorage.getItem("shopiversity_chosen_role") : null;
+    const chosenRole = targetRole || (savedRole === "seller" ? "seller" : (role === "seller" ? "seller" : "buyer"));
+    
     if (onVerificationScreenChange) {
       onVerificationScreenChange(false);
     }
     if (chosenRole === "seller" && setActiveTab) {
       setActiveTab("dashboard");
+    } else if (setActiveTab) {
+      setActiveTab("market");
     }
     if (onGoToMarket) {
       onGoToMarket(chosenRole);
@@ -129,11 +140,11 @@ export default function AuthPage({
       onModeChange(loginMode ? "login" : "signup");
     }
   };
-  const [role, setRole] = React.useState<"buyer" | "seller">(initialRole || "buyer");
 
   React.useEffect(() => {
     if (initialRole) {
       setRole(initialRole);
+      sessionStorage.setItem("shopiversity_chosen_role", initialRole);
     }
   }, [initialRole]);
   const [step, setStep] = React.useState(1);
@@ -225,27 +236,92 @@ export default function AuthPage({
       setResetError("Please enter your account email address.");
       return;
     }
+    const cleanEmail = resetEmail.trim().toLowerCase();
     setResetLoading(true);
     setResetError("");
-    try {
-      const actionCodeSettings = {
-        url: window.location.origin,
-        handleCodeInApp: false
-      };
 
-      // 1. Dispatch branded password reset security code email via Brevo
+    try {
+      // 1. Check if this account was created via Google Sign-In (no password)
+      let isGoogleOnly = false;
+      try {
+        const methods = await fetchSignInMethodsForEmail(auth, cleanEmail);
+        console.log(`[PASSWORD RESET CHECK] Sign-in methods for ${cleanEmail}:`, methods);
+        if (methods.includes("google.com") && !methods.includes("password")) {
+          isGoogleOnly = true;
+        }
+      } catch (checkErr: any) {
+        console.warn("fetchSignInMethodsForEmail notice:", checkErr);
+      }
+
+      // Cross-check Firestore user profile to confirm if user signed up with Google
+      if (!isGoogleOnly) {
+        try {
+          const userQ = query(collection(db, "users"), where("email", "==", cleanEmail));
+          const snap = await getDocs(userQ);
+          if (!snap.empty) {
+            const data = snap.docs[0].data();
+            if (data.authProvider === "google" || (data.isGoogleAccount && !data.hasPassword)) {
+              isGoogleOnly = true;
+            }
+          }
+        } catch (fErr) {
+          console.warn("Firestore user lookup notice:", fErr);
+        }
+      }
+
+      if (isGoogleOnly) {
+        setResetLoading(false);
+        setShowForgotPassword(false);
+        setErrorPopup({
+          isOpen: true,
+          type: "google_account_no_password",
+          title: "Google Sign-In Account",
+          message: `The account for "${cleanEmail}" was registered through Google. There is no password for this account. Please sign in by clicking "Continue with Google".`,
+          email: cleanEmail,
+          primaryActionLabel: "Continue with Google",
+          onPrimaryAction: async () => {
+            setErrorPopup(prev => ({ ...prev, isOpen: false }));
+            await handleGoogleSignIn();
+          },
+          secondaryActionLabel: "Close",
+          onSecondaryAction: () => {
+            setErrorPopup(prev => ({ ...prev, isOpen: false }));
+          }
+        });
+        return;
+      }
+
+      // 2. Standard Password Account: Call Firebase Auth's sendPasswordResetEmail
+      try {
+        const actionCodeSettings = {
+          url: `${window.location.origin}/?tab=auth&mode=login`,
+          handleCodeInApp: false
+        };
+        await sendPasswordResetEmail(auth, cleanEmail, actionCodeSettings);
+        console.log(`[FIREBASE RESET] Firebase sendPasswordResetEmail dispatched to ${cleanEmail}`);
+      } catch (fbErr: any) {
+        console.warn("Firebase sendPasswordResetEmail notice:", fbErr);
+        if (fbErr.code === "auth/user-not-found") {
+          setResetError("No account found with this email address. Please check your spelling or register a new account.");
+          setResetLoading(false);
+          return;
+        }
+      }
+
+      // 3. Dispatch branded password reset security code & instructions via Brevo
       const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
       try {
-        await fetch("/api/send-password-reset", {
+        const bRes = await fetch("/api/send-password-reset", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            email: resetEmail.trim(),
+            email: cleanEmail,
             code: resetCode,
             resetLink: `${window.location.origin}/?tab=auth&mode=login`
           })
         });
-        console.log(`[BREVO RESET] Password reset code dispatched via Brevo to ${resetEmail.trim()}`);
+        const bData = await bRes.json();
+        console.log(`[BREVO RESET] Password reset email result for ${cleanEmail}:`, bData);
       } catch (brevoErr) {
         console.warn("Brevo password reset dispatch notice:", brevoErr);
       }
@@ -254,7 +330,7 @@ export default function AuthPage({
     } catch (err: any) {
       console.error("Password reset error:", err);
       if (err.code === "auth/user-not-found" || err.code === "auth/invalid-credential") {
-        setResetEmailSent(true);
+        setResetError("No account found with this email address. Please check your spelling or register.");
       } else if (err.code === "auth/invalid-email") {
         setResetError("Please enter a valid email address.");
       } else if (err.code === "auth/too-many-requests") {
@@ -493,9 +569,8 @@ export default function AuthPage({
                     username: ((user.displayName || user.email?.split("@")[0] || "user").replace(/[^a-zA-Z0-9]/g, "").toLowerCase() || "user") + Math.floor(100 + Math.random() * 900),
                     email: (user.email || cleanEmail).toLowerCase(),
                     phoneNumber: user.phoneNumber || "",
-                    gender: "other",
-                    role: "buyer",
-                    activeRole: "buyer",
+                    role: role === "seller" ? "seller" : "buyer",
+                    activeRole: role === "seller" ? "seller" : "buyer",
                     referralCode: generateReferralCode(user.displayName || "USER"),
                     referredBy: "",
                     referralEarnings: 0,
@@ -2606,7 +2681,10 @@ export default function AuthPage({
                     <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 dark:bg-zinc-800 rounded-xl">
                       <button 
                         type="button"
-                        onClick={() => setRole("buyer")}
+                        onClick={() => {
+                          setRole("buyer");
+                          sessionStorage.setItem("shopiversity_chosen_role", "buyer");
+                        }}
                         className={cn(
                           "min-h-[38px] py-1.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer touch-manipulation active:scale-95 whitespace-nowrap",
                           role === "buyer" 
@@ -2619,7 +2697,10 @@ export default function AuthPage({
                       </button>
                       <button 
                         type="button"
-                        onClick={() => setRole("seller")}
+                        onClick={() => {
+                          setRole("seller");
+                          sessionStorage.setItem("shopiversity_chosen_role", "seller");
+                        }}
                         className={cn(
                           "min-h-[38px] py-1.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer touch-manipulation active:scale-95 whitespace-nowrap",
                           role === "seller" 

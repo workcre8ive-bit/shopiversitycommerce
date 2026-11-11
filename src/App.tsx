@@ -446,7 +446,13 @@ export default function App() {
     });
   }, []);
 
-  const [activeRole, setActiveRole] = React.useState<"buyer" | "seller">("buyer");
+  const [activeRole, setActiveRole] = React.useState<"buyer" | "seller">(() => {
+    if (typeof window !== "undefined") {
+      const saved = sessionStorage.getItem("shopiversity_chosen_role");
+      if (saved === "seller") return "seller";
+    }
+    return "buyer";
+  });
   const [authMode, setAuthMode] = React.useState<"login" | "signup">("signup");
   const [authRole, setAuthRole] = React.useState<"buyer" | "seller">("buyer");
   const [chatWithUserId, setChatWithUserId] = React.useState<string | null>(null);
@@ -461,6 +467,15 @@ export default function App() {
   const [hibernationMessage, setHibernationMessage] = React.useState<string | null>(null);
   const [isVerifyingNewSignup, setIsVerifyingNewSignup] = React.useState(false);
 
+  // Keep activeRole strictly synced with the logged-in user's account role
+  React.useEffect(() => {
+    if (currentUser?.role === "seller" || currentUser?.activeRole === "seller") {
+      setActiveRole("seller");
+    } else if (currentUser?.role === "buyer" || currentUser?.activeRole === "buyer") {
+      setActiveRole("buyer");
+    }
+  }, [currentUser?.role, currentUser?.activeRole]);
+
   React.useEffect(() => {
     if (currentUser && (activeTab === "auth" || activeTab === "signup")) {
       // If user is unverified, don't automatically redirect them away from verification!
@@ -468,8 +483,16 @@ export default function App() {
         setIsVerifyingNewSignup(true);
         return;
       }
-      const nextTab = (currentUser.role === "seller" || currentUser.activeRole === "seller") ? "dashboard" : "market";
-      setActiveTab(nextTab);
+      const isSeller = currentUser.role === "seller" || 
+                       currentUser.activeRole === "seller" || 
+                       sessionStorage.getItem("shopiversity_chosen_role") === "seller";
+      if (isSeller) {
+        setActiveRole("seller");
+        setActiveTab("dashboard");
+      } else {
+        setActiveRole("buyer");
+        setActiveTab("market");
+      }
     }
   }, [currentUser, activeTab, setActiveTab]);
 
@@ -498,6 +521,32 @@ export default function App() {
       return [];
     });
   }, [viewingProduct, viewingSellerId, activeRole]);
+
+  // Unified Home navigation for Shopiversity Logo
+  // Sellers -> Vendor Dashboard ("dashboard")
+  // Couriers -> Logistics Hub ("logistics")
+  // Buyers / Guests -> Marketplace ("market")
+  const handleLogoHomeClick = React.useCallback(() => {
+    if (currentUser?.state === "Logistics Partner" || currentUser?.role === "logistics") {
+      setActiveTab("logistics");
+    } else if (
+      currentUser?.role === "seller" || 
+      activeRole === "seller" || 
+      (typeof window !== "undefined" && sessionStorage.getItem("shopiversity_chosen_role") === "seller")
+    ) {
+      setActiveRole("seller");
+      setActiveTab("dashboard");
+    } else {
+      setActiveRole("buyer");
+      setActiveTab("market");
+    }
+    setViewingProduct(null);
+    setViewingSellerId(null);
+    setFilterCategory("All");
+    setSearchQuery("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [currentUser, activeRole, setActiveTab]);
+
   const [pendingEditProduct, setPendingEditProduct] = React.useState<any>(null);
   const [storefrontPreviewSettings, setStorefrontPreviewSettings] = React.useState<any>(null);
   const initialTabSet = React.useRef(false);
@@ -1495,22 +1544,7 @@ export default function App() {
               </button>
             )}
             <Logo 
-              onClick={() => {
-                if (currentUser?.state === "Logistics Partner" || currentUser?.role === "logistics") {
-                  setActiveTab("logistics");
-                } else if (activeTab === "auth" || activeTab === "signup" || !currentUser) {
-                  setActiveRole("buyer");
-                  setActiveTab("market");
-                } else if (activeRole === "seller") {
-                  setActiveTab("dashboard");
-                } else {
-                  setActiveTab("market");
-                }
-                setViewingProduct(null);
-                setViewingSellerId(null);
-                setFilterCategory("All");
-                setSearchQuery("");
-              }} 
+              onClick={handleLogoHomeClick} 
               className="ml-0.5 sm:ml-1 min-w-0 cursor-pointer" 
             />
           </div>
@@ -1704,7 +1738,8 @@ export default function App() {
                   }}
                   onGoToMarket={(preferredRole?: "buyer" | "seller") => {
                     setIsVerifyingNewSignup(false);
-                    const targetRole = preferredRole || (currentUser?.role === "seller" ? "seller" : "buyer");
+                    const savedRole = typeof window !== "undefined" ? sessionStorage.getItem("shopiversity_chosen_role") : null;
+                    const targetRole = preferredRole || (savedRole === "seller" ? "seller" : (currentUser?.role === "seller" ? "seller" : "buyer"));
                     if (targetRole === "seller") {
                       setActiveRole("seller");
                       setActiveTab("dashboard");
@@ -2261,7 +2296,7 @@ export default function App() {
                   })()}
                 </div>
               </motion.div>
-            ) : (activeTab === "dashboard" || activeTab === "wishlist") && activeRole === "buyer" && currentUser?.state !== "Logistics Partner" && currentUser?.role !== "logistics" ? (
+            ) : (activeTab === "dashboard" || activeTab === "wishlist") && activeRole === "buyer" && currentUser?.role !== "seller" && currentUser?.activeRole !== "seller" && currentUser?.state !== "Logistics Partner" && currentUser?.role !== "logistics" ? (
               <motion.div
                 key="buyer-dashboard"
                 initial={{ opacity: 0, y: 10 }}
@@ -2275,7 +2310,7 @@ export default function App() {
                   initialSection={activeTab === "wishlist" ? "wishlist" : undefined}
                 />
               </motion.div>
-            ) : (activeTab === "dashboard" || activeTab === "overview" || activeTab === "analytics" || activeTab === "add-product" || activeTab === "my-products" || (activeTab === "orders" && activeRole === "seller") || activeTab === "storefront" || activeTab === "referrals" || activeTab === "payouts") && activeRole === "seller" ? (
+            ) : (activeTab === "dashboard" || activeTab === "overview" || activeTab === "analytics" || activeTab === "add-product" || activeTab === "my-products" || (activeTab === "orders" && (activeRole === "seller" || currentUser?.role === "seller")) || activeTab === "storefront" || activeTab === "referrals" || activeTab === "payouts") && (activeRole === "seller" || currentUser?.role === "seller" || currentUser?.activeRole === "seller") ? (
               <motion.div
                 key="dashboard"
                 initial={{ opacity: 0, x: 20 }}
@@ -2516,6 +2551,9 @@ export default function App() {
               setActiveTab={setActiveTab} 
               activeTab={activeTab} 
               onOpenCookieSettings={() => setIsCookieSettingsOpen(true)}
+              onLogoClick={handleLogoHomeClick}
+              currentUser={currentUser}
+              activeRole={activeRole}
             />
           )}
         </main>

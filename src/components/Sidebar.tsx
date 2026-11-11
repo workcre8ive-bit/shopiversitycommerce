@@ -150,10 +150,10 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
             onClick={() => {
               if (user?.state === "Logistics Partner" || user?.role === "logistics") {
                 setActiveTab("logistics");
-              } else if (!user || activeTab === "auth" || activeTab === "signup") {
-                setActiveTab("market");
+              } else if (user?.role === "seller" || activeRole === "seller") {
+                setActiveTab("dashboard");
               } else {
-                setActiveTab(activeRole === "seller" ? "dashboard" : "market");
+                setActiveTab("market");
               }
               onClose();
             }}
