@@ -832,6 +832,14 @@ export default function App() {
 
             setCurrentUser(profile);
             
+            // If the user has not completed 6-digit email verification, keep them on the verification screen!
+            if (!profile.isVerified && profile.role !== "admin") {
+              setIsVerifyingNewSignup(true);
+              setAuthLoading(false);
+              setNeedsProfile(false);
+              return;
+            }
+
             if (profile.state === "Logistics Partner" || profile.role === "logistics") {
               setActiveTab("logistics");
               initialTabSet.current = true;
@@ -953,7 +961,7 @@ export default function App() {
                     };
                     await setDoc(doc(db, "users", user.uid), fallbackProfile, { merge: true });
                     setCurrentUser(fallbackProfile);
-                    setActiveTab(fallbackRole === "seller" ? "dashboard" : "market");
+                    setIsVerifyingNewSignup(true);
                     sessionStorage.removeItem("shopiversity_in_signup");
                     sessionStorage.removeItem("shopiversity_google_pending");
                   } catch (autoErr) {
@@ -1724,6 +1732,7 @@ export default function App() {
                 className="min-h-full flex flex-col justify-center"
               >
                 <AuthPage 
+                  currentUser={currentUser}
                   initialNeedsProfile={needsProfile} 
                   initialMode={authMode} 
                   initialRole={authRole}

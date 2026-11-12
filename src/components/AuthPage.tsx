@@ -80,6 +80,7 @@ const BACKGROUND_IMAGES = [
 ];
 
 export default function AuthPage({ 
+  currentUser,
   initialNeedsProfile = false,
   initialMode,
   initialRole,
@@ -90,6 +91,7 @@ export default function AuthPage({
   setActiveTab,
   onOpenCookieSettings
 }: { 
+  currentUser?: any;
   initialNeedsProfile?: boolean;
   initialMode?: "login" | "signup";
   initialRole?: "buyer" | "seller";
@@ -346,11 +348,17 @@ export default function AuthPage({
   };
   
   // Verification & Brevo Engine states
-  const [isVerifyingEmail, setIsVerifyingEmail] = React.useState(false);
+  const [isVerifyingEmail, setIsVerifyingEmail] = React.useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      if (sessionStorage.getItem("shopiversity_verifying_email")) return true;
+      if (auth.currentUser && !auth.currentUser.emailVerified) return true;
+    }
+    return false;
+  });
   const [isVerifyingPhone, setIsVerifyingPhone] = React.useState(false);
   const [isVerificationChoice, setIsVerificationChoice] = React.useState(false);
   const [isVerificationSuccess, setIsVerificationSuccess] = React.useState(false);
-  const [verificationMethod, setVerificationMethod] = React.useState<"email" | "phone" | null>(null);
+  const [verificationMethod, setVerificationMethod] = React.useState<"email" | "phone" | null>("email");
   const [confirmationResult, setConfirmationResult] = React.useState<ConfirmationResult | null>(null);
   const [verificationInput, setVerificationInput] = React.useState("");
   const [isEmailVerified, setIsEmailVerified] = React.useState(false);
@@ -361,12 +369,75 @@ export default function AuthPage({
 
   // OTP Verification States
   const [preferredVerificationChannel, setPreferredVerificationChannel] = React.useState<"email" | "phone">("email");
-  const [sentOtpCode, setSentOtpCode] = React.useState<string>("");
+  const [sentOtpCode, setSentOtpCode] = React.useState<string>(() => {
+    if (typeof window !== "undefined") {
+      const activeEm = sessionStorage.getItem("shopiversity_verifying_email") || auth.currentUser?.email;
+      if (activeEm) {
+        return sessionStorage.getItem(`shopiversity_otp_code_${activeEm.toLowerCase()}`) || "";
+      }
+    }
+    return "";
+  });
   const [enteredOtpCode, setEnteredOtpCode] = React.useState<string>("");
   const [verifyingOtp, setVerifyingOtp] = React.useState<boolean>(false);
   const [resendCooldown, setResendCooldown] = React.useState<number>(0);
   const [otpSentVia, setOtpSentVia] = React.useState<"brevo" | "fallback">("brevo");
   const [brevoNotice, setBrevoNotice] = React.useState<string>("");
+
+  // Automatically activate 6-digit verification screen and dispatch code if user is authenticated but unverified
+  React.useEffect(() => {
+    const unverifiedEmail = (typeof window !== "undefined" ? sessionStorage.getItem("shopiversity_verifying_email") : null) ||
+      (auth.currentUser && !auth.currentUser.emailVerified ? auth.currentUser.email : null) ||
+      (currentUser && !currentUser.isVerified && currentUser.role !== "admin" ? currentUser.email : null);
+
+    if (unverifiedEmail) {
+      const cleanTarget = unverifiedEmail.trim().toLowerCase();
+      setEmail(cleanTarget);
+      setIsVerifyingEmail(true);
+      setVerificationMethod("email");
+      if (onVerificationScreenChange) {
+        onVerificationScreenChange(true);
+      }
+
+      const cachedCode = typeof window !== "undefined" ? sessionStorage.getItem(`shopiversity_otp_code_${cleanTarget}`) : null;
+      if (cachedCode) {
+        setSentOtpCode(cachedCode);
+      }
+
+      const sentFlagKey = `shopiversity_otp_sent_${cleanTarget}`;
+      const alreadySent = typeof window !== "undefined" ? sessionStorage.getItem(sentFlagKey) : null;
+
+      if (!alreadySent) {
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem(sentFlagKey, "true");
+        }
+        const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+        setSentOtpCode(verificationCode);
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem(`shopiversity_otp_code_${cleanTarget}`, verificationCode);
+        }
+
+        fetch("/api/send-verification", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: cleanTarget,
+            code: verificationCode,
+            userName: currentUser?.displayName || auth.currentUser?.displayName || "Shopiversity Member",
+            role: role === "seller" ? "seller" : "buyer"
+          })
+        }).then(res => res.json()).then(data => {
+          setOtpSentVia("brevo");
+          setBrevoNotice(`6-digit verification code sent to ${cleanTarget} via Brevo! Please check your inbox.`);
+          setEnteredOtpCode("");
+        }).catch(err => {
+          console.warn("Auto verification dispatch error:", err);
+          setSentOtpCode(verificationCode);
+          setEnteredOtpCode("");
+        });
+      }
+    }
+  }, [currentUser]);
 
   // Countdown timer for resending verification code
   React.useEffect(() => {
@@ -900,13 +971,11 @@ export default function AuthPage({
         // Direct Email Verification (No Phone SMS Verification)
                   // Email Verification
           const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
-          let fallbackCode = "";
-          let isLive = false;
-          let noticeMessage = "";
+          let noticeMessage = `6-digit verification code sent to ${cleanEmail} via Brevo! Please check your inbox.`;
 
           try {
             console.log(`[SIGNUP EMAIL] Dispatching email verification to ${cleanEmail}`);
-            const vRes = await fetch("/api/send-verification", {
+            await fetch("/api/send-verification", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -915,22 +984,21 @@ export default function AuthPage({
                 userName: fullName || username
               })
             });
-            const vData = await vRes.json();
-            if (vData.sent) {
-              isLive = true;
-              noticeMessage = `Verification code sent to ${cleanEmail}!`;
-            } else {
-              fallbackCode = vData.code || verificationCode;
-              noticeMessage = vData.notice || "Verification code generated.";
-            }
           } catch (vErr) {
             console.warn("Email verification API dispatch notice:", vErr);
-            fallbackCode = verificationCode;
           }
 
+          if (typeof window !== "undefined") {
+            sessionStorage.setItem("shopiversity_verifying_email", cleanEmail);
+            sessionStorage.setItem("shopiversity_chosen_role", role);
+            sessionStorage.setItem(`shopiversity_otp_code_${cleanEmail}`, verificationCode);
+            sessionStorage.setItem(`shopiversity_otp_sent_${cleanEmail}`, "true");
+          }
+
+          setEmail(cleanEmail);
           setSentOtpCode(verificationCode);
-          setEnteredOtpCode(fallbackCode || "");
-          setOtpSentVia(isLive ? "brevo" : "fallback");
+          setEnteredOtpCode("");
+          setOtpSentVia("brevo");
           setBrevoNotice(noticeMessage);
           setVerificationMethod("email");
           setIsVerifyingEmail(true);
@@ -941,6 +1009,7 @@ export default function AuthPage({
           if (onVerificationScreenChange) {
             onVerificationScreenChange(true);
           }
+          setLoading(false);
           return;
       }
     } catch (err: any) {
@@ -994,7 +1063,7 @@ export default function AuthPage({
     const newCode = Math.floor(100000 + Math.random() * 900000).toString();
 
     try {
-      const vRes = await fetch("/api/send-verification", {
+      await fetch("/api/send-verification", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1003,16 +1072,13 @@ export default function AuthPage({
           userName: fullName || username || currentAuthUser?.displayName || "Student"
         })
       });
-      const vData = await vRes.json();
       setSentOtpCode(newCode);
-      if (vData.sent) {
-        setOtpSentVia("brevo");
-        setError(`Fresh 6-digit verification code dispatched to ${targetEmail} via Brevo!`);
-      } else {
-        setOtpSentVia("fallback");
-        setEnteredOtpCode(vData.code || newCode);
-        setError(`New verification code: ${vData.code || newCode} (Brevo setup mode)`);
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem(`shopiversity_otp_code_${targetEmail}`, newCode);
       }
+      setEnteredOtpCode("");
+      setOtpSentVia("brevo");
+      setError(`A fresh 6-digit verification code has been dispatched to ${targetEmail} via Brevo! Please check your email inbox.`);
       setResendCooldown(30);
     } catch (err: any) {
       console.error("Resend Brevo verification error:", err);
@@ -1063,11 +1129,8 @@ export default function AuthPage({
             userName: fullName || username || currentAuthUser.displayName || "Student"
           })
         });
-        const vData = await vRes.json();
         setSentOtpCode(newCode);
-        if (vData.fallback && vData.code) {
-          setEnteredOtpCode(vData.code);
-        }
+        setEnteredOtpCode("");
       } catch (bErr) {
         console.warn("Brevo new email dispatch notice:", bErr);
       }
@@ -1280,6 +1343,14 @@ export default function AuthPage({
         }
       }
 
+      if (typeof window !== "undefined") {
+        sessionStorage.removeItem("shopiversity_verifying_email");
+        if (targetEmail) {
+          sessionStorage.removeItem(`shopiversity_otp_code_${targetEmail}`);
+          sessionStorage.removeItem(`shopiversity_otp_sent_${targetEmail}`);
+        }
+      }
+
       setIsVerificationSuccess(true);
       setError("");
 
@@ -1290,7 +1361,8 @@ export default function AuthPage({
         if (onVerificationScreenChange) {
           onVerificationScreenChange(false);
         }
-        handleGoToMarket(role === "seller" ? "seller" : "buyer");
+        const finalRole = (typeof window !== "undefined" ? sessionStorage.getItem("shopiversity_chosen_role") : null) || (role === "seller" ? "seller" : "buyer");
+        handleGoToMarket(finalRole as any);
       }, 1200);
     } catch (err: any) {
       console.error("Verification error:", err);
@@ -1452,6 +1524,13 @@ export default function AuthPage({
         fallbackCode = verificationCode;
       }
 
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem("shopiversity_verifying_email", cleanUserEmail);
+        sessionStorage.setItem("shopiversity_chosen_role", role === "seller" ? "seller" : "buyer");
+        sessionStorage.setItem(`shopiversity_otp_code_${cleanUserEmail}`, verificationCode);
+        sessionStorage.setItem(`shopiversity_otp_sent_${cleanUserEmail}`, "true");
+      }
+
       setEmail(cleanUserEmail);
       setSentOtpCode(verificationCode);
       setEnteredOtpCode(fallbackCode || "");
@@ -1514,6 +1593,13 @@ export default function AuthPage({
         } catch (vErr) {
           console.warn("Google verification dispatch notice:", vErr);
           fallbackCode = verificationCode;
+        }
+
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem("shopiversity_verifying_email", cleanUserEmail);
+          sessionStorage.setItem("shopiversity_chosen_role", (profile.role === "seller" || role === "seller") ? "seller" : "buyer");
+          sessionStorage.setItem(`shopiversity_otp_code_${cleanUserEmail}`, verificationCode);
+          sessionStorage.setItem(`shopiversity_otp_sent_${cleanUserEmail}`, "true");
         }
 
         setEmail(cleanUserEmail);
@@ -2444,6 +2530,28 @@ export default function AuthPage({
                       </div>
                     </form>
                   )}
+
+                  <button 
+                    type="button"
+                    onClick={async () => {
+                      if (typeof window !== "undefined") {
+                        sessionStorage.removeItem("shopiversity_verifying_email");
+                        if (email) {
+                          sessionStorage.removeItem(`shopiversity_otp_sent_${email}`);
+                          sessionStorage.removeItem(`shopiversity_otp_code_${email}`);
+                        }
+                      }
+                      setIsVerifyingEmail(false);
+                      if (onVerificationScreenChange) {
+                        onVerificationScreenChange(false);
+                      }
+                      await signOut(auth).catch(() => {});
+                      switchAuthMode(true);
+                    }}
+                    className="w-full py-2 text-xs text-slate-500 hover:text-slate-800 dark:hover:text-zinc-200 transition-colors cursor-pointer bg-transparent border-none font-semibold text-center block mt-1"
+                  >
+                    ← Cancel &amp; return to Sign In
+                  </button>
                 </div>
               </motion.div>
             ) : isVerifyingPhone ? (

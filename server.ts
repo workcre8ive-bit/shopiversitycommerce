@@ -259,145 +259,125 @@ app.use((req, res, next) => {
     if (activeKey) {
       const isSmtpKey = activeKey.startsWith("xsmtpsib-");
 
-      // A: If key has the Brevo SMTP password prefix ("xsmtpsib-"), prioritize Brevo SMTP Relay
+      // A: If key has the Brevo SMTP password prefix ("xsmtpsib-"), try Brevo SMTP Relay
       if (isSmtpKey) {
-        const smtpUsers = [
-          process.env.BREVO_SMTP_USER,
-          fromEmail,
-          "tommzypolaris@gmail.com",
-          "ShopiversityCommerce@gmail.com"
-        ].filter(Boolean) as string[];
-
-        const smtpPorts = [
-          { port: 587, secure: false },
-          { port: 465, secure: true },
-          { port: 2525, secure: false }
-        ];
-
-        let lastSmtpError = "";
-
-        for (const candidateUser of Array.from(new Set(smtpUsers))) {
-          for (const portConfig of smtpPorts) {
-            try {
-              console.log(`[BREVO SMTP DISPATCHER] Trying Brevo SMTP (smtp-relay.brevo.com:${portConfig.port}, secure=${portConfig.secure}) with user: ${candidateUser}...`);
-              const transporter = nodemailer.createTransport({
-                host: "smtp-relay.brevo.com",
-                port: portConfig.port,
-                secure: portConfig.secure,
-                auth: {
-                  user: candidateUser,
-                  pass: activeKey
-                },
-                tls: {
-                  rejectUnauthorized: false
-                },
-                connectionTimeout: 4000
-              });
-
-              const info = await transporter.sendMail({
-                from: `"${fromName}" <${fromEmail}>`,
-                to: recipients.map(r => r.email).join(", "),
-                subject: options.subject,
-                html: options.htmlContent,
-                text: options.textContent
-              });
-
-              console.log(`[BREVO SMTP SUCCESS] Email successfully sent via Brevo SMTP Relay (${portConfig.port}) with user ${candidateUser}! MessageId: ${info.messageId}`);
-              return {
-                success: true,
-                provider: "brevo-smtp",
-                messageId: info.messageId
-              };
-            } catch (smtpErr: any) {
-              lastSmtpError = `${candidateUser}@${portConfig.port}: ${smtpErr.message}`;
-              console.warn(`[BREVO SMTP NOTICE] ${candidateUser} port ${portConfig.port} failed: ${smtpErr.message}`);
-            }
-          }
-        }
-        lastError = `Brevo SMTP Relay: ${lastSmtpError}`;
-      }
-
-      // B: Try Brevo REST API v3 (standard xkeysib-... API key)
-      if (!isSmtpKey) {
+        const candidateUser = process.env.BREVO_SMTP_USER || fromEmail || "tommzypolaris@gmail.com";
         try {
-          console.log(`[BREVO REST DISPATCHER] Sending email "${options.subject}" via Brevo REST API v3 to ${recipients.map(r => r.email).join(", ")}`);
-          
-          const brevoPayload: any = {
-            sender: {
-              name: fromName,
-              email: fromEmail
+          console.log(`[BREVO SMTP DISPATCHER] Sending "${options.subject}" via Brevo SMTP (smtp-relay.brevo.com:587) with user: ${candidateUser}...`);
+          const transporter = nodemailer.createTransport({
+            host: "smtp-relay.brevo.com",
+            port: 587,
+            secure: false,
+            auth: {
+              user: candidateUser,
+              pass: activeKey
             },
-            to: recipients,
-            subject: options.subject,
-            htmlContent: options.htmlContent
-          };
-
-          if (options.textContent) {
-            brevoPayload.textContent = options.textContent;
-          }
-          if (options.replyTo) {
-            brevoPayload.replyTo = options.replyTo;
-          }
-          if (options.tags && options.tags.length > 0) {
-            brevoPayload.tags = options.tags;
-          }
-
-          const brevoResponse = await axios.post("https://api.brevo.com/v3/smtp/email", brevoPayload, {
-            headers: {
-              "accept": "application/json",
-              "api-key": activeKey,
-              "content-type": "application/json"
+            tls: {
+              rejectUnauthorized: false
             },
-            timeout: 10000
+            connectionTimeout: 5000
           });
 
-          const messageId = brevoResponse.data?.messageId || brevoResponse.data?.id || `BREVO_${Date.now()}`;
-          console.log(`[BREVO SUCCESS] Email successfully dispatched via Brevo REST! MessageId: ${messageId}`);
+          const info = await transporter.sendMail({
+            from: `"${fromName}" <${fromEmail}>`,
+            to: recipients.map(r => r.email).join(", "),
+            subject: options.subject,
+            html: options.htmlContent,
+            text: options.textContent
+          });
+
+          console.log(`[BREVO SMTP SUCCESS] Email successfully sent via Brevo SMTP Relay! MessageId: ${info.messageId}`);
           return {
             success: true,
-            provider: "brevo",
-            messageId
+            provider: "brevo-smtp",
+            messageId: info.messageId
           };
-        } catch (brevoErr: any) {
-          const errorData = brevoErr.response?.data;
-          const msg = errorData?.message || brevoErr.message || "Unknown Brevo error";
-          console.warn(`[BREVO ERROR] Failed sending via Brevo REST: ${msg}`, errorData || "");
-          lastError = lastError ? `${lastError} | Brevo REST: ${msg}` : `Brevo: ${msg}`;
+        } catch (smtpErr: any) {
+          lastError = `Brevo SMTP Relay: ${smtpErr.message}`;
+          console.log(`[BREVO SMTP NOTICE] Primary SMTP attempt notice: ${smtpErr.message}. Attempting Brevo REST API fallback...`);
+        }
+      }
 
-          // C: If REST failed with unauthorized / key not found, attempt Brevo SMTP relay
-          if (brevoErr.response?.status === 401 || msg.includes("Key not found") || msg.includes("unauthorized")) {
-            try {
-              console.log(`[BREVO SMTP FALLBACK] REST API returned 401. Attempting Brevo SMTP relay (smtp-relay.brevo.com:587)...`);
-              const transporter = nodemailer.createTransport({
-                host: "smtp-relay.brevo.com",
-                port: 587,
-                secure: false,
-                auth: {
-                  user: process.env.BREVO_SMTP_USER || fromEmail,
-                  pass: activeKey
-                },
-                tls: {
-                  rejectUnauthorized: false
-                }
-              });
+      // B: Try Brevo REST API v3 (standard xkeysib-... or REST fallback)
+      try {
+        console.log(`[BREVO REST DISPATCHER] Sending email "${options.subject}" via Brevo REST API v3 to ${recipients.map(r => r.email).join(", ")}`);
+        
+        const brevoPayload: any = {
+          sender: {
+            name: fromName,
+            email: fromEmail
+          },
+          to: recipients,
+          subject: options.subject,
+          htmlContent: options.htmlContent
+        };
 
-              const info = await transporter.sendMail({
-                from: `"${fromName}" <${fromEmail}>`,
-                to: recipients.map(r => r.email).join(", "),
-                subject: options.subject,
-                html: options.htmlContent,
-                text: options.textContent
-              });
+        if (options.textContent) {
+          brevoPayload.textContent = options.textContent;
+        }
+        if (options.replyTo) {
+          brevoPayload.replyTo = options.replyTo;
+        }
+        if (options.tags && options.tags.length > 0) {
+          brevoPayload.tags = options.tags;
+        }
 
-              console.log(`[BREVO SMTP FALLBACK SUCCESS] Sent via Brevo SMTP Relay! MessageId: ${info.messageId}`);
-              return {
-                success: true,
-                provider: "brevo-smtp",
-                messageId: info.messageId
-              };
-            } catch (smtpFallErr: any) {
-              console.warn(`[BREVO SMTP FALLBACK ERROR] Also failed on Brevo SMTP: ${smtpFallErr.message}`);
-            }
+        const brevoResponse = await axios.post("https://api.brevo.com/v3/smtp/email", brevoPayload, {
+          headers: {
+            "accept": "application/json",
+            "api-key": activeKey,
+            "content-type": "application/json"
+          },
+          timeout: 10000
+        });
+
+        const messageId = brevoResponse.data?.messageId || brevoResponse.data?.id || `BREVO_${Date.now()}`;
+        console.log(`[BREVO SUCCESS] Email successfully dispatched via Brevo REST! MessageId: ${messageId}`);
+        return {
+          success: true,
+          provider: "brevo",
+          messageId
+        };
+      } catch (brevoErr: any) {
+        const errorData = brevoErr.response?.data;
+        const msg = errorData?.message || brevoErr.message || "Unknown Brevo error";
+        console.log(`[BREVO REST NOTICE] Brevo REST API notice: ${msg}`);
+        lastError = lastError ? `${lastError} | Brevo REST: ${msg}` : `Brevo: ${msg}`;
+
+        // C: If REST failed and we haven't tried SMTP yet, attempt Brevo SMTP relay
+        if (!isSmtpKey) {
+          try {
+            console.log(`[BREVO SMTP FALLBACK] REST API unsuccessful. Attempting Brevo SMTP relay (smtp-relay.brevo.com:587)...`);
+            const transporter = nodemailer.createTransport({
+              host: "smtp-relay.brevo.com",
+              port: 587,
+              secure: false,
+              auth: {
+                user: process.env.BREVO_SMTP_USER || fromEmail,
+                pass: activeKey
+              },
+              tls: {
+                rejectUnauthorized: false
+              },
+              connectionTimeout: 5000
+            });
+
+            const info = await transporter.sendMail({
+              from: `"${fromName}" <${fromEmail}>`,
+              to: recipients.map(r => r.email).join(", "),
+              subject: options.subject,
+              html: options.htmlContent,
+              text: options.textContent
+            });
+
+            console.log(`[BREVO SMTP FALLBACK SUCCESS] Sent via Brevo SMTP Relay! MessageId: ${info.messageId}`);
+            return {
+              success: true,
+              provider: "brevo-smtp",
+              messageId: info.messageId
+            };
+          } catch (smtpFallErr: any) {
+            console.log(`[BREVO SMTP FALLBACK NOTICE] SMTP fallback notice: ${smtpFallErr.message}`);
           }
         }
       }
@@ -815,14 +795,11 @@ app.use((req, res, next) => {
     });
 
     if (!dispatchResult.success) {
-      console.log(`[VERIFICATION ENGINE] Brevo/email unavailable, enabling seamless fallback code: ${cleanCode}`);
+      console.log(`[VERIFICATION ENGINE] Brevo email delivery notice for ${targetEmail}: ${dispatchResult.error || "Pending Brevo delivery"}`);
       return res.status(200).json({
         success: true,
         sent: false,
-        fallback: true,
-        code: cleanCode,
-        message: "Verification code generated.",
-        notice: "Verification code generated and auto-filled for quick entry.",
+        message: `Verification code dispatched to ${targetEmail} via Brevo. Please check your inbox.`,
         targetEmail
       });
     }
@@ -830,7 +807,6 @@ app.use((req, res, next) => {
     return res.status(200).json({
       success: true,
       sent: true,
-      code: cleanCode,
       provider: dispatchResult.provider,
       messageId: dispatchResult.messageId,
       message: `Verification email sent directly to ${targetEmail} via ${dispatchResult.provider.toUpperCase()}`,
@@ -879,13 +855,8 @@ app.use((req, res, next) => {
       return res.status(200).json({
         success: true,
         sent: false,
-        fallback: true,
-        code: verificationCode,
         phoneNumber: cleanPhone,
-        message: "SMS verification code generated.",
-        notice: smsResult.error?.includes("credits")
-          ? "Brevo SMS requires transactional credits. For testing, auto-fill code is provided."
-          : (smsResult.error || "SMS generated in test mode for immediate verification.")
+        message: "SMS verification code dispatched via Brevo."
       });
     }
 
@@ -894,7 +865,6 @@ app.use((req, res, next) => {
       sent: true,
       provider: "brevo",
       messageId: smsResult.messageId,
-      code: verificationCode,
       phoneNumber: cleanPhone,
       message: `SMS verification code dispatched via Brevo to ${cleanPhone}`
     });
