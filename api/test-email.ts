@@ -20,6 +20,7 @@ export default async function handler(req: any, res: any) {
     "fashinaayomide2005@gmail.com",
     "fashinaayomide@2005@gmail.com",
     "fashinaayomide12005@gmail.com",
+    "fashopcommerce@gmail.com",
     "shopiversitycommerce@gmail.com"
   ]);
 
@@ -49,8 +50,25 @@ export default async function handler(req: any, res: any) {
     });
   }
 
-  const fromEmail = process.env.BREVO_SENDER_EMAIL || "ShopiversityCommerce@gmail.com";
+  let fromEmail = process.env.BREVO_SENDER_EMAIL || "shopiversitycommerce@gmail.com";
   const fromName = process.env.BREVO_SENDER_NAME || "SHOPIVERSITY Campus Marketplace";
+
+  if (!apiKey.startsWith("xsmtpsib-")) {
+    try {
+      const sendersRes = await axios.get("https://api.brevo.com/v3/senders", {
+        headers: { "accept": "application/json", "api-key": apiKey },
+        timeout: 6000
+      });
+      const list = Array.isArray(sendersRes.data?.senders) ? sendersRes.data.senders : [];
+      const activeList = list.filter((s: any) => s && s.email && s.active !== false);
+      const exactMatch = activeList.find((s: any) => String(s.email).toLowerCase() === fromEmail.toLowerCase());
+      if (!exactMatch && activeList.length > 0) {
+        fromEmail = String(activeList[0].email).trim();
+      }
+    } catch {
+      // Fall back to configured fromEmail if /v3/senders lookup fails
+    }
+  }
 
   const testHtml = `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 32px 24px; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 24px;">

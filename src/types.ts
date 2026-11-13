@@ -75,6 +75,9 @@ export interface UserProfile {
   theme?: "light" | "dark";
   storefrontSettings?: StorefrontSettings;
   wishlistProductIds?: string[];
+  authProvider?: string;
+  isGoogleAccount?: boolean;
+  hasPassword?: boolean;
 }
 
 export interface WishlistItem {

@@ -71,6 +71,7 @@ app.use((req, res, next) => {
 
   // Brevo Transactional Email & SMS Engine Configuration & Persistent Store
   const BREVO_CONFIG_FILE = path.join(process.cwd(), "brevo-config.json");
+  const TMP_BREVO_CONFIG_FILE = "/tmp/brevo-config.json";
   let runtimeBrevoConfig = {
     apiKey: (
       process.env.BREVO_API_KEY ||
@@ -85,7 +86,7 @@ app.use((req, res, next) => {
     senderEmail: process.env.BREVO_SENDER_EMAIL || process.env.brevo_sender_email || "shopiversitycommerce@gmail.com",
     senderName: process.env.BREVO_SENDER_NAME || process.env.brevo_sender_name || "SHOPIVERSITY Campus Marketplace",
     smsSender: process.env.BREVO_SMS_SENDER || process.env.brevo_sms_sender || "SHOPIV",
-    smtpUser: process.env.BREVO_SMTP_USER || process.env.brevo_smtp_user || "tommzypolaris@gmail.com"
+    smtpUser: process.env.BREVO_SMTP_USER || process.env.brevo_smtp_user || ""
   };
 
   // Helper to reliably extract the active Brevo key across env vars, persistent file, and custom overrides
@@ -115,32 +116,35 @@ app.use((req, res, next) => {
     return "";
   }
 
-  // Load saved Brevo config from disk if available
-  try {
-    if (fs.existsSync(BREVO_CONFIG_FILE)) {
-      const savedConfig = JSON.parse(fs.readFileSync(BREVO_CONFIG_FILE, "utf-8"));
-      if (savedConfig.apiKey && savedConfig.apiKey.trim().length > 6 && savedConfig.apiKey.trim().toLowerCase() !== "test") {
-        runtimeBrevoConfig.apiKey = savedConfig.apiKey.trim();
+  // Load saved Brevo config from disk if available (env vars take precedence unless config file explicitly sets an active key)
+  for (const cfgPath of [BREVO_CONFIG_FILE, TMP_BREVO_CONFIG_FILE]) {
+    try {
+      if (fs.existsSync(cfgPath)) {
+        const savedConfig = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+        const hasSavedKey = Boolean(savedConfig.apiKey && savedConfig.apiKey.trim().length > 6 && savedConfig.apiKey.trim().toLowerCase() !== "test");
+        if (hasSavedKey) {
+          runtimeBrevoConfig.apiKey = savedConfig.apiKey.trim();
+        }
+        const hasEnvSender = Boolean(process.env.BREVO_SENDER_EMAIL || process.env.brevo_sender_email);
+        if ((hasSavedKey || !hasEnvSender) && savedConfig.senderEmail && savedConfig.senderEmail.includes("@")) {
+          runtimeBrevoConfig.senderEmail = savedConfig.senderEmail.trim();
+        }
+        if (hasSavedKey && savedConfig.senderName) runtimeBrevoConfig.senderName = savedConfig.senderName.trim();
+        if (savedConfig.smsSender) runtimeBrevoConfig.smsSender = savedConfig.smsSender.trim();
+        if (savedConfig.smtpUser) runtimeBrevoConfig.smtpUser = savedConfig.smtpUser.trim();
       }
-      if (savedConfig.senderEmail && savedConfig.senderEmail.includes("@")) {
-        runtimeBrevoConfig.senderEmail = savedConfig.senderEmail.trim();
-      }
-      if (savedConfig.senderName) runtimeBrevoConfig.senderName = savedConfig.senderName.trim();
-      if (savedConfig.smsSender) runtimeBrevoConfig.smsSender = savedConfig.smsSender.trim();
-      if (savedConfig.smtpUser) runtimeBrevoConfig.smtpUser = savedConfig.smtpUser.trim();
-      console.log("[BREVO PERSISTENCE] Loaded active Brevo settings from brevo-config.json:", {
-        configured: Boolean(getActiveBrevoKey()),
-        senderEmail: runtimeBrevoConfig.senderEmail,
-        senderName: runtimeBrevoConfig.senderName,
-        smsSender: runtimeBrevoConfig.smsSender,
-        smtpUser: runtimeBrevoConfig.smtpUser
-      });
+    } catch (persErr) {
+      console.warn("[BREVO PERSISTENCE] Could not load brevo config:", persErr);
     }
-  } catch (persErr) {
-    console.warn("[BREVO PERSISTENCE] Could not load brevo-config.json:", persErr);
   }
+  console.log("[BREVO PERSISTENCE] Active Brevo config:", {
+    configured: Boolean(getActiveBrevoKey()),
+    senderEmail: runtimeBrevoConfig.senderEmail,
+    senderName: runtimeBrevoConfig.senderName,
+    smsSender: runtimeBrevoConfig.smsSender
+  });
 
-  // In-memory OTP code store (Email & Phone verification, password resets)
+  // In-memory OTP code store + stateless HMAC token verifier for serverless compatibility
   interface StoredVerificationCode {
     code: string;
     target: string; // email or phone
@@ -149,6 +153,53 @@ app.use((req, res, next) => {
     userName?: string;
   }
   const verificationCodesStore = new Map<string, StoredVerificationCode>();
+  const VERIFICATION_HMAC_SECRET = process.env.VERIFICATION_HMAC_SECRET || process.env.BREVO_API_KEY || "shopiversity_otp_hmac_secret_2026_secure";
+
+  function createVerificationToken(identifier: string, type: string, code: string, expiresAt: number): string {
+    const payload = `${identifier.trim().toLowerCase()}:${type}:${String(code).trim()}:${expiresAt}`;
+    const sig = crypto.createHmac("sha256", VERIFICATION_HMAC_SECRET).update(payload).digest("hex");
+    return `${expiresAt}.${sig}`;
+  }
+
+  function verifyVerificationToken(identifier: string, type: string, code: string, token?: string): boolean {
+    if (!token || typeof token !== "string" || !token.includes(".")) return false;
+    const [expStr, sig] = token.split(".");
+    const expiresAt = Number(expStr);
+    if (!expiresAt || isNaN(expiresAt) || Date.now() > expiresAt) return false;
+    const payload = `${identifier.trim().toLowerCase()}:${type}:${String(code).trim()}:${expiresAt}`;
+    const expectedSig = crypto.createHmac("sha256", VERIFICATION_HMAC_SECRET).update(payload).digest("hex");
+    if (sig.length !== expectedSig.length) return false;
+    try {
+      return crypto.timingSafeEqual(Buffer.from(sig, "utf8"), Buffer.from(expectedSig, "utf8"));
+    } catch {
+      return false;
+    }
+  }
+
+  // Cached Brevo verified senders resolver (ensures Brevo always uses a verified sender email from the connected Brevo account)
+  let cachedBrevoSenders: { keyPrefix: string; senders: { email: string; name: string; active: boolean }[]; fetchedAt: number } | null = null;
+  async function resolveBrevoVerifiedSenders(apiKey: string): Promise<{ email: string; name: string; active: boolean }[]> {
+    if (!apiKey || apiKey.startsWith("xsmtpsib-")) return [];
+    const prefix = apiKey.slice(0, 14);
+    if (cachedBrevoSenders && cachedBrevoSenders.keyPrefix === prefix && Date.now() - cachedBrevoSenders.fetchedAt < 5 * 60 * 1000) {
+      return cachedBrevoSenders.senders;
+    }
+    try {
+      const resp = await axios.get("https://api.brevo.com/v3/senders", {
+        headers: { "accept": "application/json", "api-key": apiKey },
+        timeout: 8000
+      });
+      const list = Array.isArray(resp.data?.senders) ? resp.data.senders : [];
+      const activeList = list
+        .filter((s: any) => s && s.email && s.active !== false)
+        .map((s: any) => ({ email: String(s.email).trim(), name: String(s.name || "SHOPIVERSITY Campus Marketplace").trim(), active: Boolean(s.active) }));
+      cachedBrevoSenders = { keyPrefix: prefix, senders: activeList, fetchedAt: Date.now() };
+      return activeList;
+    } catch (e: any) {
+      console.warn("[BREVO SENDERS CHECK] Could not fetch verified senders:", e?.response?.data?.message || e.message);
+      return [];
+    }
+  }
 
   /**
    * Brevo Transactional SMS Sender (v3)
@@ -261,142 +312,138 @@ app.use((req, res, next) => {
 
       // A: If key has the Brevo SMTP password prefix ("xsmtpsib-"), try Brevo SMTP Relay
       if (isSmtpKey) {
-        const candidateUser = process.env.BREVO_SMTP_USER || fromEmail || "tommzypolaris@gmail.com";
-        try {
-          console.log(`[BREVO SMTP DISPATCHER] Sending "${options.subject}" via Brevo SMTP (smtp-relay.brevo.com:587) with user: ${candidateUser}...`);
-          const transporter = nodemailer.createTransport({
-            host: "smtp-relay.brevo.com",
-            port: 587,
-            secure: false,
-            auth: {
-              user: candidateUser,
-              pass: activeKey
-            },
-            tls: {
-              rejectUnauthorized: false
-            },
-            connectionTimeout: 5000
-          });
+        const candidateUsers = Array.from(new Set([
+          process.env.BREVO_SMTP_USER,
+          process.env.brevo_smtp_user,
+          runtimeBrevoConfig.smtpUser,
+          fromEmail,
+          "fashopcommerce@gmail.com"
+        ].filter((u): u is string => Boolean(u && u.includes("@")))));
 
-          const info = await transporter.sendMail({
-            from: `"${fromName}" <${fromEmail}>`,
-            to: recipients.map(r => r.email).join(", "),
-            subject: options.subject,
-            html: options.htmlContent,
-            text: options.textContent
-          });
-
-          console.log(`[BREVO SMTP SUCCESS] Email successfully sent via Brevo SMTP Relay! MessageId: ${info.messageId}`);
-          return {
-            success: true,
-            provider: "brevo-smtp",
-            messageId: info.messageId
-          };
-        } catch (smtpErr: any) {
-          lastError = `Brevo SMTP Relay: ${smtpErr.message}`;
-          console.log(`[BREVO SMTP NOTICE] Primary SMTP attempt notice: ${smtpErr.message}. Attempting Brevo REST API fallback...`);
-        }
-      }
-
-      // B: Try Brevo REST API v3 (standard xkeysib-... or REST fallback)
-      try {
-        console.log(`[BREVO REST DISPATCHER] Sending email "${options.subject}" via Brevo REST API v3 to ${recipients.map(r => r.email).join(", ")}`);
-        
-        const brevoPayload: any = {
-          sender: {
-            name: fromName,
-            email: fromEmail
-          },
-          to: recipients,
-          subject: options.subject,
-          htmlContent: options.htmlContent
-        };
-
-        if (options.textContent) {
-          brevoPayload.textContent = options.textContent;
-        }
-        if (options.replyTo) {
-          brevoPayload.replyTo = options.replyTo;
-        }
-        if (options.tags && options.tags.length > 0) {
-          brevoPayload.tags = options.tags;
-        }
-
-        const brevoResponse = await axios.post("https://api.brevo.com/v3/smtp/email", brevoPayload, {
-          headers: {
-            "accept": "application/json",
-            "api-key": activeKey,
-            "content-type": "application/json"
-          },
-          timeout: 10000
-        });
-
-        const messageId = brevoResponse.data?.messageId || brevoResponse.data?.id || `BREVO_${Date.now()}`;
-        console.log(`[BREVO SUCCESS] Email successfully dispatched via Brevo REST! MessageId: ${messageId}`);
-        return {
-          success: true,
-          provider: "brevo",
-          messageId
-        };
-      } catch (brevoErr: any) {
-        const errorData = brevoErr.response?.data;
-        const msg = errorData?.message || brevoErr.message || "Unknown Brevo error";
-        console.log(`[BREVO REST NOTICE] Brevo REST API notice: ${msg}`);
-        lastError = lastError ? `${lastError} | Brevo REST: ${msg}` : `Brevo: ${msg}`;
-
-        // C: If REST failed and we haven't tried SMTP yet, attempt Brevo SMTP relay
-        if (!isSmtpKey) {
+        for (const candidateUser of candidateUsers) {
           try {
-            console.log(`[BREVO SMTP FALLBACK] REST API unsuccessful. Attempting Brevo SMTP relay (smtp-relay.brevo.com:587)...`);
+            console.log(`[BREVO SMTP DISPATCHER] Sending "${options.subject}" via Brevo SMTP (smtp-relay.brevo.com:587) with user: ${candidateUser}...`);
             const transporter = nodemailer.createTransport({
               host: "smtp-relay.brevo.com",
               port: 587,
               secure: false,
               auth: {
-                user: process.env.BREVO_SMTP_USER || fromEmail,
+                user: candidateUser,
                 pass: activeKey
               },
               tls: {
                 rejectUnauthorized: false
               },
-              connectionTimeout: 5000
+              connectionTimeout: 7000
             });
 
+            const effectiveFrom = candidateUser.includes("@smtp-brevo.com") ? fromEmail : candidateUser;
             const info = await transporter.sendMail({
-              from: `"${fromName}" <${fromEmail}>`,
+              from: `"${fromName}" <${effectiveFrom}>`,
               to: recipients.map(r => r.email).join(", "),
               subject: options.subject,
               html: options.htmlContent,
               text: options.textContent
             });
 
-            console.log(`[BREVO SMTP FALLBACK SUCCESS] Sent via Brevo SMTP Relay! MessageId: ${info.messageId}`);
+            console.log(`[BREVO SMTP SUCCESS] Email successfully sent via Brevo SMTP Relay! MessageId: ${info.messageId}`);
             return {
               success: true,
               provider: "brevo-smtp",
               messageId: info.messageId
             };
-          } catch (smtpFallErr: any) {
-            console.log(`[BREVO SMTP FALLBACK NOTICE] SMTP fallback notice: ${smtpFallErr.message}`);
+          } catch (smtpErr: any) {
+            lastError = `Brevo SMTP Relay: ${smtpErr.message}`;
+            console.warn(`[BREVO SMTP NOTICE] User ${candidateUser} notice: ${smtpErr.message}`);
+          }
+        }
+      }
+
+      // B: Brevo REST API v3 (xkeysib-...): Resolve verified senders so emails deliver to ALL recipient addresses
+      if (!isSmtpKey) {
+        const verifiedSenders = await resolveBrevoVerifiedSenders(activeKey);
+        const senderCandidates: { email: string; name: string }[] = [];
+
+        // If configured fromEmail matches a verified Brevo sender, try it first; otherwise prioritize verified senders from Brevo account
+        const matchingVerified = verifiedSenders.find(s => s.email.toLowerCase() === fromEmail.toLowerCase());
+        if (matchingVerified) {
+          senderCandidates.push({ email: matchingVerified.email, name: fromName || matchingVerified.name });
+        } else if (verifiedSenders.length > 0) {
+          for (const vs of verifiedSenders) {
+            senderCandidates.push({ email: vs.email, name: fromName || vs.name });
+          }
+          senderCandidates.push({ email: fromEmail, name: fromName });
+        } else {
+          senderCandidates.push({ email: fromEmail, name: fromName });
+        }
+
+        for (const senderCandidate of senderCandidates) {
+          try {
+            console.log(`[BREVO REST DISPATCHER] Sending email "${options.subject}" from ${senderCandidate.email} to ${recipients.map(r => r.email).join(", ")}`);
+
+            const brevoPayload: any = {
+              sender: {
+                name: senderCandidate.name || "SHOPIVERSITY Campus Marketplace",
+                email: senderCandidate.email
+              },
+              to: recipients,
+              subject: options.subject,
+              htmlContent: options.htmlContent
+            };
+
+            if (options.textContent) {
+              brevoPayload.textContent = options.textContent;
+            }
+            if (options.replyTo) {
+              brevoPayload.replyTo = options.replyTo;
+            }
+            if (options.tags && options.tags.length > 0) {
+              brevoPayload.tags = options.tags;
+            }
+
+            const brevoResponse = await axios.post("https://api.brevo.com/v3/smtp/email", brevoPayload, {
+              headers: {
+                "accept": "application/json",
+                "api-key": activeKey,
+                "content-type": "application/json"
+              },
+              timeout: 12000
+            });
+
+            const messageId = brevoResponse.data?.messageId || brevoResponse.data?.id || `BREVO_${Date.now()}`;
+            console.log(`[BREVO SUCCESS] Email successfully dispatched via Brevo REST to ${recipients.map(r => r.email).join(", ")}! MessageId: ${messageId}`);
+            if (senderCandidate.email !== runtimeBrevoConfig.senderEmail) {
+              runtimeBrevoConfig.senderEmail = senderCandidate.email;
+            }
+            return {
+              success: true,
+              provider: "brevo",
+              messageId
+            };
+          } catch (brevoErr: any) {
+            const errorData = brevoErr.response?.data;
+            const msg = errorData?.message || brevoErr.message || "Unknown Brevo error";
+            console.warn(`[BREVO REST NOTICE] Sender ${senderCandidate.email} failed: ${msg}`, errorData || "");
+            lastError = `Brevo (${senderCandidate.email}): ${msg}`;
           }
         }
       }
     } else {
-      console.log(`[BREVO NOTICE] Brevo API Key not configured in .env, Vercel, or UI settings. Checking fallback providers...`);
+      console.log(`[BREVO NOTICE] Brevo API Key not configured in .env, Vercel, or UI settings.`);
     }
 
     if (options.skipFallback) {
       return {
         success: false,
         provider: "brevo",
-        error: lastError || "Failed to deliver email via Brevo. Please verify your Brevo API key (starts with xkeysib- for REST or xsmtpsib- for SMTP) and ensure your sender email is verified in Brevo."
+        error: lastError || "Brevo email delivery failed. Please ensure BREVO_API_KEY is configured and a verified sender exists in Brevo."
       };
     }
 
-    // 2. Try Resend Fallback
-    if (resend) {
+    // 2. Try Resend Fallback ONLY if a custom verified domain sender (RESEND_FROM_EMAIL) is set (never onboarding@resend.dev which only delivers to account owner)
+    if (resend && process.env.RESEND_FROM_EMAIL) {
       try {
-        const resendFrom = process.env.RESEND_FROM_EMAIL || `${fromName} <onboarding@resend.dev>`;
+        const resendFrom = process.env.RESEND_FROM_EMAIL;
         const targetList = recipients.map(r => r.email);
         const { data, error } = await resend.emails.send({
           from: resendFrom,
@@ -497,8 +544,12 @@ app.use((req, res, next) => {
       fs.writeFileSync(BREVO_CONFIG_FILE, JSON.stringify(runtimeBrevoConfig, null, 2), "utf-8");
       console.log(`[BREVO PERSISTENCE] Persisted Brevo settings to ${BREVO_CONFIG_FILE}`);
     } catch (saveErr) {
-      console.warn(`[BREVO PERSISTENCE ERROR] Failed saving ${BREVO_CONFIG_FILE}:`, saveErr);
+      try {
+        fs.writeFileSync(TMP_BREVO_CONFIG_FILE, JSON.stringify(runtimeBrevoConfig, null, 2), "utf-8");
+      } catch {}
+      console.warn(`[BREVO PERSISTENCE NOTICE] Fallback /tmp persistence used:`, saveErr);
     }
+    cachedBrevoSenders = null;
 
     console.log(`[BREVO CONFIG UPDATED] Sender: ${runtimeBrevoConfig.senderName} <${runtimeBrevoConfig.senderEmail}>, SMS: ${runtimeBrevoConfig.smsSender}, Key Set: ${Boolean(runtimeBrevoConfig.apiKey)}`);
 
@@ -609,6 +660,7 @@ app.use((req, res, next) => {
       "fashinaayomide2005@gmail.com",
       "fashinaayomide@2005@gmail.com",
       "fashinaayomide12005@gmail.com",
+      "fashopcommerce@gmail.com",
       "shopiversitycommerce@gmail.com"
     ]);
 
@@ -735,26 +787,28 @@ app.use((req, res, next) => {
   app.post("/api/test-email", handleSecureTestEmail);
   app.get("/api/test-email", handleSecureTestEmail);
 
-  // API Routes: 1. Email Verification Endpoint (Powered by Brevo)
+  // API Routes: 1. Email Verification Endpoint (Strictly Powered by Brevo)
   app.post("/api/send-verification", async (req, res) => {
     const { email, code, userName } = req.body;
 
-    if (!email || !code) {
-      return res.status(400).json({ error: "Email and code are required" });
+    if (!email) {
+      return res.status(400).json({ success: false, sent: false, error: "Email is required" });
     }
 
-    const targetEmail = email.trim().toLowerCase();
-    const cleanCode = String(code).trim();
-    console.log(`[VERIFICATION ENGINE] Dispatching verification code ${cleanCode} to: ${targetEmail}`);
+    const targetEmail = String(email).trim().toLowerCase();
+    const cleanCode = code ? String(code).trim() : crypto.randomInt(100000, 1000000).toString();
+    const expiresAt = Date.now() + 15 * 60 * 1000;
+    console.log(`[VERIFICATION ENGINE] Dispatching Brevo verification code to: ${targetEmail}`);
 
-    // Store in verification store with 15-minute validity
+    // Store in verification store with 15-minute validity + generate stateless HMAC verification token
     verificationCodesStore.set(targetEmail, {
       code: cleanCode,
       target: targetEmail,
       type: "email",
-      expiresAt: Date.now() + 15 * 60 * 1000,
+      expiresAt,
       userName: userName || "Student"
     });
+    const verificationToken = createVerificationToken(targetEmail, "email", cleanCode, expiresAt);
 
     const htmlContent = `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
@@ -768,7 +822,7 @@ app.use((req, res, next) => {
           </div>
           <h2 style="color: #1e293b; font-size: 22px; font-weight: 800; margin-top: 0; margin-bottom: 8px;">Verify Your Email Address</h2>
           <p style="color: #475569; font-size: 14px; margin-bottom: 24px; line-height: 1.5;">
-            Welcome ${userName ? `<strong>${userName}</strong>` : "to SHOPIVERSITY"}! Please enter the 6-digit confirmation code below to activate your student account:
+            Welcome ${userName ? `<strong>${userName}</strong>` : "to SHOPIVERSITY"}! Please enter the 6-digit confirmation code below on the website to verify your account:
           </p>
           <div style="background-color: #ffffff; padding: 20px 32px; display: inline-block; border-radius: 16px; border: 2px dashed #ff6b00; box-shadow: 0 10px 20px -3px rgba(255, 107, 0, 0.15);">
             <span style="font-size: 38px; font-weight: 900; letter-spacing: 12px; color: #ff6b00; font-family: monospace;">${cleanCode}</span>
@@ -791,15 +845,16 @@ app.use((req, res, next) => {
       to: targetEmail,
       subject: `${cleanCode} is your SHOPIVERSITY Verification Code`,
       htmlContent,
-      tags: ["verification", "signup-auth"]
+      tags: ["verification", "signup-auth"],
+      skipFallback: true
     });
 
     if (!dispatchResult.success) {
-      console.log(`[VERIFICATION ENGINE] Brevo email delivery notice for ${targetEmail}: ${dispatchResult.error || "Pending Brevo delivery"}`);
-      return res.status(200).json({
-        success: true,
+      console.error(`[VERIFICATION ENGINE] Brevo delivery failed for ${targetEmail}:`, dispatchResult.error);
+      return res.status(400).json({
+        success: false,
         sent: false,
-        message: `Verification code dispatched to ${targetEmail} via Brevo. Please check your inbox.`,
+        error: dispatchResult.error || `Failed to deliver verification code to ${targetEmail} via Brevo. Please verify your Brevo API Key and verified sender.`,
         targetEmail
       });
     }
@@ -809,6 +864,7 @@ app.use((req, res, next) => {
       sent: true,
       provider: dispatchResult.provider,
       messageId: dispatchResult.messageId,
+      verificationToken,
       message: `Verification email sent directly to ${targetEmail} via ${dispatchResult.provider.toUpperCase()}`,
       targetEmail
     });
@@ -819,7 +875,7 @@ app.use((req, res, next) => {
     const { phoneNumber, code, userName } = req.body;
 
     if (!phoneNumber) {
-      return res.status(400).json({ error: "Phone number is required." });
+      return res.status(400).json({ success: false, sent: false, error: "Phone number is required." });
     }
 
     let cleanPhone = String(phoneNumber).replace(/[\s\-\(\)]/g, "");
@@ -831,17 +887,19 @@ app.use((req, res, next) => {
       }
     }
 
-    const verificationCode = code ? String(code).trim() : Math.floor(100000 + Math.random() * 900000).toString();
-    console.log(`[PHONE VERIFICATION] Sending SMS code ${verificationCode} to: ${cleanPhone}`);
+    const verificationCode = code ? String(code).trim() : crypto.randomInt(100000, 1000000).toString();
+    const expiresAt = Date.now() + 15 * 60 * 1000;
+    console.log(`[PHONE VERIFICATION] Sending Brevo SMS code to: ${cleanPhone}`);
 
-    // Store in verification store
+    // Store in verification store + generate stateless HMAC verification token
     verificationCodesStore.set(cleanPhone, {
       code: verificationCode,
       target: cleanPhone,
       type: "phone",
-      expiresAt: Date.now() + 15 * 60 * 1000,
+      expiresAt,
       userName: userName || "Student"
     });
+    const verificationToken = createVerificationToken(cleanPhone, "phone", verificationCode, expiresAt);
 
     const smsContent = `Your SHOPIVERSITY verification code is ${verificationCode}. Valid for 15 minutes. Never share this code.`;
 
@@ -851,12 +909,12 @@ app.use((req, res, next) => {
     });
 
     if (!smsResult.success) {
-      console.log(`[PHONE VERIFICATION NOTICE] Brevo SMS response:`, smsResult.error);
-      return res.status(200).json({
-        success: true,
+      console.warn(`[PHONE VERIFICATION ERROR] Brevo SMS failed:`, smsResult.error);
+      return res.status(400).json({
+        success: false,
         sent: false,
         phoneNumber: cleanPhone,
-        message: "SMS verification code dispatched via Brevo."
+        error: smsResult.error || "Failed to send SMS verification code via Brevo."
       });
     }
 
@@ -865,6 +923,7 @@ app.use((req, res, next) => {
       sent: true,
       provider: "brevo",
       messageId: smsResult.messageId,
+      verificationToken,
       phoneNumber: cleanPhone,
       message: `SMS verification code dispatched via Brevo to ${cleanPhone}`
     });
@@ -872,7 +931,7 @@ app.use((req, res, next) => {
 
   // API Routes: 1c. Universal OTP Code Verification Endpoint
   app.post("/api/verify-code", (req, res) => {
-    const { identifier, code } = req.body;
+    const { identifier, code, verificationToken, type } = req.body;
 
     if (!identifier || !code) {
       return res.status(400).json({ success: false, error: "Identifier (email/phone) and 6-digit code are required." });
@@ -880,46 +939,65 @@ app.use((req, res, next) => {
 
     const cleanId = String(identifier).trim().toLowerCase();
     const cleanPhoneId = String(identifier).replace(/[\s\-\(\)]/g, "");
+    const normalizedPhone = !cleanPhoneId.startsWith("+") && cleanPhoneId.startsWith("0") && cleanPhoneId.length === 11
+      ? `+234${cleanPhoneId.slice(1)}`
+      : (cleanPhoneId.startsWith("+") ? cleanPhoneId : `+${cleanPhoneId}`);
     const cleanCode = String(code).trim();
+    const tokenType = type || (cleanId.includes("@") ? "email" : "phone");
 
-    // Check by email or phone variant
-    const record = verificationCodesStore.get(cleanId) || 
+    // Check in-memory store by email or phone variant
+    const record = verificationCodesStore.get(cleanId) ||
                    verificationCodesStore.get(cleanPhoneId) ||
-                   (cleanPhoneId.startsWith("0") ? verificationCodesStore.get(`+234${cleanPhoneId.slice(1)}`) : undefined);
+                   verificationCodesStore.get(normalizedPhone);
 
-    if (!record) {
-      return res.status(400).json({ 
-        success: false, 
-        verified: false, 
-        error: "Verification code expired or not found. Please click 'Resend Code'." 
+    if (record) {
+      if (Date.now() > record.expiresAt) {
+        verificationCodesStore.delete(record.target);
+        return res.status(400).json({
+          success: false,
+          verified: false,
+          error: "Verification code has expired. Please request a fresh code."
+        });
+      }
+
+      if (record.code !== cleanCode) {
+        return res.status(400).json({
+          success: false,
+          verified: false,
+          error: "Incorrect 6-digit code. Please check your email and try again."
+        });
+      }
+
+      verificationCodesStore.delete(record.target);
+      return res.status(200).json({
+        success: true,
+        verified: true,
+        message: "Code successfully verified!",
+        target: record.target,
+        type: record.type
       });
     }
 
-    if (Date.now() > record.expiresAt) {
-      verificationCodesStore.delete(cleanId);
-      return res.status(400).json({ 
-        success: false, 
-        verified: false, 
-        error: "Verification code has expired. Please request a fresh code." 
+    // Stateless HMAC verification token fallback (for serverless multi-instance execution)
+    const tokenIdentifier = tokenType === "phone" ? normalizedPhone : cleanId;
+    if (verificationToken && (
+      verifyVerificationToken(tokenIdentifier, tokenType, cleanCode, verificationToken) ||
+      verifyVerificationToken(cleanId, tokenType, cleanCode, verificationToken) ||
+      verifyVerificationToken(cleanPhoneId, tokenType, cleanCode, verificationToken)
+    )) {
+      return res.status(200).json({
+        success: true,
+        verified: true,
+        message: "Code successfully verified!",
+        target: tokenIdentifier,
+        type: tokenType
       });
     }
 
-    if (record.code !== cleanCode) {
-      return res.status(400).json({ 
-        success: false, 
-        verified: false, 
-        error: "Incorrect 6-digit code. Please check and try again." 
-      });
-    }
-
-    // Code matches!
-    verificationCodesStore.delete(cleanId);
-    return res.status(200).json({
-      success: true,
-      verified: true,
-      message: "Code successfully verified!",
-      target: record.target,
-      type: record.type
+    return res.status(400).json({
+      success: false,
+      verified: false,
+      error: "Verification code is invalid or expired. Please click 'Resend Code'."
     });
   });
 
@@ -1078,26 +1156,59 @@ app.use((req, res, next) => {
     });
   });
 
-  // API Routes: 3. Send Password Reset / Change Password Email (Powered by Brevo)
+  // API Routes: 3. Send Password Reset Security Code Email (Strictly Powered by Brevo - NOT Firebase)
   app.post("/api/send-password-reset", async (req, res) => {
-    const { email, code, resetLink, userName } = req.body;
+    const { email, code, userName } = req.body;
 
     if (!email) {
-      return res.status(400).json({ error: "Email is required" });
+      return res.status(400).json({ success: false, sent: false, error: "Email is required" });
     }
 
-    const targetEmail = email.trim();
-    const resetCode = code || Math.floor(100000 + Math.random() * 900000).toString();
-    console.log(`[PASSWORD SECURITY] Sending password change/reset code to ${targetEmail}`);
+    const targetEmail = String(email).trim().toLowerCase();
 
-    // Store in verificationCodesStore for OTP validation
-    verificationCodesStore.set(targetEmail.toLowerCase(), {
-      code: String(resetCode).trim(),
-      target: targetEmail.toLowerCase(),
+    // Verify account is registered if Firebase Admin DB is authorized
+    if (firebaseAdminDb && isAdminDbAuthorized) {
+      try {
+        const [uSnap, lSnap] = await Promise.all([
+          firebaseAdminDb.collection("users").where("email", "==", targetEmail).limit(1).get(),
+          firebaseAdminDb.collection("logistics_companies").where("email", "==", targetEmail).limit(1).get()
+        ]);
+        if (uSnap.empty && lSnap.empty) {
+          return res.status(404).json({
+            success: false,
+            sent: false,
+            error: `No account is registered with "${targetEmail}". Unregistered emails cannot reset a password.`
+          });
+        }
+        const profileData = (!uSnap.empty ? uSnap.docs[0].data() : lSnap.docs[0].data()) as any;
+        if (profileData?.authProvider === "google" || (profileData?.isGoogleAccount && !profileData?.hasPassword)) {
+          return res.status(400).json({
+            success: false,
+            sent: false,
+            isGoogleAccount: true,
+            error: `The account for "${targetEmail}" was signed up through Google and has no password. Please sign in with Google.`
+          });
+        }
+      } catch (dbErr: any) {
+        if (dbErr?.code === 7 || dbErr?.message?.includes("PERMISSION_DENIED")) {
+          isAdminDbAuthorized = false;
+        }
+      }
+    }
+
+    const resetCode = code ? String(code).trim() : crypto.randomInt(100000, 1000000).toString();
+    const expiresAt = Date.now() + 15 * 60 * 1000;
+    console.log(`[PASSWORD SECURITY] Sending Brevo password reset code to ${targetEmail}`);
+
+    // Store in verificationCodesStore + HMAC verificationToken
+    verificationCodesStore.set(targetEmail, {
+      code: resetCode,
+      target: targetEmail,
       type: "password_reset",
-      expiresAt: Date.now() + 15 * 60 * 1000,
+      expiresAt,
       userName: userName || ""
     });
+    const verificationToken = createVerificationToken(targetEmail, "password_reset", resetCode, expiresAt);
 
     const htmlContent = `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
@@ -1112,20 +1223,12 @@ app.use((req, res, next) => {
           </div>
           <h2 style="color: #991b1b; font-size: 22px; font-weight: 800; margin: 0 0 10px 0;">Reset Your Password</h2>
           <p style="color: #475569; font-size: 14px; margin-bottom: 20px; line-height: 1.5;">
-            Hello ${userName ? `<strong>${userName}</strong>` : ""}, we received a request to change the password for your SHOPIVERSITY account. Enter the 6-digit security code below:
+            Hello ${userName ? `<strong>${userName}</strong>` : ""}, we received a request to reset the password for your SHOPIVERSITY account. Enter the 6-digit security code below on the website:
           </p>
 
           <div style="background-color: #ffffff; padding: 18px 28px; display: inline-block; border-radius: 16px; border: 2px dashed #ef4444; box-shadow: 0 10px 20px -3px rgba(239, 68, 68, 0.15); margin-bottom: 16px;">
             <span style="font-size: 36px; font-weight: 900; letter-spacing: 10px; color: #dc2626; font-family: monospace;">${resetCode}</span>
           </div>
-
-          ${resetLink ? `
-            <div style="margin-top: 16px;">
-              <a href="${resetLink}" target="_blank" style="display: inline-block; background-color: #ef4444; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 12px; font-size: 13px; font-weight: 800;">
-                Click Here to Reset Password
-              </a>
-            </div>
-          ` : ""}
 
           <p style="color: #94a3b8; font-size: 11px; margin-top: 16px; margin-bottom: 0;">
             This security code will expire in 15 minutes.
@@ -1134,7 +1237,7 @@ app.use((req, res, next) => {
 
         <div style="background-color: #f8fafc; padding: 16px; border-radius: 14px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
           <p style="color: #64748b; font-size: 12px; line-height: 1.5; margin: 0;">
-            ⚠️ <strong>Security Alert:</strong> If you did not make this request, someone may be attempting to access your account. Please log in immediately and review your profile security settings.
+            ⚠️ <strong>Security Alert:</strong> If you did not make this request, you can safely ignore this email.
           </p>
         </div>
 
@@ -1147,22 +1250,101 @@ app.use((req, res, next) => {
 
     const dispatchResult = await sendBrevoOrFallbackEmail({
       to: targetEmail,
-      subject: `🔑 SHOPIVERSITY Password Reset Security Code (${resetCode})`,
+      subject: `🔑 ${resetCode} is your SHOPIVERSITY Password Reset Code`,
       htmlContent,
-      tags: ["security", "password-reset"]
+      tags: ["security", "password-reset"],
+      skipFallback: true
     });
 
+    if (!dispatchResult.success) {
+      return res.status(400).json({
+        success: false,
+        sent: false,
+        error: dispatchResult.error || "Failed to send password reset code via Brevo. Please verify your Brevo configuration.",
+        verificationToken,
+        targetEmail
+      });
+    }
+
     return res.status(200).json({
-      success: dispatchResult.success,
-      sent: dispatchResult.success,
+      success: true,
+      sent: true,
       provider: dispatchResult.provider,
       messageId: dispatchResult.messageId,
-      code: resetCode,
-      message: dispatchResult.success 
-        ? `Password reset code sent to ${targetEmail}`
-        : "Failed to deliver reset email, code auto-generated",
+      verificationToken,
+      message: `Password reset security code sent to ${targetEmail} via Brevo!`,
       targetEmail
     });
+  });
+
+  // API Routes: 3b. Verify Brevo Reset Code & Complete Password Reset
+  app.post("/api/auth/complete-password-reset", async (req, res) => {
+    const { email, code, verificationToken, newPassword } = req.body;
+
+    if (!email || !code || !newPassword) {
+      return res.status(400).json({ success: false, error: "Email, 6-digit code, and new password are required." });
+    }
+
+    const cleanEmail = String(email).trim().toLowerCase();
+    const cleanCode = String(code).trim();
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#^()_+\-=\[\]{};':"\\|,.<>\/?]).{6,}$/;
+    if (!passwordRegex.test(String(newPassword))) {
+      return res.status(400).json({
+        success: false,
+        error: "Password must be at least 6 characters and contain uppercase, lowercase, number, and special character."
+      });
+    }
+
+    let isCodeValid = false;
+    const record = verificationCodesStore.get(cleanEmail);
+    if (record && record.type === "password_reset") {
+      if (Date.now() > record.expiresAt) {
+        verificationCodesStore.delete(cleanEmail);
+        return res.status(400).json({ success: false, error: "Reset code has expired. Please request a fresh code." });
+      }
+      if (record.code === cleanCode) {
+        isCodeValid = true;
+        verificationCodesStore.delete(cleanEmail);
+      }
+    } else if (verificationToken && verifyVerificationToken(cleanEmail, "password_reset", cleanCode, verificationToken)) {
+      isCodeValid = true;
+    }
+
+    if (!isCodeValid) {
+      return res.status(400).json({ success: false, error: "Invalid or expired 6-digit reset code. Please check your email and try again." });
+    }
+
+    try {
+      const authUser = await admin.auth().getUserByEmail(cleanEmail);
+      const isGoogleOnly =
+        authUser.providerData.some(p => p.providerId === "google.com") &&
+        !authUser.providerData.some(p => p.providerId === "password");
+      if (isGoogleOnly) {
+        return res.status(400).json({
+          success: false,
+          isGoogleAccount: true,
+          error: `The account for "${cleanEmail}" was signed up through Google and has no password. Please sign in using Continue with Google.`
+        });
+      }
+
+      await admin.auth().updateUser(authUser.uid, { password: String(newPassword) });
+      return res.status(200).json({
+        success: true,
+        message: "Your password has been updated! You can now sign in with your new password."
+      });
+    } catch (authErr: any) {
+      console.error("[PASSWORD RESET COMPLETE ERROR]", authErr?.code, authErr?.message);
+      if (authErr?.code === "auth/user-not-found") {
+        return res.status(404).json({
+          success: false,
+          error: "No registered account found for this email address."
+        });
+      }
+      return res.status(400).json({
+        success: false,
+        error: "Code verified, but server Firebase Admin credentials (FIREBASE_SERVICE_ACCOUNT) are required to apply the new password. Please contact support or configure FIREBASE_SERVICE_ACCOUNT in server environment."
+      });
+    }
   });
 
   // API Routes: 4. Send Customer Service & Support Ticket Email (Powered by Brevo)
@@ -2770,9 +2952,20 @@ const FALLBACK_BANKS = [
     if (fs.existsSync(configPath)) {
       const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
       if (admin.apps.length === 0) {
-        admin.initializeApp({
-          projectId: config.projectId,
-        });
+        const saRaw = process.env.FIREBASE_SERVICE_ACCOUNT || process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+        if (saRaw && saRaw.trim().startsWith("{")) {
+          try {
+            const saJson = JSON.parse(saRaw);
+            admin.initializeApp({
+              credential: admin.credential.cert(saJson),
+              projectId: saJson.project_id || config.projectId,
+            });
+          } catch {
+            admin.initializeApp({ projectId: config.projectId });
+          }
+        } else {
+          admin.initializeApp({ projectId: config.projectId });
+        }
       }
       firebaseAdminDb = config.firestoreDatabaseId 
         ? getFirestore(config.firestoreDatabaseId)

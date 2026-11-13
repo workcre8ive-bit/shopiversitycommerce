@@ -3,11 +3,13 @@ import { auth, db, googleProvider } from "../firebase";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
 import { generateReferralCode, cn, getOrderDeliveryPin, getOrderSellerHandoverPin, cleanPinInput } from "../lib/utils";
 import Logo from "./Logo";
-import AuthErrorModal from "./AuthErrorModal";
+import AuthErrorModal, { AuthErrorModalProps } from "./AuthErrorModal";
 import { 
   createUserWithEmailAndPassword, 
   signInWithEmailAndPassword, 
   signOut,
+  deleteUser,
+  fetchSignInMethodsForEmail,
   signInWithPopup,
   signInWithRedirect,
   getRedirectResult
@@ -142,12 +144,14 @@ export default function LogisticsHub({
   const [successMsg, setSuccessMsg] = React.useState("");
   const [errorPopup, setErrorPopup] = React.useState<{
     isOpen: boolean;
-    type: "logistics_mismatch" | "buyer_seller_mismatch" | "email_in_use" | "generic";
+    type: AuthErrorModalProps["type"];
     title: string;
     message: string;
     email?: string;
     primaryActionLabel?: string;
     onPrimaryAction?: () => void;
+    secondaryActionLabel?: string;
+    onSecondaryAction?: () => void;
   } | null>(null);
 
   // Auth User state
@@ -157,49 +161,207 @@ export default function LogisticsHub({
   const [loginEmail, setLoginEmail] = React.useState("");
   const [loginPassword, setLoginPassword] = React.useState("");
 
-  // Forgot Password states
+  // Forgot Password states (Strictly via Brevo - NOT Firebase)
   const [showForgotPassword, setShowForgotPassword] = React.useState(false);
   const [resetEmail, setResetEmail] = React.useState("");
   const [resetEmailSent, setResetEmailSent] = React.useState(false);
+  const [resetStep, setResetStep] = React.useState<"email" | "verify" | "done">("email");
+  const [resetCodeInput, setResetCodeInput] = React.useState("");
+  const [resetNewPassword, setResetNewPassword] = React.useState("");
+  const [resetConfirmPassword, setResetConfirmPassword] = React.useState("");
+  const [resetVerificationToken, setResetVerificationToken] = React.useState("");
+  const [resetResendCooldown, setResetResendCooldown] = React.useState(0);
+  const [resetNotice, setResetNotice] = React.useState("");
   const [resetLoading, setResetLoading] = React.useState(false);
   const [resetError, setResetError] = React.useState("");
+
+  React.useEffect(() => {
+    if (resetResendCooldown <= 0) return;
+    const timer = setInterval(() => {
+      setResetResendCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [resetResendCooldown]);
 
   const handlePasswordReset = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!resetEmail || !resetEmail.trim()) {
-      setResetError("Please enter your account email address.");
+      setResetError("Please enter your registered partner email address.");
       return;
     }
+    const cleanEmail = resetEmail.trim().toLowerCase();
+    const rawTrimmedEmail = resetEmail.trim();
     setResetLoading(true);
     setResetError("");
+    setResetNotice("");
     try {
-      const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+      // 1. Check registration in Firestore
+      let isRegistered = false;
+      let isGoogleOnly = false;
+      let foundName = "";
+      try {
+        const [lLower, lRaw, uLower, uRaw] = await Promise.all([
+          getDocs(query(collection(db, "logistics_companies"), where("email", "==", cleanEmail))),
+          rawTrimmedEmail !== cleanEmail ? getDocs(query(collection(db, "logistics_companies"), where("email", "==", rawTrimmedEmail))) : Promise.resolve({ empty: true, docs: [] } as any),
+          getDocs(query(collection(db, "users"), where("email", "==", cleanEmail))),
+          rawTrimmedEmail !== cleanEmail ? getDocs(query(collection(db, "users"), where("email", "==", rawTrimmedEmail))) : Promise.resolve({ empty: true, docs: [] } as any)
+        ]);
+        const logDocs = !lLower.empty ? lLower.docs : lRaw.docs;
+        const userDocs = !uLower.empty ? uLower.docs : uRaw.docs;
+        if (logDocs.length > 0 || userDocs.length > 0) {
+          isRegistered = true;
+          const data = (logDocs[0]?.data() || userDocs[0]?.data()) as any;
+          foundName = data.companyName || data.displayName || "";
+          if (data.authProvider === "google" || (data.isGoogleAccount && !data.hasPassword)) {
+            isGoogleOnly = true;
+          }
+        }
+      } catch (dbErr) {
+        console.warn("Logistics password reset registration lookup notice:", dbErr);
+      }
+
+      if (!isRegistered) {
+        setResetError(`No account is registered with "${cleanEmail}". Unregistered emails cannot reset a password. Please register first.`);
+        setResetLoading(false);
+        return;
+      }
+
+      if (!isGoogleOnly) {
+        try {
+          const methods = await fetchSignInMethodsForEmail(auth, cleanEmail);
+          if (methods.includes("google.com") && !methods.includes("password")) {
+            isGoogleOnly = true;
+          }
+        } catch {}
+      }
+
+      if (isGoogleOnly) {
+        setResetLoading(false);
+        setShowForgotPassword(false);
+        setErrorPopup({
+          isOpen: true,
+          type: "google_account_no_password",
+          title: "Google Sign-In Account",
+          message: `The account for "${cleanEmail}" was signed up through Google. There is no password for this account. Please sign in by clicking "Log In with Google".`,
+          email: cleanEmail,
+          primaryActionLabel: "Log In with Google",
+          onPrimaryAction: async () => {
+            setErrorPopup(null);
+            await handleGoogleAuth();
+          },
+          secondaryActionLabel: "Close",
+          onSecondaryAction: () => setErrorPopup(null)
+        });
+        return;
+      }
+
       const res = await fetch("/api/send-password-reset", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          email: resetEmail.trim(),
-          code: resetCode,
-          resetLink: `${window.location.origin}/?tab=logistics`
+          email: cleanEmail,
+          userName: foundName
         })
       });
       const data = await res.json().catch(() => ({}));
-      if (res.ok && data.success !== false) {
+      if (res.ok && data.sent) {
+        setResetVerificationToken(data.verificationToken || "");
+        setResetCodeInput("");
+        setResetNewPassword("");
+        setResetConfirmPassword("");
+        setResetNotice(`A 6-digit reset code has been sent to ${cleanEmail} via Brevo. Check your email inbox and enter it below.`);
+        setResetResendCooldown(30);
+        setResetStep("verify");
         setResetEmailSent(true);
       } else {
-        setResetError(data.error || "Failed to send reset email via Brevo. Please check your Brevo configuration.");
+        setResetError(data.error || "Failed to send reset code via Brevo. Please verify your Brevo configuration.");
       }
     } catch (err: any) {
       console.error("Password reset error:", err);
-      if (err.code === "auth/user-not-found") {
-        setResetError("No account found with this email address.");
-      } else if (err.code === "auth/invalid-email") {
-        setResetError("Please enter a valid email address.");
-      } else if (err.code === "auth/too-many-requests") {
-        setResetError("Too many password reset requests. Please wait a moment and try again.");
-      } else {
-        setResetError(err.message || "Failed to send password reset email. Please try again.");
+      setResetError(err.message || "Failed to send password reset code via Brevo. Please try again.");
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
+  const handleResendResetCode = async () => {
+    if (resetResendCooldown > 0 || resetLoading || !resetEmail.trim()) return;
+    const cleanEmail = resetEmail.trim().toLowerCase();
+    setResetLoading(true);
+    setResetError("");
+    setResetNotice("");
+    try {
+      const res = await fetch("/api/send-password-reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: cleanEmail })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.sent) {
+        setResetError(data.error || "Failed to resend reset code via Brevo.");
+        return;
       }
+      setResetVerificationToken(data.verificationToken || "");
+      setResetCodeInput("");
+      setResetNotice(`A fresh 6-digit reset code has been dispatched to ${cleanEmail} via Brevo. Check your inbox.`);
+      setResetResendCooldown(30);
+    } catch (err: any) {
+      setResetError(err.message || "Failed to resend reset code.");
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
+  const handleCompletePasswordReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanEmail = resetEmail.trim().toLowerCase();
+    const cleanCode = resetCodeInput.trim();
+    if (cleanCode.length !== 6) {
+      setResetError("Please enter the full 6-digit code from your email.");
+      return;
+    }
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#^()_+\-=\[\]{};':"\\|,.<>\/?]).{6,}$/;
+    if (!passwordRegex.test(resetNewPassword)) {
+      setResetError("Password must be at least 6 characters and contain uppercase, lowercase, number, and special character.");
+      return;
+    }
+    if (resetNewPassword !== resetConfirmPassword) {
+      setResetError("Passwords do not match.");
+      return;
+    }
+
+    setResetLoading(true);
+    setResetError("");
+    try {
+      const res = await fetch("/api/auth/complete-password-reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: cleanEmail,
+          code: cleanCode,
+          verificationToken: resetVerificationToken,
+          newPassword: resetNewPassword
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        if (data.isGoogleAccount) {
+          setShowForgotPassword(false);
+          setErrorPopup({
+            isOpen: true,
+            type: "google_account_no_password",
+            title: "Google Sign-In Account",
+            message: `The account for "${cleanEmail}" was signed up through Google and has no password. Please use Log In with Google.`,
+            email: cleanEmail
+          });
+          return;
+        }
+        setResetError(data.error || "Invalid or expired 6-digit reset code. Please check your email and try again.");
+        return;
+      }
+      setResetStep("done");
+    } catch (err: any) {
+      setResetError(err.message || "Failed to complete password reset.");
     } finally {
       setResetLoading(false);
     }
@@ -225,9 +387,9 @@ export default function LogisticsHub({
   // Campus search in signup
   const [campusSearch, setCampusSearch] = React.useState("");
 
-  // Verification code states
+  // Verification code states (Server-side via Brevo — NEVER stored or displayed in UI)
   const [verificationCode, setVerificationCode] = React.useState("");
-  const [generatedOtp, setGeneratedOtp] = React.useState("");
+  const [verificationToken, setVerificationToken] = React.useState("");
   const [resendCooldown, setResendCooldown] = React.useState(0);
   const [isResending, setIsResending] = React.useState(false);
 
@@ -773,47 +935,92 @@ export default function LogisticsHub({
     const cleanGoogleEmail = (user.email || "").toLowerCase().trim();
     
     // 1. Check if logistics company profile already exists
+    let existingProfile: LogisticsCompany | null = null;
     const companyDoc = await getDoc(doc(db, "logistics_companies", user.uid));
-    
     if (companyDoc.exists()) {
-      const profile = companyDoc.data() as LogisticsCompany;
-      if (profile.isVerified) {
-        await setDoc(doc(db, "users", user.uid), {
-          role: "logistics",
-          state: "Logistics Partner",
-          displayName: profile.companyName,
-          businessName: profile.companyName,
-          isVerified: true
-        }, { merge: true }).catch(() => {});
-        setCompanyProfile(profile);
-        setView("dashboard");
-        return;
-      }
-    }
-
-    // 2. Check if this email is actively registered to an existing company by email query
-    if (cleanGoogleEmail) {
+      existingProfile = companyDoc.data() as LogisticsCompany;
+    } else if (cleanGoogleEmail) {
       try {
         const qComp = query(collection(db, "logistics_companies"), where("email", "==", cleanGoogleEmail));
         const snapComp = await getDocs(qComp);
         if (!snapComp.empty) {
-          const profile = snapComp.docs[0].data() as LogisticsCompany;
-          if (profile.isVerified) {
-            await setDoc(doc(db, "users", user.uid), {
-              role: "logistics",
-              state: "Logistics Partner",
-              displayName: profile.companyName,
-              businessName: profile.companyName,
-              isVerified: true
-            }, { merge: true }).catch(() => {});
-            setCompanyProfile(profile);
-            setView("dashboard");
-            return;
-          }
+          existingProfile = snapComp.docs[0].data() as LogisticsCompany;
         }
       } catch (e) {
         console.warn("Logistics Google email check notice:", e);
       }
+    }
+
+    if (existingProfile) {
+      if (!existingProfile.isVerified) {
+        setCompanyProfile(existingProfile);
+        setEmail(cleanGoogleEmail || existingProfile.email || "");
+        setCompanyName(existingProfile.companyName || "");
+        setVerificationCode("");
+        setResendCooldown(30);
+        try {
+          const vRes = await fetch("/api/send-verification", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              email: cleanGoogleEmail || existingProfile.email,
+              userName: existingProfile.companyName,
+              role: "logistics"
+            })
+          });
+          const vData = await vRes.json().catch(() => ({}));
+          if (vRes.ok && vData.sent) {
+            setVerificationToken(vData.verificationToken || "");
+            setSuccessMsg(`A 6-digit verification code has been sent to ${cleanGoogleEmail} via Brevo. Check your email inbox and enter it below.`);
+          } else {
+            setError(vData.error || `Failed to send verification code to ${cleanGoogleEmail} via Brevo. Please click Resend Code.`);
+          }
+        } catch {
+          setError("Network error sending Brevo verification code. Please click Resend Code.");
+        }
+        setView("verify");
+        return;
+      }
+
+      await setDoc(doc(db, "users", user.uid), {
+        role: "logistics",
+        state: "Logistics Partner",
+        displayName: existingProfile.companyName,
+        businessName: existingProfile.companyName,
+        isVerified: true,
+        authProvider: "google",
+        isGoogleAccount: true,
+        hasPassword: false
+      }, { merge: true }).catch(() => {});
+      setCompanyProfile(existingProfile);
+      setView("dashboard");
+      return;
+    }
+
+    // 2. If in login mode, reject unregistered email immediately
+    if (view === "login") {
+      try {
+        await deleteUser(user);
+      } catch {
+        await signOut(auth).catch(() => {});
+      }
+      setErrorPopup({
+        isOpen: true,
+        type: "profile_missing",
+        title: "Unregistered Email Address",
+        message: `The email "${cleanGoogleEmail}" is not registered as a Logistics Partner on SHOPIVERSITY. Unregistered emails cannot sign in. Please register your company first.`,
+        email: cleanGoogleEmail,
+        primaryActionLabel: "Register Company",
+        onPrimaryAction: () => {
+          setErrorPopup(null);
+          setView("signup");
+          setEmail(cleanGoogleEmail);
+        },
+        secondaryActionLabel: "Close",
+        onSecondaryAction: () => setErrorPopup(null)
+      });
+      setError(`No logistics account is registered with "${cleanGoogleEmail}". Unregistered emails cannot sign in.`);
+      return;
     }
 
     // 3. Create/Register new company profile using Google account details or filled form inputs
@@ -827,7 +1034,7 @@ export default function LogisticsHub({
       vehicleTypes: selectedVehicles.length > 0 ? selectedVehicles : ["Bike / Motorcycle"],
       coveredCampuses: selectedCampuses.length > 0 ? selectedCampuses : ["University Main Campus"],
       baseDeliveryPrice: Number(basePrice) > 0 ? Number(basePrice) : 500,
-      isVerified: false, // 6-digit email OTP verification required
+      isVerified: false, // 6-digit email OTP verification required via Brevo
       isActive: true,
       createdAt: new Date().toISOString()
     };
@@ -856,7 +1063,10 @@ export default function LogisticsHub({
         location: profile.officeAddress,
         deliveryAddress: profile.officeAddress,
         state: "Logistics Partner",
-        profileCompleted: true
+        profileCompleted: true,
+        authProvider: "google",
+        isGoogleAccount: true,
+        hasPassword: false
       }, { merge: true })
     ]);
 
@@ -877,32 +1087,33 @@ export default function LogisticsHub({
     localStorage.removeItem('referredBy');
 
     setCompanyProfile(profile);
-
-    // Generate random 6-digit OTP and send via Brevo
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    setGeneratedOtp(otp);
     setVerificationCode("");
     setEmail(cleanGoogleEmail || user.email || "");
     setCompanyName(profile.companyName);
     setResendCooldown(30);
 
     try {
-      await fetch("/api/send-verification", {
+      const vRes = await fetch("/api/send-verification", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           email: cleanGoogleEmail,
-          code: otp,
           userName: profile.companyName,
           role: "logistics"
         })
       });
-      console.log(`[LOGISTICS BREVO] Dispatched verification code to ${cleanGoogleEmail}`);
+      const vData = await vRes.json().catch(() => ({}));
+      if (vRes.ok && vData.sent) {
+        setVerificationToken(vData.verificationToken || "");
+        setSuccessMsg(`A 6-digit verification code has been dispatched to ${cleanGoogleEmail} via Brevo. Enter it from your email inbox below.`);
+      } else {
+        setError(vData.error || `Failed to dispatch verification code to ${cleanGoogleEmail} via Brevo. Please click Resend Code.`);
+      }
     } catch (vErr) {
       console.warn("Brevo email dispatch notice for logistics:", vErr);
+      setError("Network error dispatching verification code via Brevo. Please click Resend Code.");
     }
 
-    setSuccessMsg(`A 6-digit verification code has been dispatched to ${cleanGoogleEmail} via Brevo. Enter it below to activate your Logistics account.`);
     setView("verify");
   };
 
@@ -968,6 +1179,7 @@ export default function LogisticsHub({
     setLoading(true);
 
     const cleanEmail = loginEmail.trim().toLowerCase();
+    const rawTrimmed = loginEmail.trim();
     if (!cleanEmail || !loginPassword) {
       setError("Please enter your company email address and password.");
       setLoading(false);
@@ -975,39 +1187,46 @@ export default function LogisticsHub({
     }
 
     try {
+      // Pre-check: Block unregistered emails from signing in
+      try {
+        const [lLower, lRaw] = await Promise.all([
+          getDocs(query(collection(db, "logistics_companies"), where("email", "==", cleanEmail))),
+          rawTrimmed !== cleanEmail ? getDocs(query(collection(db, "logistics_companies"), where("email", "==", rawTrimmed))) : Promise.resolve({ empty: true } as any)
+        ]);
+        if (lLower.empty && lRaw.empty) {
+          setError(`No logistics account is registered with "${cleanEmail}". Unregistered emails cannot sign in. Please register your company first.`);
+          setLoading(false);
+          return;
+        }
+      } catch (preErr) {
+        console.warn("Logistics login pre-check notice:", preErr);
+      }
+
       const userCredential = await signInWithEmailAndPassword(auth, cleanEmail, loginPassword);
       const user = userCredential.user;
       
       const docSnap = await getDoc(doc(db, "logistics_companies", user.uid));
+      let profile: LogisticsCompany | null = docSnap.exists() ? (docSnap.data() as LogisticsCompany) : null;
 
-      if (!docSnap.exists()) {
-        // Also check if company was saved by cleanEmail
+      if (!profile) {
         const qComp = query(collection(db, "logistics_companies"), where("email", "==", cleanEmail));
         const snapComp = await getDocs(qComp);
         if (!snapComp.empty) {
-          const profile = snapComp.docs[0].data() as LogisticsCompany;
-          await setDoc(doc(db, "users", user.uid), {
-            role: "logistics",
-            state: "Logistics Partner",
-            displayName: profile.companyName,
-            businessName: profile.companyName,
-            isVerified: true
-          }, { merge: true }).catch(() => {});
-          setCompanyProfile(profile);
-          setView("dashboard");
-          return;
+          profile = snapComp.docs[0].data() as LogisticsCompany;
         }
+      }
 
-        // If truly not registered as a logistics partner, sign out and inform user
+      if (!profile) {
         await signOut(auth);
         setErrorPopup({
           isOpen: true,
           type: "buyer_seller_mismatch",
           title: "Logistics Profile Not Found",
-          message: `The account "${cleanEmail}" does not have an active Logistics Company registration on SHOPIVERSITY. If you are a student Buyer or Seller, please use the Marketplace portal, or register a new logistics company below.`,
+          message: `The account "${cleanEmail}" does not have an active Logistics Company registration on SHOPIVERSITY. Unregistered emails cannot sign in.`,
           email: cleanEmail,
           primaryActionLabel: "Register as Logistics Company",
           onPrimaryAction: () => {
+            setErrorPopup(null);
             setView("signup");
             setEmail(cleanEmail);
           }
@@ -1017,7 +1236,37 @@ export default function LogisticsHub({
         return;
       }
 
-      const profile = docSnap.data() as LogisticsCompany;
+      if (!profile.isVerified) {
+        setCompanyProfile(profile);
+        setEmail(cleanEmail);
+        setCompanyName(profile.companyName || "");
+        setVerificationCode("");
+        setResendCooldown(30);
+        try {
+          const vRes = await fetch("/api/send-verification", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              email: cleanEmail,
+              userName: profile.companyName,
+              role: "logistics"
+            })
+          });
+          const vData = await vRes.json().catch(() => ({}));
+          if (vRes.ok && vData.sent) {
+            setVerificationToken(vData.verificationToken || "");
+            setSuccessMsg(`A 6-digit verification code has been sent to ${cleanEmail} via Brevo. Check your email inbox.`);
+          } else {
+            setError(vData.error || "Failed to send verification code via Brevo. Please click Resend Code.");
+          }
+        } catch {
+          setError("Network error sending verification code via Brevo. Please click Resend Code.");
+        }
+        setView("verify");
+        setLoading(false);
+        return;
+      }
+
       await setDoc(doc(db, "users", user.uid), {
         role: "logistics",
         state: "Logistics Partner",
@@ -1044,10 +1293,11 @@ export default function LogisticsHub({
     }
   };
 
-  // Handle Register Initiate (Triggers verification view)
+  // Handle Register Initiate (Triggers Brevo email verification view)
   const handleRegisterInit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setSuccessMsg("");
 
     if (!companyName.trim()) return setError("Company Name is required.");
     if (!rcNumber.trim()) return setError("RC / Registration Number is required.");
@@ -1078,6 +1328,7 @@ export default function LogisticsHub({
           email: cleanEmail,
           primaryActionLabel: "Switch to Logistics Login",
           onPrimaryAction: () => {
+            setErrorPopup(null);
             setView("login");
             setLoginEmail(cleanEmail);
           }
@@ -1085,78 +1336,65 @@ export default function LogisticsHub({
         setLoading(false);
         return;
       }
-    } catch (checkErr) {
-      console.warn("Logistics register pre-check:", checkErr);
-    } finally {
-      setLoading(false);
-    }
 
-    // Generate random 6-digit OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    setGeneratedOtp(otp);
-    setVerificationCode(otp); // Prefill for instant sandbox testing
-    setResendCooldown(30);
-
-    // Dispatch verification code via Brevo Email Engine
-    try {
-      await fetch("/api/send-verification", {
+      // Dispatch 6-digit verification code strictly via Brevo (generated on server, never revealed in UI)
+      const vRes = await fetch("/api/send-verification", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           email: cleanEmail,
-          code: otp,
           userName: companyName.trim()
         })
       });
-      console.log(`[LOGISTICS BREVO] Dispatched verification code to ${cleanEmail}`);
-    } catch (vErr) {
-      console.warn("Brevo email dispatch notice for logistics:", vErr);
-    }
+      const vData = await vRes.json().catch(() => ({}));
+      setVerificationCode("");
+      setResendCooldown(30);
 
-    // Also dispatch SMS via Brevo SMS Engine if phone number provided
-    if (phoneNumber && phoneNumber.trim().length >= 7) {
-      try {
-        await fetch("/api/send-phone-verification", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            phoneNumber: phoneNumber.trim(),
-            code: otp,
-            userName: companyName.trim()
-          })
-        });
-      } catch (smsErr) {
-        console.warn("Brevo SMS dispatch notice for logistics:", smsErr);
+      if (vRes.ok && vData.sent) {
+        setVerificationToken(vData.verificationToken || "");
+        setSuccessMsg(`A 6-digit verification code has been dispatched to ${cleanEmail} via Brevo. Check your email inbox and enter it below.`);
+      } else {
+        setError(vData.error || `Failed to send verification code to ${cleanEmail} via Brevo. Please try Resend Code.`);
       }
+    } catch (checkErr) {
+      console.warn("Logistics register init notice:", checkErr);
+      setError("Failed to connect to Brevo verification service. Please try Resend Code.");
+    } finally {
+      setLoading(false);
     }
 
     setView("verify");
   };
 
-  // Resend Logistics Verification Code
+  // Resend Logistics Verification Code strictly via Brevo
   const handleResendLogisticsCode = async () => {
     if (resendCooldown > 0 || isResending) return;
     setIsResending(true);
     setError("");
-    const newOtp = Math.floor(100000 + Math.random() * 900000).toString();
-    setGeneratedOtp(newOtp);
-    setVerificationCode(newOtp);
+    setSuccessMsg("");
+    setVerificationCode("");
     setResendCooldown(30);
 
     const cleanEmail = email.trim().toLowerCase();
     try {
-      await fetch("/api/send-verification", {
+      const vRes = await fetch("/api/send-verification", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           email: cleanEmail,
-          code: newOtp,
-          userName: companyName.trim()
+          userName: companyName.trim() || "Logistics Partner"
         })
       });
-      setSuccessMsg(`Fresh verification code sent to ${cleanEmail} via Brevo!`);
+      const vData = await vRes.json().catch(() => ({}));
+      if (vRes.ok && vData.sent) {
+        setVerificationToken(vData.verificationToken || "");
+        setSuccessMsg(`A fresh 6-digit verification code has been sent to ${cleanEmail} via Brevo! Check your email inbox.`);
+      } else {
+        setError(vData.error || `Failed to resend verification code to ${cleanEmail} via Brevo.`);
+      }
     } catch (e) {
       console.warn("Resend verification notice:", e);
+      setError("Network error resending verification code via Brevo.");
     } finally {
       setIsResending(false);
     }
@@ -1169,73 +1407,60 @@ export default function LogisticsHub({
 
     const codeToVerify = (verificationCode || "").trim();
     if (!codeToVerify || codeToVerify.length !== 6) {
-      return setError("Please enter the full 6-digit verification code.");
-    }
-
-    let isCodeValid = codeToVerify === generatedOtp;
-    if (!isCodeValid) {
-      try {
-        const verifyRes = await fetch("/api/verify-code", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            identifier: email.trim().toLowerCase(),
-            code: codeToVerify
-          })
-        });
-        const vData = await verifyRes.json();
-        if (vData.success && vData.verified) {
-          isCodeValid = true;
-        }
-      } catch (vErr) {
-        console.warn("Verify code API notice:", vErr);
-      }
-    }
-
-    if (!isCodeValid) {
-      return setError("Invalid or expired 6-digit verification code. Please check your email or enter the PIN provided.");
+      return setError("Please enter the full 6-digit verification code from your email.");
     }
 
     const cleanEmail = email.trim().toLowerCase();
+    let isCodeValid = false;
+    let verifyErrMsg = "";
+    try {
+      const verifyRes = await fetch("/api/verify-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          identifier: cleanEmail,
+          code: codeToVerify,
+          verificationToken,
+          type: "email"
+        })
+      });
+      const vData = await verifyRes.json().catch(() => ({}));
+      if (verifyRes.ok && vData.success && vData.verified) {
+        isCodeValid = true;
+      } else {
+        verifyErrMsg = vData.error || "";
+      }
+    } catch (vErr) {
+      console.warn("Verify code API notice:", vErr);
+    }
+
+    if (!isCodeValid) {
+      return setError(verifyErrMsg || "Invalid or expired 6-digit verification code. Please check your email inbox and try again.");
+    }
+
     setLoading(true);
     try {
       // Create user in standard firebase auth if not already signed in with Google
       let user = auth.currentUser;
+      const isGoogleUser = Boolean(user && user.providerData?.some(p => p.providerId === "google.com") && !user.providerData?.some(p => p.providerId === "password"));
       if (!user) {
         const userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
         user = userCredential.user;
       }
 
-      try {
-        const verifyCode = Math.floor(100000 + Math.random() * 900000).toString();
-        await fetch("/api/send-verification", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            email: cleanEmail,
-            userName: companyName.trim(),
-            code: verifyCode,
-            role: "logistics"
-          })
-        });
-        console.log(`[BREVO AUTH] Logistics signup verification email dispatched to ${cleanEmail}`);
-      } catch (evErr) {
-        console.warn("Logistics Brevo send-verification notice:", evErr);
-      }
-
       const profile: LogisticsCompany = {
         id: user.uid,
-        companyName: companyName.trim(),
-        rcNumber: rcNumber.trim(),
+        companyName: companyName.trim() || companyProfile?.companyName || user.displayName || "Logistics Partner",
+        rcNumber: rcNumber.trim() || companyProfile?.rcNumber || `RC-${user.uid.slice(0, 8).toUpperCase()}`,
         email: cleanEmail,
-        phoneNumber: phoneNumber.trim(),
-        officeAddress: officeAddress.trim(),
-        vehicleTypes: selectedVehicles.length > 0 ? selectedVehicles : ["Bike / Motorcycle"],
-        coveredCampuses: selectedCampuses.length > 0 ? selectedCampuses : ["University Main Campus"],
-        baseDeliveryPrice: Number(basePrice) > 0 ? Number(basePrice) : 500,
+        phoneNumber: phoneNumber.trim() || companyProfile?.phoneNumber || "",
+        officeAddress: officeAddress.trim() || companyProfile?.officeAddress || "Main Campus Office",
+        vehicleTypes: selectedVehicles.length > 0 ? selectedVehicles : (companyProfile?.vehicleTypes || ["Bike / Motorcycle"]),
+        coveredCampuses: selectedCampuses.length > 0 ? selectedCampuses : (companyProfile?.coveredCampuses || ["University Main Campus"]),
+        baseDeliveryPrice: Number(basePrice) > 0 ? Number(basePrice) : (companyProfile?.baseDeliveryPrice || 500),
         isVerified: true,
         isActive: true,
-        createdAt: new Date().toISOString()
+        createdAt: companyProfile?.createdAt || new Date().toISOString()
       };
 
       // Set profile immediately so listeners know user is a logistics company
@@ -1266,7 +1491,10 @@ export default function LogisticsHub({
           location: officeAddress.trim(),
           deliveryAddress: officeAddress.trim(),
           state: "Logistics Partner",
-          profileCompleted: true
+          profileCompleted: true,
+          authProvider: isGoogleUser ? "google" : "password",
+          isGoogleAccount: isGoogleUser,
+          hasPassword: !isGoogleUser
         })
       ]);
 
@@ -2264,7 +2492,12 @@ export default function LogisticsHub({
                     onClick={() => {
                       setResetEmail(loginEmail || "");
                       setResetEmailSent(false);
+                      setResetStep("email");
+                      setResetCodeInput("");
+                      setResetNewPassword("");
+                      setResetConfirmPassword("");
                       setResetError("");
+                      setResetNotice("");
                       setShowForgotPassword(true);
                     }}
                     className="text-xs font-bold text-orange-600 dark:text-orange-400 hover:underline cursor-pointer bg-transparent border-none p-0"
@@ -2611,24 +2844,8 @@ export default function LogisticsHub({
               </div>
               <h2 className="text-xl font-black text-slate-800 dark:text-zinc-100">Verify Your Information</h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                A verification PIN code was dispatched to your email <strong className="text-slate-700 dark:text-zinc-300">{email}</strong> and phone number.
+                A 6-digit verification code was sent to <strong className="text-slate-700 dark:text-zinc-300">{email}</strong> via Brevo. Check your email inbox and enter the code below.
               </p>
-            </div>
-
-            {/* Test PIN Code Helper block to make the app interactive and testable */}
-            <div className="bg-orange-50/70 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-900/50 rounded-2xl p-4 mb-6 text-center space-y-2">
-              <span className="text-[10px] font-black uppercase tracking-wider text-orange-600 block">Sandbox Testing OTP PIN</span>
-              <strong className="text-2xl font-black text-orange-600 tracking-widest block">{generatedOtp}</strong>
-              <div className="flex items-center justify-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setVerificationCode(generatedOtp)}
-                  className="px-3 py-1 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-bold transition-all cursor-pointer shadow-sm"
-                >
-                  Auto-fill PIN
-                </button>
-              </div>
-              <p className="text-[10px] text-slate-400 font-medium">Click Auto-fill or enter the PIN manually below to complete verification.</p>
             </div>
 
             <form onSubmit={handleVerifyAndCreate} className="space-y-5">
@@ -3301,7 +3518,7 @@ export default function LogisticsHub({
           </div>
         )}
 
-        {/* Forgot Password Modal */}
+        {/* Forgot Password Modal (Strictly Powered by Brevo) */}
         <AnimatePresence>
           {showForgotPassword && (
             <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
@@ -3318,7 +3535,7 @@ export default function LogisticsHub({
                     </div>
                     <div className="text-left">
                       <h3 className="text-xl font-extrabold text-slate-900 dark:text-white">Reset Password</h3>
-                      <p className="text-xs text-slate-500 dark:text-zinc-400 font-medium">Reset your logistics account password</p>
+                      <p className="text-xs text-slate-500 dark:text-zinc-400 font-medium">Brevo email code verification</p>
                     </div>
                   </div>
                   <button
@@ -3330,29 +3547,123 @@ export default function LogisticsHub({
                   </button>
                 </div>
 
-                {resetEmailSent ? (
+                {resetStep === "done" ? (
                   <div className="space-y-4 text-center py-2">
                     <div className="w-16 h-16 rounded-full bg-emerald-100 dark:bg-emerald-950/50 flex items-center justify-center text-emerald-600 dark:text-emerald-400 mx-auto">
                       <CheckCircle2 className="w-8 h-8" />
                     </div>
                     <div className="space-y-1">
-                      <h4 className="text-base font-bold text-slate-900 dark:text-white">Reset Email Sent!</h4>
+                      <h4 className="text-base font-bold text-slate-900 dark:text-white">Password Reset Complete!</h4>
                       <p className="text-xs text-slate-600 dark:text-zinc-300 font-medium leading-relaxed">
-                        We've sent a password reset link to <span className="font-bold text-slate-900 dark:text-white">{resetEmail}</span>. Please check your email inbox and follow the instructions to reset your password.
+                        Your logistics account password for <span className="font-bold text-slate-900 dark:text-white break-all">{resetEmail}</span> has been updated.
                       </p>
                     </div>
                     <button
                       type="button"
-                      onClick={() => setShowForgotPassword(false)}
+                      onClick={() => {
+                        setLoginEmail(resetEmail.trim().toLowerCase());
+                        setLoginPassword("");
+                        setShowForgotPassword(false);
+                      }}
                       className="w-full h-11 bg-orange-600 hover:bg-orange-700 text-white rounded-2xl font-bold text-xs uppercase tracking-wider transition-all cursor-pointer shadow-md shadow-orange-500/15"
                     >
                       Back to Login
                     </button>
                   </div>
+                ) : resetStep === "verify" || resetEmailSent ? (
+                  <form onSubmit={handleCompletePasswordReset} className="space-y-4 text-left">
+                    {resetNotice && (
+                      <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/50 rounded-xl text-emerald-700 dark:text-emerald-300 text-xs font-semibold">
+                        {resetNotice}
+                      </div>
+                    )}
+
+                    {resetError && (
+                      <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 rounded-xl text-red-600 dark:text-red-400 text-xs font-semibold">
+                        {resetError}
+                      </div>
+                    )}
+
+                    <div className="space-y-1">
+                      <label className="block text-xs font-bold text-slate-700 dark:text-zinc-300">6-Digit Code from Email</label>
+                      <input
+                        type="text"
+                        maxLength={6}
+                        required
+                        value={resetCodeInput}
+                        onChange={(e) => setResetCodeInput(e.target.value.replace(/\D/g, ""))}
+                        placeholder="Enter 6-digit code"
+                        className="w-full h-11 px-3.5 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 rounded-xl text-center font-mono font-black tracking-[0.35em] text-base text-slate-900 dark:text-white outline-none focus:border-orange-500"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="block text-xs font-bold text-slate-700 dark:text-zinc-300">New Password</label>
+                      <input
+                        type="password"
+                        required
+                        value={resetNewPassword}
+                        onChange={(e) => setResetNewPassword(e.target.value)}
+                        placeholder="At least 6 characters"
+                        className="w-full h-11 px-3.5 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-orange-500 outline-none text-xs"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="block text-xs font-bold text-slate-700 dark:text-zinc-300">Confirm New Password</label>
+                      <input
+                        type="password"
+                        required
+                        value={resetConfirmPassword}
+                        onChange={(e) => setResetConfirmPassword(e.target.value)}
+                        placeholder="Re-enter new password"
+                        className="w-full h-11 px-3.5 bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-orange-500 outline-none text-xs"
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs pt-1">
+                      <button
+                        type="button"
+                        onClick={handleResendResetCode}
+                        disabled={resetResendCooldown > 0 || resetLoading}
+                        className="text-orange-600 dark:text-orange-400 font-bold hover:underline disabled:opacity-50 cursor-pointer bg-transparent border-none p-0"
+                      >
+                        {resetResendCooldown > 0 ? `Resend Code in ${resetResendCooldown}s` : "Resend Code via Brevo"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setResetStep("email");
+                          setResetEmailSent(false);
+                          setResetError("");
+                        }}
+                        className="text-slate-500 hover:underline font-semibold bg-transparent border-none p-0 cursor-pointer"
+                      >
+                        Change Email
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-3 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowForgotPassword(false)}
+                        className="flex-1 h-11 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300 rounded-xl font-bold text-xs transition-all cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={resetLoading || resetCodeInput.length !== 6}
+                        className="flex-1 h-11 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md shadow-orange-500/15"
+                      >
+                        {resetLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Reset Password"}
+                      </button>
+                    </div>
+                  </form>
                 ) : (
                   <form onSubmit={handlePasswordReset} className="space-y-4 text-left">
                     <p className="text-xs text-slate-600 dark:text-zinc-300 font-medium leading-relaxed">
-                      Enter your registered partner email address below, and we will send you a password reset link.
+                      Enter your registered partner email address below, and we will send a 6-digit reset code to your inbox via Brevo.
                     </p>
 
                     {resetError && (
@@ -3386,7 +3697,7 @@ export default function LogisticsHub({
                         disabled={resetLoading}
                         className="flex-1 h-11 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md shadow-orange-500/15"
                       >
-                        {resetLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Send Reset Link"}
+                        {resetLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Send Reset Code"}
                       </button>
                     </div>
                   </form>
@@ -3589,6 +3900,8 @@ export default function LogisticsHub({
             email={errorPopup.email}
             primaryActionLabel={errorPopup.primaryActionLabel}
             onPrimaryAction={errorPopup.onPrimaryAction}
+            secondaryActionLabel={errorPopup.secondaryActionLabel}
+            onSecondaryAction={errorPopup.onSecondaryAction}
           />
         )}
       </div>

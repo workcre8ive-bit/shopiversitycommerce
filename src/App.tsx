@@ -329,23 +329,21 @@ export default function App() {
     setIsResendingFirebaseEmail(true);
     setVerificationBannerNotice(null);
     try {
-      const vCode = Math.floor(100000 + Math.random() * 900000).toString();
       const res = await fetch("/api/send-verification", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           email: auth.currentUser.email,
-          code: vCode,
           userName: auth.currentUser.displayName || currentUser?.displayName || "Student"
         })
       });
       const data = await res.json().catch(() => ({}));
-      if (res.ok && data.success) {
+      if (res.ok && data.success && data.sent) {
         setVerificationBannerNotice(`Verification email sent to ${auth.currentUser.email} via Brevo! Check your inbox.`);
+        triggerDynamicIsland("Verification email sent! ✉️");
       } else {
         setVerificationBannerNotice(data.error || "Failed to dispatch email via Brevo. Please check your Brevo settings.");
       }
-      triggerDynamicIsland("Verification email sent! ✉️");
     } catch (err: any) {
       console.error("Error resending verification email:", err);
       if (err.code === "auth/too-many-requests") {
@@ -921,29 +919,32 @@ export default function App() {
                 return;
               }
 
-              // Check if user is actively in the signup or verification flow or on the auth tab
+              // Check if user is actively in the signup or verification flow (never auto-provision during Sign In)
+              const authMode = sessionStorage.getItem("shopiversity_auth_mode");
               const isRecentAuth = Boolean(
-                user.metadata.creationTime && 
+                user.metadata.creationTime &&
                 (Date.now() - new Date(user.metadata.creationTime).getTime() < 300000)
               );
-              const isInActiveSignup = isVerifyingNewSignup || 
-                                       activeTab === "signup" || 
-                                       activeTab === "auth" ||
-                                       isRecentAuth ||
-                                       sessionStorage.getItem("shopiversity_in_signup") === "true" ||
-                                       sessionStorage.getItem("shopiversity_google_pending") === "true";
+              const isExplicitSignup = authMode !== "login" && (
+                isVerifyingNewSignup ||
+                activeTab === "signup" ||
+                sessionStorage.getItem("shopiversity_in_signup") === "true" ||
+                sessionStorage.getItem("shopiversity_google_pending") === "true" ||
+                (activeTab === "auth" && isRecentAuth)
+              );
 
-              if (isInActiveSignup) {
-                // If user authenticated via Google and profile is pending, auto-provision fallback profile
-                if (activeTab === "auth" || activeTab === "signup" || sessionStorage.getItem("shopiversity_google_pending") === "true") {
+              if (isExplicitSignup) {
+                if (sessionStorage.getItem("shopiversity_google_pending") === "true") {
                   try {
                     const googleName = user.displayName || "Shopiversity Member";
                     const fallbackRole = (sessionStorage.getItem("shopiversity_chosen_role") as any) || "buyer";
+                    const isGoogleProvider = user.providerData?.some(p => p.providerId === "google.com") || false;
+                    const hasPwdProvider = user.providerData?.some(p => p.providerId === "password") || false;
                     const fallbackProfile: UserProfile = {
                       uid: user.uid,
                       displayName: googleName,
                       username: generateSmartUsername(googleName),
-                      email: user.email || "",
+                      email: (user.email || "").trim().toLowerCase(),
                       phoneNumber: user.phoneNumber || "",
                       role: fallbackRole,
                       activeRole: fallbackRole,
@@ -957,7 +958,10 @@ export default function App() {
                       reportCount: 0,
                       createdAt: new Date().toISOString(),
                       verificationIdUrl: "",
-                      profileCompleted: false
+                      profileCompleted: false,
+                      authProvider: isGoogleProvider && !hasPwdProvider ? "google" : "password",
+                      isGoogleAccount: isGoogleProvider,
+                      hasPassword: hasPwdProvider
                     };
                     await setDoc(doc(db, "users", user.uid), fallbackProfile, { merge: true });
                     setCurrentUser(fallbackProfile);
@@ -968,6 +972,12 @@ export default function App() {
                     console.warn("Auto-provision profile notice:", autoErr);
                   }
                 }
+                setAuthLoading(false);
+                return;
+              }
+
+              // If on AuthPage in login mode, let AuthPage handle deleting/signing out unregistered Google user cleanly
+              if (activeTab === "auth" && authMode === "login") {
                 setAuthLoading(false);
                 return;
               }
