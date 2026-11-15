@@ -28,6 +28,7 @@ export default function AdminEmailBrevoSettings() {
   const [senderEmail, setSenderEmail] = useState("shopiversitycommerce@gmail.com");
   const [senderName, setSenderName] = useState("SHOPIVERSITY Campus Marketplace");
   const [smsSender, setSmsSender] = useState("SHOPIV");
+  const [smtpUser, setSmtpUser] = useState("");
   
   const [showApiKey, setShowApiKey] = useState(false);
   const [loadingStatus, setLoadingStatus] = useState(true);
@@ -43,6 +44,8 @@ export default function AdminEmailBrevoSettings() {
     senderEmail: string;
     senderName: string;
     smsSender?: string;
+    smtpUser?: string;
+    needsSmtpUser?: boolean;
     provider: string;
     activeFallback: boolean;
   } | null>(null);
@@ -66,6 +69,7 @@ export default function AdminEmailBrevoSettings() {
       if (data.senderEmail) setSenderEmail(data.senderEmail);
       if (data.senderName) setSenderName(data.senderName);
       if (data.smsSender) setSmsSender(data.smsSender);
+      if (data.smtpUser !== undefined) setSmtpUser(data.smtpUser || "");
     } catch (err: any) {
       console.error("Failed to fetch Brevo status:", err);
     } finally {
@@ -90,7 +94,8 @@ export default function AdminEmailBrevoSettings() {
           apiKey: apiKey.trim() || undefined,
           senderEmail: senderEmail.trim(),
           senderName: senderName.trim(),
-          smsSender: smsSender.trim()
+          smsSender: smsSender.trim(),
+          smtpUser: smtpUser.trim()
         })
       });
 
@@ -128,6 +133,7 @@ export default function AdminEmailBrevoSettings() {
         apiKey: apiKey.trim() || undefined,
         senderEmail: senderEmail.trim(),
         senderName: senderName.trim(),
+        smtpUser: smtpUser.trim() || undefined,
         recipient: testRecipient.trim(),
         testRecipientEmail: testRecipient.trim()
       };
@@ -427,9 +433,27 @@ export default function AdminEmailBrevoSettings() {
                 </button>
               </div>
               <p className="text-[11px] text-slate-500 mt-1">
-                Supports both Brevo REST API keys (<code className="text-orange-600 font-mono">xkeysib-</code>) and Brevo SMTP Relay passwords (<code className="text-orange-600 font-mono">xsmtpsib-</code>).
+                Recommended: Brevo REST API v3 key (<code className="text-orange-600 font-mono">xkeysib-</code>). If using an SMTP password (<code className="text-orange-600 font-mono">xsmtpsib-</code>), also enter your Brevo SMTP Login below.
               </p>
             </div>
+
+            {(apiKey.trim().startsWith("xsmtpsib-") || statusData?.keyType === "Brevo SMTP Key" || statusData?.needsSmtpUser) && (
+              <div className="p-4 rounded-2xl bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 space-y-2">
+                <label className="block text-xs font-bold text-amber-900 dark:text-amber-300 uppercase tracking-wider">
+                  Brevo SMTP Login (Required for <code className="font-mono">xsmtpsib-</code> keys)
+                </label>
+                <input
+                  type="text"
+                  value={smtpUser}
+                  onChange={(e) => setSmtpUser(e.target.value)}
+                  placeholder="e.g. 8c4a12001@smtp-brevo.com"
+                  className="w-full px-4 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 text-sm font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all"
+                />
+                <p className="text-[11px] text-amber-800 dark:text-amber-300">
+                  Copy your exact <strong>Login</strong> (usually <code className="font-mono">xxxxx@smtp-brevo.com</code>) from Brevo &gt; <strong>SMTP &amp; API &gt; SMTP</strong>, or switch to an <code className="font-mono">xkeysib-</code> API Key instead.
+                </p>
+              </div>
+            )}
 
             {/* Sender Email Input */}
             <div>
@@ -674,7 +698,7 @@ export default function AdminEmailBrevoSettings() {
                 </div>
               </div>
               <p className="text-[11px] text-slate-500">
-                Transactional SMS requires Brevo credits. If credits are pending, the signup flow auto-provides the OTP code directly so testing is never blocked.
+                Transactional SMS requires Brevo credits and a Brevo REST API v3 key (<code className="font-mono">xkeysib-</code>).
               </p>
             </div>
           </div>

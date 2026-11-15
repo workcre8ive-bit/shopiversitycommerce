@@ -175,10 +175,7 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
   };
 
   const handleShare = async () => {
-    let shareUrl = `${window.location.origin}/?product=${product.id}`;
-    if (currentUser?.referralCode) {
-      shareUrl += `&ref=${currentUser.referralCode}`;
-    }
+    const shareUrl = `${window.location.origin}/?product=${product.id}`;
 
     const shareData = {
       title: product.name,

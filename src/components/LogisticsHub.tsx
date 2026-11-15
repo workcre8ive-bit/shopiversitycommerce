@@ -1,7 +1,7 @@
 import React from "react";
 import { auth, db, googleProvider } from "../firebase";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
-import { generateReferralCode, cn, getOrderDeliveryPin, getOrderSellerHandoverPin, cleanPinInput } from "../lib/utils";
+import { cn, getOrderDeliveryPin, getOrderSellerHandoverPin, cleanPinInput } from "../lib/utils";
 import Logo from "./Logo";
 import AuthErrorModal, { AuthErrorModalProps } from "./AuthErrorModal";
 import { 
@@ -392,6 +392,8 @@ export default function LogisticsHub({
   const [verificationToken, setVerificationToken] = React.useState("");
   const [resendCooldown, setResendCooldown] = React.useState(0);
   const [isResending, setIsResending] = React.useState(false);
+  const [showChangeEmail, setShowChangeEmail] = React.useState(false);
+  const [newEmailInput, setNewEmailInput] = React.useState("");
 
   React.useEffect(() => {
     if (resendCooldown <= 0) return;
@@ -400,21 +402,6 @@ export default function LogisticsHub({
     }, 1000);
     return () => clearInterval(timer);
   }, [resendCooldown]);
-
-  // Referral code state
-  const [referralCodeInput, setReferralCodeInput] = React.useState("");
-
-  React.useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const ref = params.get('ref');
-    if (ref) {
-      localStorage.setItem('referredBy', ref);
-      setReferralCodeInput(ref);
-    } else {
-      const storedRef = localStorage.getItem('referredBy');
-      if (storedRef) setReferralCodeInput(storedRef);
-    }
-  }, []);
 
   // Dashboard Tab state
   const [activeTab, setActiveTab] = React.useState<"available-jobs" | "active-deliveries" | "history" | "profile">("available-jobs");
@@ -567,8 +554,37 @@ export default function LogisticsHub({
           const docSnap = await getDoc(doc(db, "logistics_companies", user.uid));
           if (docSnap.exists()) {
             const data = docSnap.data() as LogisticsCompany;
-            setCompanyProfile(data);
-            setView("dashboard");
+            if (!data.isVerified) {
+              const targetEmail = (data.email || user.email || "").trim().toLowerCase();
+              setCompanyProfile(null);
+              setEmail(targetEmail);
+              setCompanyName(data.companyName || "");
+              setView("verify");
+              const sentFlag = `shopiversity_logistics_otp_sent_${targetEmail}`;
+              if (targetEmail && typeof window !== "undefined" && !sessionStorage.getItem(sentFlag)) {
+                sessionStorage.setItem(sentFlag, "true");
+                fetch("/api/send-verification", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    email: targetEmail,
+                    userName: data.companyName || "Logistics Partner",
+                    role: "logistics"
+                  })
+                })
+                  .then(r => r.json().catch(() => ({})).then(vData => ({ ok: r.ok, vData })))
+                  .then(({ ok, vData }) => {
+                    if (ok && vData.sent) {
+                      setVerificationToken(vData.verificationToken || "");
+                      setSuccessMsg(`Your account is not verified yet. A 6-digit verification code has been sent to ${targetEmail} via Brevo.`);
+                    }
+                  })
+                  .catch(() => {});
+              }
+            } else {
+              setCompanyProfile(data);
+              setView("dashboard");
+            }
           }
         } catch (err: any) {
           console.error("Error fetching logistics profile:", err);
@@ -953,17 +969,21 @@ export default function LogisticsHub({
 
     if (existingProfile) {
       if (!existingProfile.isVerified) {
-        setCompanyProfile(existingProfile);
-        setEmail(cleanGoogleEmail || existingProfile.email || "");
+        const targetEmail = (cleanGoogleEmail || existingProfile.email || "").trim().toLowerCase();
+        setCompanyProfile(null);
+        setEmail(targetEmail);
         setCompanyName(existingProfile.companyName || "");
         setVerificationCode("");
         setResendCooldown(30);
+        if (typeof window !== "undefined" && targetEmail) {
+          sessionStorage.setItem(`shopiversity_logistics_otp_sent_${targetEmail}`, "true");
+        }
         try {
           const vRes = await fetch("/api/send-verification", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              email: cleanGoogleEmail || existingProfile.email,
+              email: targetEmail,
               userName: existingProfile.companyName,
               role: "logistics"
             })
@@ -971,9 +991,9 @@ export default function LogisticsHub({
           const vData = await vRes.json().catch(() => ({}));
           if (vRes.ok && vData.sent) {
             setVerificationToken(vData.verificationToken || "");
-            setSuccessMsg(`A 6-digit verification code has been sent to ${cleanGoogleEmail} via Brevo. Check your email inbox and enter it below.`);
+            setSuccessMsg(`Your account is not verified yet. A 6-digit verification code has been sent to ${targetEmail} via Brevo. Check your email inbox and enter it below.`);
           } else {
-            setError(vData.error || `Failed to send verification code to ${cleanGoogleEmail} via Brevo. Please click Resend Code.`);
+            setError(vData.error || `Failed to send verification code to ${targetEmail} via Brevo. Please click Resend Code.`);
           }
         } catch {
           setError("Network error sending Brevo verification code. Please click Resend Code.");
@@ -1039,9 +1059,6 @@ export default function LogisticsHub({
       createdAt: new Date().toISOString()
     };
 
-    const referralCode = generateReferralCode(profile.companyName || user.displayName || "LOGISTICS");
-    const referredBy = referralCodeInput.trim() || localStorage.getItem('referredBy');
-
     await Promise.all([
       setDoc(doc(db, "logistics_companies", user.uid), profile, { merge: true }),
       setDoc(doc(db, "users", user.uid), {
@@ -1051,10 +1068,6 @@ export default function LogisticsHub({
         email: cleanGoogleEmail || user.email,
         phoneNumber: profile.phoneNumber,
         role: "logistics",
-        referralCode,
-        referredBy: referredBy || "",
-        referralEarnings: 0,
-        referralCount: 0,
         isVerified: false,
         isSuspended: false,
         reportCount: 0,
@@ -1069,22 +1082,6 @@ export default function LogisticsHub({
         hasPassword: false
       }, { merge: true })
     ]);
-
-    // If referred by someone, increment their referral count
-    if (referredBy) {
-      try {
-        const referrersQ = query(collection(db, "users"), where("referralCode", "==", referredBy));
-        const referrersSnap = await getDocs(referrersQ);
-        if (!referrersSnap.empty) {
-          const referrerDoc = referrersSnap.docs[0];
-          const currentCount = referrerDoc.data().referralCount || 0;
-          await updateDoc(referrerDoc.ref, { referralCount: currentCount + 1 });
-        }
-      } catch (refErr) {
-        console.warn("Error processing referral in LogisticsHub:", refErr);
-      }
-    }
-    localStorage.removeItem('referredBy');
 
     setCompanyProfile(profile);
     setVerificationCode("");
@@ -1237,11 +1234,14 @@ export default function LogisticsHub({
       }
 
       if (!profile.isVerified) {
-        setCompanyProfile(profile);
+        setCompanyProfile(null);
         setEmail(cleanEmail);
         setCompanyName(profile.companyName || "");
         setVerificationCode("");
         setResendCooldown(30);
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem(`shopiversity_logistics_otp_sent_${cleanEmail}`, "true");
+        }
         try {
           const vRes = await fetch("/api/send-verification", {
             method: "POST",
@@ -1255,7 +1255,7 @@ export default function LogisticsHub({
           const vData = await vRes.json().catch(() => ({}));
           if (vRes.ok && vData.sent) {
             setVerificationToken(vData.verificationToken || "");
-            setSuccessMsg(`A 6-digit verification code has been sent to ${cleanEmail} via Brevo. Check your email inbox.`);
+            setSuccessMsg(`Your account is not verified yet. A 6-digit verification code has been sent to ${cleanEmail} via Brevo. Check your email inbox.`);
           } else {
             setError(vData.error || "Failed to send verification code via Brevo. Please click Resend Code.");
           }
@@ -1400,6 +1400,78 @@ export default function LogisticsHub({
     }
   };
 
+  // Change Email during Logistics Verification ("Update & Save")
+  const handleChangeLogisticsEmailSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = newEmailInput.trim().toLowerCase();
+    if (!trimmed || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      setError("Please enter a valid new email address.");
+      return;
+    }
+    const formerEmail = email.trim().toLowerCase();
+    if (trimmed === formerEmail) {
+      setError("Please enter a different email address from your current one.");
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+    setSuccessMsg("");
+    try {
+      const [compSnap, userSnap] = await Promise.all([
+        getDocs(query(collection(db, "logistics_companies"), where("email", "==", trimmed))),
+        getDocs(query(collection(db, "users"), where("email", "==", trimmed)))
+      ]);
+      const currentUid = auth.currentUser?.uid;
+      const compConflict = compSnap.docs.find(d => d.id !== currentUid);
+      const userConflict = userSnap.docs.find(d => d.id !== currentUid);
+      if (compConflict || userConflict) {
+        setError("This email address is already registered to another account.");
+        setLoading(false);
+        return;
+      }
+
+      if (auth.currentUser) {
+        try {
+          await updateDoc(doc(db, "users", auth.currentUser.uid), { email: trimmed });
+        } catch {}
+        if (companyProfile) {
+          try {
+            await updateDoc(doc(db, "logistics_companies", auth.currentUser.uid), { email: trimmed });
+            setCompanyProfile({ ...companyProfile, email: trimmed });
+          } catch {}
+        }
+      }
+
+      setEmail(trimmed);
+      setVerificationCode("");
+      setVerificationToken("");
+      setShowChangeEmail(false);
+      setNewEmailInput("");
+      setResendCooldown(30);
+
+      const vRes = await fetch("/api/send-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: trimmed,
+          userName: companyName.trim() || companyProfile?.companyName || "Logistics Partner"
+        })
+      });
+      const vData = await vRes.json().catch(() => ({}));
+      if (vRes.ok && vData.sent) {
+        setVerificationToken(vData.verificationToken || "");
+        setSuccessMsg(`Email updated from ${formerEmail} to ${trimmed}! A new 6-digit verification code has been sent to ${trimmed} via Brevo.`);
+      } else {
+        setError(vData.error || `Email updated to ${trimmed}, but Brevo delivery failed. Please click Resend Code.`);
+      }
+    } catch (err: any) {
+      setError(err?.message || "Failed to update email address.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Handle OTP Verification and Final Account Creation
   const handleVerifyAndCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1448,71 +1520,61 @@ export default function LogisticsHub({
         user = userCredential.user;
       }
 
+      let existingStoredProfile: Partial<LogisticsCompany> | null = null;
+      try {
+        const existingDoc = await getDoc(doc(db, "logistics_companies", user.uid));
+        if (existingDoc.exists()) {
+          existingStoredProfile = existingDoc.data() as LogisticsCompany;
+        }
+      } catch {}
+
+      const baseComp = existingStoredProfile || companyProfile;
       const profile: LogisticsCompany = {
+        ...(existingStoredProfile || {}),
         id: user.uid,
-        companyName: companyName.trim() || companyProfile?.companyName || user.displayName || "Logistics Partner",
-        rcNumber: rcNumber.trim() || companyProfile?.rcNumber || `RC-${user.uid.slice(0, 8).toUpperCase()}`,
+        companyName: companyName.trim() || baseComp?.companyName || user.displayName || "Logistics Partner",
+        rcNumber: rcNumber.trim() || baseComp?.rcNumber || `RC-${user.uid.slice(0, 8).toUpperCase()}`,
         email: cleanEmail,
-        phoneNumber: phoneNumber.trim() || companyProfile?.phoneNumber || "",
-        officeAddress: officeAddress.trim() || companyProfile?.officeAddress || "Main Campus Office",
-        vehicleTypes: selectedVehicles.length > 0 ? selectedVehicles : (companyProfile?.vehicleTypes || ["Bike / Motorcycle"]),
-        coveredCampuses: selectedCampuses.length > 0 ? selectedCampuses : (companyProfile?.coveredCampuses || ["University Main Campus"]),
-        baseDeliveryPrice: Number(basePrice) > 0 ? Number(basePrice) : (companyProfile?.baseDeliveryPrice || 500),
+        phoneNumber: phoneNumber.trim() || baseComp?.phoneNumber || "",
+        officeAddress: officeAddress.trim() || baseComp?.officeAddress || "Main Campus Office",
+        vehicleTypes: selectedVehicles.length > 0 ? selectedVehicles : (baseComp?.vehicleTypes || ["Bike / Motorcycle"]),
+        coveredCampuses: selectedCampuses.length > 0 ? selectedCampuses : (baseComp?.coveredCampuses || ["University Main Campus"]),
+        baseDeliveryPrice: Number(basePrice) > 0 ? Number(basePrice) : (baseComp?.baseDeliveryPrice || 500),
         isVerified: true,
         isActive: true,
-        createdAt: companyProfile?.createdAt || new Date().toISOString()
+        createdAt: baseComp?.createdAt || new Date().toISOString()
       };
 
       // Set profile immediately so listeners know user is a logistics company
       setCompanyProfile(profile);
 
-      const referralCode = generateReferralCode(companyName || "LOGISTICS");
-      const referredBy = referralCodeInput.trim() || localStorage.getItem('referredBy');
-
       // Save logistics company profile AND users document concurrently
       await Promise.all([
-        setDoc(doc(db, "logistics_companies", user.uid), profile),
+        setDoc(doc(db, "logistics_companies", user.uid), profile, { merge: true }),
         setDoc(doc(db, "users", user.uid), {
           uid: user.uid,
-          displayName: companyName.trim(),
-          username: companyName.toLowerCase().replace(/[^a-z0-9]/g, "") + "_logistics",
+          displayName: profile.companyName,
+          username: profile.companyName.toLowerCase().replace(/[^a-z0-9]/g, "") + "_logistics",
           email: cleanEmail,
-          phoneNumber: phoneNumber.trim(),
+          phoneNumber: profile.phoneNumber || "",
           role: "logistics",
-          referralCode,
-          referredBy: referredBy || "",
-          referralEarnings: 0,
-          referralCount: 0,
           isVerified: true,
           isSuspended: false,
           reportCount: 0,
-          createdAt: new Date().toISOString(),
-          businessName: companyName.trim(),
-          location: officeAddress.trim(),
-          deliveryAddress: officeAddress.trim(),
+          createdAt: profile.createdAt || new Date().toISOString(),
+          businessName: profile.companyName,
+          location: profile.officeAddress,
+          deliveryAddress: profile.officeAddress,
           state: "Logistics Partner",
           profileCompleted: true,
           authProvider: isGoogleUser ? "google" : "password",
           isGoogleAccount: isGoogleUser,
           hasPassword: !isGoogleUser
-        })
+        }, { merge: true })
       ]);
-
-      // If referred by someone, increment their referral count
-      if (referredBy) {
-        try {
-          const referrersQ = query(collection(db, "users"), where("referralCode", "==", referredBy));
-          const referrersSnap = await getDocs(referrersQ);
-          if (!referrersSnap.empty) {
-            const referrerDoc = referrersSnap.docs[0];
-            const currentCount = referrerDoc.data().referralCount || 0;
-            await updateDoc(referrerDoc.ref, { referralCount: currentCount + 1 });
-          }
-        } catch (refErr) {
-          console.warn("Error processing referral in LogisticsHub:", refErr);
-        }
+      if (typeof window !== "undefined") {
+        sessionStorage.removeItem(`shopiversity_logistics_otp_sent_${cleanEmail}`);
       }
-      localStorage.removeItem('referredBy');
 
       setSuccessMsg("Logistics company account created and verified successfully! Welcome to your Logistics Hub.");
       setView("dashboard");
@@ -2570,22 +2632,8 @@ export default function LogisticsHub({
               <p className="text-xs text-slate-400">Set up your delivery details to receive high-demand dispatch jobs</p>
             </div>
 
-            {/* Google Sign Up & Referral Option */}
+            {/* Google Sign Up */}
             <div className="mb-8 space-y-4 max-w-md mx-auto">
-              <div className="space-y-1 text-left">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">Referral Code (Optional)</label>
-                <div className="relative">
-                  <Tag className="absolute left-4 top-3.5 w-4 h-4 text-slate-400" />
-                  <input
-                    type="text"
-                    value={referralCodeInput}
-                    onChange={(e) => setReferralCodeInput(e.target.value)}
-                    placeholder="e.g. REF123 (Enter code if invited)"
-                    className="w-full h-11 pl-11 pr-4 bg-slate-50 dark:bg-zinc-800/60 border border-slate-200 dark:border-zinc-800 rounded-xl outline-none focus:border-orange-500 text-xs font-semibold"
-                  />
-                </div>
-              </div>
-
               <button
                 type="button"
                 onClick={handleGoogleAuth}
@@ -2844,7 +2892,11 @@ export default function LogisticsHub({
               </div>
               <h2 className="text-xl font-black text-slate-800 dark:text-zinc-100">Verify Your Information</h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                A 6-digit verification code was sent to <strong className="text-slate-700 dark:text-zinc-300">{email}</strong> via Brevo. Check your email inbox and enter the code below.
+                {error && !successMsg ? (
+                  <>Email verification pending for <strong className="text-slate-700 dark:text-zinc-300">{email}</strong>. Resolve the delivery notice below and click Resend Code.</>
+                ) : (
+                  <>A 6-digit verification code was sent to <strong className="text-slate-700 dark:text-zinc-300">{email}</strong> via Brevo. Check your email inbox and enter the code below.</>
+                )}
               </p>
             </div>
 
@@ -2882,6 +2934,50 @@ export default function LogisticsHub({
                 {isResending ? "Sending..." : resendCooldown > 0 ? `Resend in ${resendCooldown}s` : "Resend Code"}
               </button>
             </div>
+
+            {!showChangeEmail ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setShowChangeEmail(true);
+                  setNewEmailInput(email || "");
+                  setError("");
+                }}
+                className="text-xs font-bold text-orange-600 dark:text-orange-400 hover:underline cursor-pointer pt-3 block mx-auto bg-transparent border-none"
+              >
+                Wrong email address? Change Email
+              </button>
+            ) : (
+              <form onSubmit={handleChangeLogisticsEmailSubmit} className="mt-3 p-3.5 bg-slate-50 dark:bg-zinc-800/70 border border-slate-200 dark:border-zinc-700 rounded-2xl space-y-2.5 text-left">
+                <label className="block text-xs font-bold text-slate-700 dark:text-zinc-300">
+                  Enter Correct Email Address
+                </label>
+                <input
+                  type="email"
+                  required
+                  placeholder="e.g. correctemail@gmail.com"
+                  value={newEmailInput}
+                  onChange={(e) => setNewEmailInput(e.target.value)}
+                  className="w-full h-10 px-3 bg-white dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 rounded-xl text-xs font-semibold text-slate-900 dark:text-white outline-none focus:border-orange-500"
+                />
+                <div className="flex gap-2">
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="flex-1 h-9 bg-orange-600 hover:bg-orange-700 text-white font-bold rounded-xl text-xs transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Update & Save"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowChangeEmail(false)}
+                    className="px-3 h-9 bg-slate-200 dark:bg-zinc-700 text-slate-700 dark:text-zinc-200 font-bold rounded-xl text-xs cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            )}
 
             <button
               onClick={() => setView("signup")}

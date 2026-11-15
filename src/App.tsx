@@ -20,7 +20,6 @@ import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from ".
 import SellerStorefront from "./components/SellerStorefront";
 import LogisticsHub from "./components/LogisticsHub";
 import Sidebar from "./components/Sidebar";
-import ReferralDashboard from "./components/ReferralDashboard";
 import SupportPage from "./components/SupportPage";
 import AuthPage from "./components/AuthPage";
 import { ProductCard, ProductCardSkeleton } from "./components/ProductCard";
@@ -329,17 +328,23 @@ export default function App() {
     setIsResendingFirebaseEmail(true);
     setVerificationBannerNotice(null);
     try {
+      const verifyingEmail = (
+        currentUser?.email ||
+        (typeof window !== "undefined" ? sessionStorage.getItem("shopiversity_verifying_email") : null) ||
+        auth.currentUser.email ||
+        ""
+      ).trim().toLowerCase();
       const res = await fetch("/api/send-verification", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          email: auth.currentUser.email,
+          email: verifyingEmail,
           userName: auth.currentUser.displayName || currentUser?.displayName || "Student"
         })
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.success && data.sent) {
-        setVerificationBannerNotice(`Verification email sent to ${auth.currentUser.email} via Brevo! Check your inbox.`);
+        setVerificationBannerNotice(`Verification email sent to ${verifyingEmail} via Brevo! Check your inbox.`);
         triggerDynamicIsland("Verification email sent! ✉️");
       } else {
         setVerificationBannerNotice(data.error || "Failed to dispatch email via Brevo. Please check your Brevo settings.");
@@ -426,10 +431,16 @@ export default function App() {
     }
     if (newTab === "auth") {
       setAuthMode("login");
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem("shopiversity_auth_mode", "login");
+      }
       setViewingProduct(null);
       setViewingSellerId(null);
     } else if (newTab === "signup") {
       setAuthMode("signup");
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem("shopiversity_auth_mode", "signup");
+      }
       setViewingProduct(null);
       setViewingSellerId(null);
     }
@@ -464,10 +475,37 @@ export default function App() {
   const [needsProfile, setNeedsProfile] = React.useState(false);
   const [hibernationMessage, setHibernationMessage] = React.useState<string | null>(null);
   const [isVerifyingNewSignup, setIsVerifyingNewSignup] = React.useState(false);
+  const [pendingVerificationEmail, setPendingVerificationEmail] = React.useState<string>("");
+
+  const activeTabRef = React.useRef(activeTab);
+  React.useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
+
+  const isVerifyingNewSignupRef = React.useRef(isVerifyingNewSignup);
+  React.useEffect(() => {
+    isVerifyingNewSignupRef.current = isVerifyingNewSignup;
+  }, [isVerifyingNewSignup]);
+
+  const needsProfileRef = React.useRef(needsProfile);
+  React.useEffect(() => {
+    needsProfileRef.current = needsProfile;
+  }, [needsProfile]);
+
+  const currentUserRef = React.useRef(currentUser);
+  React.useEffect(() => {
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
+
+  const isInitialSplashActiveRef = React.useRef(isInitialSplashActive);
+  React.useEffect(() => {
+    isInitialSplashActiveRef.current = isInitialSplashActive;
+  }, [isInitialSplashActive]);
 
   // Keep activeRole strictly synced with the logged-in user's account role
   React.useEffect(() => {
-    if (currentUser?.role === "seller" || currentUser?.activeRole === "seller") {
+    const savedChosen = typeof window !== "undefined" ? sessionStorage.getItem("shopiversity_chosen_role") : null;
+    if (currentUser?.role === "seller" || currentUser?.activeRole === "seller" || (currentUser && savedChosen === "seller" && currentUser.role !== "buyer")) {
       setActiveRole("seller");
     } else if (currentUser?.role === "buyer" || currentUser?.activeRole === "buyer") {
       setActiveRole("buyer");
@@ -476,8 +514,8 @@ export default function App() {
 
   React.useEffect(() => {
     if (currentUser && (activeTab === "auth" || activeTab === "signup")) {
-      // If user is unverified, don't automatically redirect them away from verification!
-      if (!currentUser.isVerified && !auth.currentUser?.emailVerified && currentUser.role !== "admin") {
+      // If user is unverified or still on the verification confirmation step, don't redirect away!
+      if (isVerifyingNewSignup || currentUser.isVerified === false || (!currentUser.isVerified && currentUser.role !== "admin")) {
         setIsVerifyingNewSignup(true);
         return;
       }
@@ -492,7 +530,7 @@ export default function App() {
         setActiveTab("market");
       }
     }
-  }, [currentUser, activeTab, setActiveTab]);
+  }, [currentUser, activeTab, isVerifyingNewSignup, setActiveTab]);
 
   const handleGoBack = React.useCallback(() => {
     if (viewingProduct) {
@@ -645,12 +683,7 @@ export default function App() {
   }, [currentUser]);
 
   React.useEffect(() => {
-    // Check for referral code in URL
     const urlParams = new URLSearchParams(window.location.search);
-    const refCode = urlParams.get('ref');
-    if (refCode) {
-      localStorage.setItem('referredBy', refCode.toUpperCase());
-    }
 
     const sellerId = urlParams.get('seller');
     if (sellerId) {
@@ -769,23 +802,31 @@ export default function App() {
 
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        if (!currentUser && !needsProfile && isInitialSplashActive) {
+        if (!currentUserRef.current && !needsProfileRef.current && isInitialSplashActiveRef.current) {
           setAuthLoading(true);
         }
         unsubscribeProfile = onSnapshot(doc(db, "users", user.uid), async (docSnap) => {
           if (docSnap.exists()) {
             let profile = docSnap.data() as UserProfile;
             
-            // ADMIN CHECK: Make specific users admin
+            // ADMIN CHECK: Only grant admin privileges AFTER email verification succeeds, and never override a Seller account's role
             const adminEmails = [
               "tommzypolaris@gmail.com",
               "fashinaayomide2005@gmail.com",
               "fashinaayomide@2005@gmail.com",
               "fashinaayomide12005@gmail.com"
             ];
-            if (profile.email && adminEmails.includes(profile.email) && (profile.role as string) !== "admin") {
-              profile = { ...profile, role: "admin", profileCompleted: true, isVerified: true } as UserProfile;
-              updateDoc(doc(db, "users", profile.uid), { role: "admin", profileCompleted: true, isVerified: true }).catch(() => {});
+            const cleanProfileEmail = (profile.email || "").trim().toLowerCase();
+            if (
+              cleanProfileEmail &&
+              adminEmails.includes(cleanProfileEmail) &&
+              profile.isVerified === true &&
+              (profile.role as string) !== "admin" &&
+              profile.role !== "seller" &&
+              profile.activeRole !== "seller"
+            ) {
+              profile = { ...profile, role: "admin", profileCompleted: true } as UserProfile;
+              updateDoc(doc(db, "users", profile.uid), { role: "admin", profileCompleted: true }).catch(() => {});
             }
 
             if (profile.hibernatedUntil) {
@@ -828,37 +869,61 @@ export default function App() {
               }
             }
 
-            setCurrentUser(profile);
-            
-            // If the user has not completed 6-digit email verification, keep them on the verification screen!
-            if (!profile.isVerified && profile.role !== "admin") {
-              setIsVerifyingNewSignup(true);
+            // If the user has not completed 6-digit email verification, do NOT log them in yet — keep them pinned on the verification screen!
+            if (profile.isVerified === false || (!profile.isVerified && profile.role !== "admin")) {
+              setCurrentUser(null);
+              if (profile.state === "Logistics Partner" || profile.role === "logistics") {
+                setActiveTab("logistics");
+              } else {
+                const pendingEmail = (profile.email || user.email || "").trim().toLowerCase();
+                if (typeof window !== "undefined" && pendingEmail) {
+                  sessionStorage.setItem("shopiversity_verifying_email", pendingEmail);
+                  sessionStorage.setItem("shopiversity_chosen_role", profile.role === "seller" ? "seller" : "buyer");
+                  sessionStorage.setItem("shopiversity_auth_mode", "signup");
+                }
+                setPendingVerificationEmail(pendingEmail);
+                isVerifyingNewSignupRef.current = true;
+                setIsVerifyingNewSignup(true);
+                setAuthMode("signup");
+                if (activeTabRef.current !== "signup" && activeTabRef.current !== "auth") {
+                  setActiveTab("signup");
+                }
+              }
               setAuthLoading(false);
               setNeedsProfile(false);
               return;
             }
 
+            setPendingVerificationEmail("");
+            if (typeof window !== "undefined") {
+              sessionStorage.removeItem("shopiversity_verifying_email");
+            }
+            setCurrentUser(profile);
+
+            const chosenSessionRole = typeof window !== "undefined" ? sessionStorage.getItem("shopiversity_chosen_role") : null;
+            const isSellerAccount = profile.role === "seller" || profile.activeRole === "seller" || (profile.role !== "buyer" && chosenSessionRole === "seller");
+
             if (profile.state === "Logistics Partner" || profile.role === "logistics") {
               setActiveTab("logistics");
               initialTabSet.current = true;
-            } else if (profile.role === "seller") {
+            } else if (isSellerAccount) {
               setActiveRole("seller");
-              if (!initialTabSet.current || activeTab === "auth" || activeTab === "signup") {
+              if (!isVerifyingNewSignupRef.current && (!initialTabSet.current || activeTabRef.current === "auth" || activeTabRef.current === "signup")) {
                 setActiveTab("dashboard");
                 initialTabSet.current = true;
               }
             } else {
               setActiveRole("buyer");
-              if (!initialTabSet.current || activeTab === "auth" || activeTab === "signup") {
+              if (!isVerifyingNewSignupRef.current && (!initialTabSet.current || activeTabRef.current === "auth" || activeTabRef.current === "signup")) {
                 setActiveTab("market");
                 initialTabSet.current = true;
               }
             }
 
             if (!initialTabSet.current) {
-              if (isVerifyingNewSignup) {
-                // Keep signup verification screen active
-              } else if (profile.state === "Logistics Partner" || profile.role === "logistics" || activeTab === "logistics") {
+              if (isVerifyingNewSignupRef.current) {
+                // Keep signup verification screen active until handleGoToMarket completes
+              } else if (profile.state === "Logistics Partner" || profile.role === "logistics" || activeTabRef.current === "logistics") {
                 setActiveTab("logistics");
                 initialTabSet.current = true;
               }
@@ -872,7 +937,7 @@ export default function App() {
             // User document does not exist in Firestore!
             // If the user is authenticated in Firebase Auth, check if they are a logistics partner first
             if (user && user.uid) {
-              let isLogistics = activeTab === "logistics";
+              let isLogistics = activeTabRef.current === "logistics";
               try {
                 const logCompSnap = await getDoc(doc(db, "logistics_companies", user.uid));
                 if (logCompSnap.exists()) {
@@ -887,10 +952,6 @@ export default function App() {
                     gender: "other",
                     role: "logistics" as any,
                     activeRole: "logistics" as any,
-                    referralCode: "LOG" + Math.random().toString(36).substring(2, 7).toUpperCase(),
-                    referredBy: "",
-                    referralEarnings: 0,
-                    referralCount: 0,
                     schoolType: "",
                     schoolName: "",
                     state: "Logistics Partner",
@@ -920,21 +981,25 @@ export default function App() {
               }
 
               // Check if user is actively in the signup or verification flow (never auto-provision during Sign In)
-              const authMode = sessionStorage.getItem("shopiversity_auth_mode");
+              const authModeStorage = typeof window !== "undefined" ? sessionStorage.getItem("shopiversity_auth_mode") : null;
+              const hasVerifyingSession = typeof window !== "undefined" && Boolean(sessionStorage.getItem("shopiversity_verifying_email"));
+              const isInSignupSession = typeof window !== "undefined" && (
+                sessionStorage.getItem("shopiversity_in_signup") === "true" ||
+                sessionStorage.getItem("shopiversity_google_pending") === "true"
+              );
               const isRecentAuth = Boolean(
                 user.metadata.creationTime &&
                 (Date.now() - new Date(user.metadata.creationTime).getTime() < 300000)
               );
-              const isExplicitSignup = authMode !== "login" && (
-                isVerifyingNewSignup ||
-                activeTab === "signup" ||
-                sessionStorage.getItem("shopiversity_in_signup") === "true" ||
-                sessionStorage.getItem("shopiversity_google_pending") === "true" ||
-                (activeTab === "auth" && isRecentAuth)
+              const isExplicitSignup = isInSignupSession || hasVerifyingSession || isVerifyingNewSignupRef.current || (
+                authModeStorage !== "login" && (
+                  activeTabRef.current === "signup" ||
+                  (activeTabRef.current === "auth" && isRecentAuth)
+                )
               );
 
               if (isExplicitSignup) {
-                if (sessionStorage.getItem("shopiversity_google_pending") === "true") {
+                if (typeof window !== "undefined" && sessionStorage.getItem("shopiversity_google_pending") === "true") {
                   try {
                     const googleName = user.displayName || "Shopiversity Member";
                     const fallbackRole = (sessionStorage.getItem("shopiversity_chosen_role") as any) || "buyer";
@@ -948,10 +1013,6 @@ export default function App() {
                       phoneNumber: user.phoneNumber || "",
                       role: fallbackRole,
                       activeRole: fallbackRole,
-                      referralCode: "U" + Math.random().toString(36).substring(2, 7).toUpperCase(),
-                      referredBy: localStorage.getItem("referredBy") || "",
-                      referralEarnings: 0,
-                      referralCount: 0,
                       strikeCount: 0,
                       isVerified: false,
                       isSuspended: false,
@@ -964,9 +1025,20 @@ export default function App() {
                       hasPassword: hasPwdProvider
                     };
                     await setDoc(doc(db, "users", user.uid), fallbackProfile, { merge: true });
-                    setCurrentUser(fallbackProfile);
+                    const pendingFallbackEmail = (fallbackProfile.email || "").trim().toLowerCase();
+                    if (pendingFallbackEmail) {
+                      sessionStorage.setItem("shopiversity_verifying_email", pendingFallbackEmail);
+                      sessionStorage.setItem("shopiversity_chosen_role", fallbackRole);
+                      sessionStorage.setItem("shopiversity_auth_mode", "signup");
+                    }
+                    setCurrentUser(null);
+                    setPendingVerificationEmail(pendingFallbackEmail);
+                    isVerifyingNewSignupRef.current = true;
                     setIsVerifyingNewSignup(true);
-                    sessionStorage.removeItem("shopiversity_in_signup");
+                    setAuthMode("signup");
+                    if (activeTabRef.current !== "signup" && activeTabRef.current !== "auth") {
+                      setActiveTab("signup");
+                    }
                     sessionStorage.removeItem("shopiversity_google_pending");
                   } catch (autoErr) {
                     console.warn("Auto-provision profile notice:", autoErr);
@@ -977,7 +1049,7 @@ export default function App() {
               }
 
               // If on AuthPage in login mode, let AuthPage handle deleting/signing out unregistered Google user cleanly
-              if (activeTab === "auth" && authMode === "login") {
+              if ((activeTabRef.current === "auth" || activeTabRef.current === "signup") && authModeStorage === "login") {
                 setAuthLoading(false);
                 return;
               }
@@ -1023,6 +1095,12 @@ export default function App() {
           unsubscribeNotifs = null;
         }
         setCurrentUser(null);
+        const stillVerifyingEmail = typeof window !== "undefined" ? sessionStorage.getItem("shopiversity_verifying_email") : null;
+        if (!stillVerifyingEmail) {
+          setPendingVerificationEmail("");
+          isVerifyingNewSignupRef.current = false;
+          setIsVerifyingNewSignup(false);
+        }
         setAuthLoading(false);
         setNotifications([]);
       }
@@ -1308,7 +1386,11 @@ export default function App() {
       } catch (e) {}
     }
     signOut(auth);
+    if (typeof window !== "undefined") {
+      sessionStorage.removeItem("shopiversity_chosen_role");
+    }
     setCart([]);
+    setAuthRole("buyer");
     setActiveTab("market");
     setActiveRole("buyer");
     setViewingProduct(null);
@@ -1494,15 +1576,16 @@ export default function App() {
   }
 
   // Determine if we should show AuthPage based on selected tab for non-logged users
-  const restrictedTabs = ["settings", "orders", "notifications", "messages", "history", "referrals", "dashboard", "analytics", "add-product", "products", "admin", "auth", "signup"];
+  const restrictedTabs = ["settings", "orders", "notifications", "messages", "history", "dashboard", "analytics", "add-product", "products", "admin", "auth", "signup"];
   const isTabRestricted = restrictedTabs.includes(activeTab);
   
+  const cleanCurrentEmail = (currentUser?.email || "").trim().toLowerCase();
   const isUserAdmin = currentUser?.role === "admin" || 
-    currentUser?.email === "tommzypolaris@gmail.com" || 
-    currentUser?.email === "fashinaayomide2005@gmail.com" || 
-    currentUser?.email === "fashinaayomide@2005@gmail.com" || 
-    currentUser?.email === "fashinaayomide12005@gmail.com" || 
-    currentUser?.email === "fashinaayomide@12005@gmail.com";
+    cleanCurrentEmail === "tommzypolaris@gmail.com" || 
+    cleanCurrentEmail === "fashinaayomide2005@gmail.com" || 
+    cleanCurrentEmail === "fashinaayomide@2005@gmail.com" || 
+    cleanCurrentEmail === "fashinaayomide12005@gmail.com" || 
+    cleanCurrentEmail === "fashinaayomide@12005@gmail.com";
 
   // Double check admin access
   if (activeTab === "admin" && !isUserAdmin) {
@@ -1574,9 +1657,6 @@ export default function App() {
           <span className="hidden sm:inline-block text-xs font-bold text-slate-700 dark:text-slate-300 font-sans truncate max-w-[120px] sm:max-w-none">
             {settingsSubView === "edit" ? "Edit Profile" : "My Profile"}
           </span>
-        )}
-        {activeTab === "referrals" && (
-          <span className="hidden sm:inline-block text-xs font-bold text-slate-700 dark:text-slate-300 font-sans">Referral Network</span>
         )}
         {(activeTab === "auth" || activeTab === "signup") && (
           <span className="hidden sm:inline-block text-xs font-bold text-slate-700 dark:text-slate-300 font-sans">
@@ -1687,22 +1767,23 @@ export default function App() {
 
         {/* Content Area */}
         <main ref={mainContentRef} id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto bg-white dark:bg-zinc-950 scroll-smooth outline-none">
-          {auth.currentUser && !auth.currentUser.emailVerified && (
+          {currentUser && !isVerifyingNewSignup && (currentUser.isVerified === false || (!currentUser.isVerified && currentUser.role !== "admin")) && (
             <div className="bg-amber-500/10 dark:bg-amber-950/40 border-b border-amber-500/30 px-4 py-3 text-xs text-amber-900 dark:text-amber-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 font-medium select-none animate-in fade-in slide-in-from-top-1 duration-300">
               <div className="flex items-start sm:items-center gap-2.5">
                 <Mail className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5 sm:mt-0" />
                 <div>
                   <p className="font-bold">
-                    Please verify your email address (<span className="underline">{auth.currentUser.email}</span>)
+                    Please verify your email address (<span className="underline">{currentUser?.email || (typeof window !== "undefined" ? sessionStorage.getItem("shopiversity_verifying_email") : null) || auth.currentUser?.email}</span>)
                   </p>
                   <p className="text-[11px] text-amber-800/80 dark:text-amber-300/80 font-normal mt-0.5">
-                    {verificationBannerNotice || "Check your inbox for the verification link sent by SHOPIVERSITY to unlock all selling and buying features."}
+                    {verificationBannerNotice || "Check your inbox for the 6-digit verification code sent by SHOPIVERSITY via Brevo."}
                   </p>
                 </div>
               </div>
               <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto flex-wrap">
                 <button
                   onClick={() => {
+                    isVerifyingNewSignupRef.current = true;
                     setIsVerifyingNewSignup(true);
                     setAuthMode("signup");
                     setActiveTab("signup");
@@ -1733,7 +1814,7 @@ export default function App() {
           )}
 
           <AnimatePresence mode="wait">
-            {(((!currentUser || !auth.currentUser) && isTabRestricted) || isVerifyingNewSignup || (currentUser && !currentUser.isVerified && currentUser.role !== "admin")) ? (
+            {(((!currentUser || !auth.currentUser) && isTabRestricted) || isVerifyingNewSignup || (currentUser && (currentUser.isVerified === false || (!currentUser.isVerified && currentUser.role !== "admin")))) ? (
               <motion.div
                 key="auth"
                 initial={{ opacity: 0, y: 10 }}
@@ -1743,20 +1824,31 @@ export default function App() {
               >
                 <AuthPage 
                   currentUser={currentUser}
+                  pendingVerificationEmail={pendingVerificationEmail}
                   initialNeedsProfile={needsProfile} 
                   initialMode={authMode} 
                   initialRole={authRole}
+                  onRoleChange={(chosenRole) => setAuthRole(chosenRole)}
                   setActiveTab={setActiveTab}
                   onOpenCookieSettings={() => setIsCookieSettingsOpen(true)}
                   onModeChange={(mode) => {
                     setAuthMode(mode);
+                    if (typeof window !== "undefined") {
+                      sessionStorage.setItem("shopiversity_auth_mode", mode);
+                    }
                     setActiveTabState(mode === "login" ? "auth" : "signup");
                   }}
                   onVerificationScreenChange={(isVerifying) => {
+                    isVerifyingNewSignupRef.current = isVerifying;
                     setIsVerifyingNewSignup(isVerifying);
+                    if (!isVerifying) {
+                      setPendingVerificationEmail("");
+                    }
                   }}
                   onGoToMarket={(preferredRole?: "buyer" | "seller") => {
+                    isVerifyingNewSignupRef.current = false;
                     setIsVerifyingNewSignup(false);
+                    setPendingVerificationEmail("");
                     const savedRole = typeof window !== "undefined" ? sessionStorage.getItem("shopiversity_chosen_role") : null;
                     const targetRole = preferredRole || (savedRole === "seller" ? "seller" : (currentUser?.role === "seller" ? "seller" : "buyer"));
                     if (targetRole === "seller") {
@@ -2329,7 +2421,7 @@ export default function App() {
                   initialSection={activeTab === "wishlist" ? "wishlist" : undefined}
                 />
               </motion.div>
-            ) : (activeTab === "dashboard" || activeTab === "overview" || activeTab === "analytics" || activeTab === "add-product" || activeTab === "my-products" || (activeTab === "orders" && (activeRole === "seller" || currentUser?.role === "seller")) || activeTab === "storefront" || activeTab === "referrals" || activeTab === "payouts") && (activeRole === "seller" || currentUser?.role === "seller" || currentUser?.activeRole === "seller") ? (
+            ) : (activeTab === "dashboard" || activeTab === "overview" || activeTab === "analytics" || activeTab === "add-product" || activeTab === "my-products" || (activeTab === "orders" && (activeRole === "seller" || currentUser?.role === "seller")) || activeTab === "storefront" || activeTab === "payouts") && (activeRole === "seller" || currentUser?.role === "seller" || currentUser?.activeRole === "seller") ? (
               <motion.div
                 key="dashboard"
                 initial={{ opacity: 0, x: 20 }}
@@ -2346,7 +2438,6 @@ export default function App() {
                     activeTab === "my-products" ? "my-products" : 
                     activeTab === "orders" ? "orders" : 
                     activeTab === "storefront" ? "storefront" :
-                    activeTab === "referrals" ? "referrals" :
                     activeTab === "payouts" ? "payouts" :
                     "overview"
                   }
@@ -2397,16 +2488,6 @@ export default function App() {
                 className="space-y-8"
               >
                 <ProductHistory onBack={handleGoBack} />
-              </motion.div>
-            ) : activeTab === "referrals" && currentUser ? (
-              <motion.div 
-                key="referrals"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                className="p-8 max-w-[1200px] mx-auto"
-              >
-                <ReferralDashboard user={currentUser} onBack={handleGoBack} />
               </motion.div>
             ) : activeTab === "support" ? (
               <motion.div 

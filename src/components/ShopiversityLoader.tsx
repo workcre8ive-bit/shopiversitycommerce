@@ -60,7 +60,7 @@ export default function ShopiversityLoader({
             className="absolute w-20 h-20 sm:w-24 sm:h-24 rounded-3xl bg-[#ff6b00]/10 dark:bg-[#ff6b00]/15 blur-lg"
           />
 
-          {/* Cart SVG with levitation bounce */}
+          {/* Official Shopiversity Brand Emblem with levitation bounce */}
           <motion.div
             animate={{
               y: [0, -8, 0],
@@ -72,40 +72,12 @@ export default function ShopiversityLoader({
             }}
             className="relative"
           >
-            <svg
-              viewBox="0 0 24 24"
-              className="w-16 h-16 sm:w-20 sm:h-20 text-[#ff6b00] dark:text-[#ff7f1a] fill-none drop-shadow-[0_4px_12px_rgba(255,107,0,0.3)]"
-              stroke="currentColor"
-              strokeWidth="1.6"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              {/* Shopping Cart Basket outer frame */}
-              <motion.path
-                initial={{ pathLength: 1 }}
-                animate={{ pathLength: [0.85, 1, 0.85] }}
-                transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
-                d="M 2.5,6 L 5,6.5 L 7.5,14 L 18,14 L 19.5,6.5 L 7.5,6.5"
-                strokeWidth="1.7"
-              />
-
-              {/* Basket Grid Dividers */}
-              <path d="M 6.2,10.2 L 18.7,10.2" strokeWidth="1.2" />
-              <path d="M 11,6.5 L 11,14" strokeWidth="1.2" />
-              <path d="M 14.5,6.5 L 14.5,14" strokeWidth="1.2" />
-
-              {/* Undercarriage support bar */}
-              <path d="M 10,18 L 16.5,18" strokeWidth="1.6" />
-              <path d="M 10,18 C 7.5,18 7,16.5 7,14.5" strokeWidth="1.6" />
-
-              {/* Wheels with continuous rolling rotation */}
-              <g className="origin-[10px_20.5px]">
-                <circle cx="10" cy="20.5" r="1.6" fill="currentColor" stroke="none" />
-              </g>
-              <g className="origin-[16.5px_20.5px]">
-                <circle cx="16.5" cy="20.5" r="1.6" fill="currentColor" stroke="none" />
-              </g>
-            </svg>
+            <img
+              src="/shopiversity-logo.png"
+              alt="Shopiversity Official Logo"
+              className="w-16 h-16 sm:w-20 sm:h-20 object-contain drop-shadow-[0_6px_16px_rgba(255,107,0,0.3)] select-none"
+              draggable={false}
+            />
 
             {/* Micro Sparkle/Shimmer point on cart corner */}
             <motion.div

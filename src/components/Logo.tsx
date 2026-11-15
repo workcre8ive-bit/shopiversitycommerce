@@ -13,38 +13,16 @@ export default function Logo({ className, showText = true, onClick, variant = "d
 
   const content = (
     <div className={cn("flex items-center gap-1.5 sm:gap-2 select-none min-w-0", className)}>
-      {/* Precision Vector Re-creation of the Custom Shopiversity Cart in standard square 24x24 */}
-      <svg
-        role="img"
-        aria-label="Shopiversity Official Logo"
-        viewBox="0 0 24 24"
+      {/* Official Shopiversity Brand Emblem */}
+      <img
+        src="/shopiversity-logo.png"
+        alt="Shopiversity Official Logo"
         className={cn(
-          "h-[26px] w-[26px] sm:h-[36px] sm:w-[36px] fill-none shrink-0 transition-all",
-          isWhite ? "text-white" : "text-[#ff6b00] dark:text-[#ff7f1a]"
+          "h-[28px] w-[28px] sm:h-[38px] sm:w-[38px] object-contain shrink-0 transition-all",
+          isWhite && "brightness-0 invert"
         )}
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        {/* Wheels - Solid filled circles matching the custom brand */}
-        <circle cx="10" cy="20.5" r="1.5" fill="currentColor" stroke="none" />
-        <circle cx="16.5" cy="20.5" r="1.5" fill="currentColor" stroke="none" />
-
-        {/* Under carriage support bar loop */}
-        <path d="M 10,18 L 16.5,18" strokeWidth="1.6" />
-        <path d="M 10,18 C 7.5,18 7,16.5 7,14.5" strokeWidth="1.6" />
-
-        {/* Shopping Cart Basket outer frame */}
-        <path d="M 2.5,6 L 5,6.5 L 7.5,14 L 18,14 L 19.5,6.5 L 7.5,6.5" strokeWidth="1.6" />
-
-        {/* Grid divider inside basket: Horizontal */}
-        <path d="M 6.2,10.2 L 18.7,10.2" strokeWidth="1.2" />
-
-        {/* Grid dividers inside basket: Vertical */}
-        <path d="M 11,6.5 L 11,14" strokeWidth="1.2" />
-        <path d="M 14.5,6.5 L 14.5,14" strokeWidth="1.2" />
-      </svg>
+        draggable={false}
+      />
 
       {/* Text block: Shopiversity + the marketplace at your fingertips */}
       {showText && (

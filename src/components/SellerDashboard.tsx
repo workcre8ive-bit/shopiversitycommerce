@@ -18,7 +18,6 @@ import {
 } from "firebase/firestore";
 import { Product, Order, UserProfile } from "../types";
 import { NIGERIAN_CAMPUSES } from "../constants/campuses";
-import ReferralDashboard from "./ReferralDashboard";
 import LiveRiderTrackingModal from "./LiveRiderTrackingModal";
 import SalesAnalytics from "./SalesAnalytics";
 import DashboardSlideshow from "./DashboardSlideshow";
@@ -454,10 +453,7 @@ export default function SellerDashboard({
         updateData.status = "completed";
       }
       
-      // --- Referral Reward Logic ---
-      // Only award if it reaches a terminal paid state (completed & paid)
       const willBeCompleted = updateData.status === "completed" || order.status === "completed";
-      const willBePaid = updateData.paymentStatus === "paid" || order.paymentStatus === "paid";
 
       if (willBeCompleted) {
         if (!order.completedAt) {
@@ -467,78 +463,6 @@ export default function SellerDashboard({
           updateData.payoutStatus = "escrow";
         }
       }
-
-      if (willBeCompleted && willBePaid && !order.referralCommissionAwarded) {
-          if (order.buyerId) {
-            try {
-              const buyerSnap = await getDoc(doc(db, "users", order.buyerId));
-              if (buyerSnap.exists()) {
-                const buyerData = buyerSnap.data() as UserProfile;
-                const referredBy = buyerData.referredBy;
-                
-                if (referredBy) {
-                  // Find referrer
-                  const referrersQ = query(collection(db, "users"), where("referralCode", "==", referredBy));
-                  const referrersSnap = await getDocs(referrersQ);
-                  
-                  if (!referrersSnap.empty) {
-                    const referrerDoc = referrersSnap.docs[0];
-                    const referrerId = referrerDoc.id;
-                    
-                    // Award 1.3% of the platform fee (using stored amount if available, otherwise fallback)
-                    const commissionRate = order.type === "service" ? 0.06 : 0.05;
-                    const rewardAmount = order.referralCommissionAmount !== undefined 
-                      ? order.referralCommissionAmount 
-                      : Math.floor((order.totalPrice * commissionRate) * 0.013);
-                    
-                    if (rewardAmount > 0) {
-                      // 1. Create referral transaction
-                      await addDoc(collection(db, "referralTransactions"), {
-                        referrerId,
-                        referredUserId: order.buyerId,
-                        orderId: order.id,
-                        amount: rewardAmount,
-                        totalOrderValue: order.totalPrice,
-                        status: "completed",
-                        type: "referral_commission",
-                        createdAt: new Date().toISOString()
-                      });
-                      
-                      // 2. Update referrer stats
-                      await updateDoc(referrerDoc.ref, {
-                        referralEarnings: increment(rewardAmount),
-                        referralWalletBalance: increment(rewardAmount)
-                      });
-
-                      // Update buyer status if it's their first purchase
-                      if (!buyerData.hasMadePurchase) {
-                         await updateDoc(doc(db, "users", order.buyerId), {
-                           hasMadePurchase: true
-                         });
-                      }
-                      
-                      // Mark as awarded in order updateData
-                      updateData.referralCommissionAwarded = true;
-                      
-                      // 3. Notify referrer
-                      await addDoc(collection(db, "notifications"), {
-                        userId: referrerId,
-                        title: "Referral Commission Earned! 💸",
-                        message: `A referral just made a purchase! You've earned ₦${rewardAmount.toLocaleString()} commission.`,
-                        type: "referral",
-                        isRead: false,
-                        createdAt: new Date().toISOString()
-                      });
-                    }
-                  }
-                }
-              }
-            } catch (e) {
-              console.error("Referral reward error:", e);
-            }
-          }
-        }
-        // --- End Referral Reward Logic ---
       
       if (status === "paid" && (order.status === "delivered" || order.status === "acquired")) {
         updateData.paymentStatus = "paid";
@@ -1027,40 +951,6 @@ export default function SellerDashboard({
               <StatCard label="Sales Completed" value={stats.completedCount.toString()} icon={CheckCircle} color="emerald" />
             </div>
 
-            {/* Referral Program Banner */}
-            <div className="bg-brand-gradient p-8 rounded-[2.5rem] shadow-2xl shadow-purple-500/20 text-white relative overflow-hidden group">
-               <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
-                 <div className="space-y-2">
-                    <div className="inline-flex items-center gap-2 px-3 py-1 bg-white/20 rounded-full text-[10px] font-black uppercase tracking-widest backdrop-blur-md">
-                       <Share2 className="w-3 h-3" />
-                       Referral Program
-                    </div>
-                    <h3 className="text-2xl font-black italic tracking-tighter !text-white">Invite Friends, Earn Commissions</h3>
-                    <p className="text-purple-50 font-medium max-w-xl">
-                       Earn 1.3% of platform commission on every successful purchase made with your code.
-                    </p>
-                 </div>
-                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-                    <div className="px-4 py-3 bg-white/10 backdrop-blur-md rounded-2xl border border-white/20 font-medium font-mono text-xs text-white/90 truncate max-w-xs sm:max-w-sm">
-                      {`${window.location.origin}/?ref=${(currentUser?.referralCode && currentUser.referralCode !== "---") ? currentUser.referralCode : "S3U8K9"}`}
-                    </div>
-                    <button 
-                      type="button"
-                      onClick={() => {
-                        const code = (currentUser?.referralCode && currentUser.referralCode !== "---") ? currentUser.referralCode : "S3U8K9";
-                        const link = `${window.location.origin}/?ref=${code}`;
-                        navigator.clipboard.writeText(link);
-                        alert("Referral link copied to clipboard!");
-                      }}
-                      className="px-6 py-3.5 bg-white text-purple-600 rounded-2xl font-black text-xs uppercase tracking-wider shadow-xl hover:scale-105 active:scale-95 transition-all shrink-0 cursor-pointer"
-                    >
-                      Copy Link
-                    </button>
-                 </div>
-               </div>
-               <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full -mr-20 -mt-20 blur-3xl group-hover:bg-white/20 transition-all duration-1000" />
-            </div>
-
             {/* Handcrafted Mobile Quick Links Grid */}
             <div className="space-y-4">
               <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 dark:text-zinc-500 ml-1">Shop Management Shortcuts</h3>
@@ -1072,7 +962,6 @@ export default function SellerDashboard({
                   { id: "orders", label: "Customer Orders", icon: ShoppingBag, desc: "Track sales & escrow", color: "from-blue-500 to-teal-500" },
                   { id: "payouts", label: "Withdrawals", icon: Wallet, desc: "Request payout of earnings", color: "from-emerald-500 to-green-500" },
                   ...(currentUser?.state !== "Logistics Partner" ? [{ id: "storefront", label: "Storefront View", icon: Store, desc: "See your public catalog", color: "from-pink-500 to-rose-500" }] : []),
-                  { id: "referrals", label: "Referral Hub", icon: Users, desc: "Earn commission rewards", color: "from-indigo-500 to-cyan-500" },
                   { id: "history", label: "Trash & Archive", icon: Trash2, desc: "Restore deleted items", color: "from-slate-500 to-zinc-500" },
                   { id: "settings", label: "Edit Profile", icon: UserCircle, desc: "Update shop & pickup info", color: "from-amber-500 to-yellow-500" }
                 ].map((item, idx) => {
@@ -1622,17 +1511,6 @@ export default function SellerDashboard({
                   </table>
                </div>
             </div>
-          </motion.div>
-        )}
-
-        {activeSubTab === "referrals" && currentUser && (
-          <motion.div 
-            key="referrals"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-          >
-            <ReferralDashboard user={currentUser} />
           </motion.div>
         )}
 

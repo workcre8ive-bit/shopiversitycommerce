@@ -53,7 +53,7 @@ import {
   ShieldCheck
 } from "lucide-react";
 import Logo from "./Logo";
-import { cn, generateReferralCode } from "../lib/utils";
+import { cn } from "../lib/utils";
 import { generateSmartUsername } from "../utils/accountCleanup";
 import { UserProfile, Notification } from "../types";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
@@ -80,9 +80,11 @@ const BACKGROUND_IMAGES = [
 
 export default function AuthPage({ 
   currentUser,
+  pendingVerificationEmail = "",
   initialNeedsProfile = false,
   initialMode,
   initialRole,
+  onRoleChange,
   onModeChange,
   onGoToMarket,
   onNavigateToLogistics,
@@ -91,9 +93,11 @@ export default function AuthPage({
   onOpenCookieSettings
 }: { 
   currentUser?: any;
+  pendingVerificationEmail?: string;
   initialNeedsProfile?: boolean;
   initialMode?: "login" | "signup";
   initialRole?: "buyer" | "seller";
+  onRoleChange?: (role: "buyer" | "seller") => void;
   onModeChange?: (mode: "login" | "signup") => void;
   onGoToMarket?: (targetRole?: "buyer" | "seller") => void;
   onNavigateToLogistics?: () => void;
@@ -134,6 +138,9 @@ export default function AuthPage({
     setStep(1);
     setError("");
     setFieldErrors({});
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem("shopiversity_auth_mode", loginMode ? "login" : "signup");
+    }
     if (!loginMode) {
       setAgreedToTerms(true);
     }
@@ -142,8 +149,10 @@ export default function AuthPage({
     }
   };
 
+  const prevInitialRoleRef = React.useRef<"buyer" | "seller" | undefined>(initialRole);
   React.useEffect(() => {
-    if (initialRole) {
+    if (initialRole && initialRole !== prevInitialRoleRef.current) {
+      prevInitialRoleRef.current = initialRole;
       setRole(initialRole);
       sessionStorage.setItem("shopiversity_chosen_role", initialRole);
     }
@@ -373,7 +382,7 @@ export default function AuthPage({
       setResetCodeInput("");
       setResetNewPassword("");
       setResetConfirmPassword("");
-      setResetNotice(`A 6-digit reset code has been sent to ${cleanEmail} via Brevo. Check your inbox and enter it below.`);
+      setResetNotice(`A 6-digit reset code has been sent to ${cleanEmail} via Brevo. Check your Inbox (or Spam/Promotions folder) and enter it below.`);
       setResetResendCooldown(30);
       setResetStep("verify");
       setResetEmailSent(true);
@@ -472,8 +481,10 @@ export default function AuthPage({
   const [isVerifyingEmail, setIsVerifyingEmail] = React.useState<boolean>(() => {
     if (typeof window !== "undefined") {
       if (sessionStorage.getItem("shopiversity_verifying_email")) return true;
-      if (auth.currentUser && !auth.currentUser.emailVerified) return true;
+      if (auth.currentUser && !currentUser?.isVerified && sessionStorage.getItem("shopiversity_in_signup") === "true") return true;
     }
+    if (pendingVerificationEmail) return true;
+    if (currentUser && (currentUser.isVerified === false || (!currentUser.isVerified && currentUser.role !== "admin"))) return true;
     return false;
   });
   const [isVerifyingPhone, setIsVerifyingPhone] = React.useState(false);
@@ -506,9 +517,10 @@ export default function AuthPage({
 
   // Automatically activate 6-digit verification screen and dispatch Brevo code if user is authenticated but unverified
   React.useEffect(() => {
-    const unverifiedEmail = (typeof window !== "undefined" ? sessionStorage.getItem("shopiversity_verifying_email") : null) ||
-      (auth.currentUser && !auth.currentUser.emailVerified ? auth.currentUser.email : null) ||
-      (currentUser && !currentUser.isVerified && currentUser.role !== "admin" ? currentUser.email : null);
+    const unverifiedEmail = (pendingVerificationEmail ? pendingVerificationEmail.trim() : null) ||
+      (typeof window !== "undefined" ? sessionStorage.getItem("shopiversity_verifying_email") : null) ||
+      (currentUser && (currentUser.isVerified === false || (!currentUser.isVerified && currentUser.role !== "admin")) ? currentUser.email : null) ||
+      (!currentUser && auth.currentUser && typeof window !== "undefined" && sessionStorage.getItem("shopiversity_in_signup") === "true" ? auth.currentUser.email : null);
 
     if (unverifiedEmail) {
       const cleanTarget = unverifiedEmail.trim().toLowerCase();
@@ -550,7 +562,7 @@ export default function AuthPage({
                 sessionStorage.setItem(`shopiversity_verify_token_${cleanTarget}`, data.verificationToken);
               }
             }
-            setBrevoNotice(`A 6-digit verification code has been sent to ${cleanTarget} via Brevo. Check your email inbox.`);
+            setBrevoNotice(`A 6-digit verification code has been sent to ${cleanTarget} via Brevo. Check your Inbox (and Spam/Promotions folder).`);
           } else {
             if (typeof window !== "undefined") {
               sessionStorage.removeItem(sentFlagKey);
@@ -567,7 +579,7 @@ export default function AuthPage({
         });
       }
     }
-  }, [currentUser]);
+  }, [currentUser, pendingVerificationEmail]);
 
   // Countdown timer for resending verification code
   React.useEffect(() => {
@@ -587,20 +599,8 @@ export default function AuthPage({
   // Vendor specific
   const [sellerType, setSellerType] = React.useState<"goods" | "services" | "both">("goods");
   const [verificationIdUrl, setVerificationIdUrl] = React.useState("");
-  const [referralCodeInput, setReferralCodeInput] = React.useState("");
 
   React.useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const ref = params.get('ref');
-    if (ref) {
-      setIsLogin(false);
-      localStorage.setItem('referredBy', ref);
-      setReferralCodeInput(ref);
-    } else {
-      const storedRef = localStorage.getItem('referredBy');
-      if (storedRef) setReferralCodeInput(storedRef);
-      else setReferralCodeInput("");
-    }
 
     // Process redirect result if user returned from Google signInWithRedirect (e.g. Safari / mobile)
     const checkRedirectResult = async () => {
@@ -738,25 +738,19 @@ export default function AuthPage({
               return;
             }
 
-            // User sign-in: if account is not verified, require 6-digit Brevo verification immediately
-            if (!userData.isVerified && !user.emailVerified && userData.role !== "admin") {
+            // User sign-in: if account has not completed email verification, go straight to 6-digit email verification input without logging in
+            if (!userData.isVerified && userData.role !== "admin") {
               const targetEmail = (userData.email || user.email || cleanEmail).trim().toLowerCase();
-              const targetPhone = (userData.phoneNumber || phone || "").trim();
               const accountRole = userData.role === "seller" ? "seller" : "buyer";
               setRole(accountRole);
               if (typeof window !== "undefined") {
                 sessionStorage.setItem("shopiversity_chosen_role", accountRole);
+                sessionStorage.setItem("shopiversity_verifying_email", targetEmail);
               }
 
               setEmail(targetEmail);
-              if (targetPhone) setPhone(targetPhone);
               setFullName(userData.displayName || "");
-
-              if (targetPhone && targetPhone.length >= 7) {
-                setIsVerificationChoice(true);
-              } else {
-                await handleSendEmailCode(targetEmail);
-              }
+              await handleSendEmailCode(targetEmail);
 
               if (onVerificationScreenChange) {
                 onVerificationScreenChange(true);
@@ -792,6 +786,11 @@ export default function AuthPage({
         }
       } else {
         // If we are in "needsProfile" mode, we might already be logged in (e.g. via Google or if account creation succeeded but profile failed)
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem("shopiversity_auth_mode", "signup");
+          sessionStorage.setItem("shopiversity_in_signup", "true");
+          sessionStorage.setItem("shopiversity_chosen_role", role);
+        }
         let firebaseUser = auth.currentUser;
         const cleanEmail = email.trim().toLowerCase();
         
@@ -987,8 +986,6 @@ export default function AuthPage({
 
         const effectiveName = role === "seller" ? (businessName.trim() || "Vendor") : (email.trim().split("@")[0] || "Customer");
         const effectiveUsername = generateSmartUsername(effectiveName);
-        const referralCode = generateReferralCode(effectiveName || "USER");
-        const referredBy = referralCodeInput || localStorage.getItem('referredBy');
 
         const userProfile: UserProfile = {
           uid: firebaseUser.uid,
@@ -1000,10 +997,6 @@ export default function AuthPage({
           gender: gender,
           role: role === "seller" ? "seller" : "buyer",
           activeRole: role === "seller" ? "seller" : "buyer",
-          referralCode,
-          referredBy: referredBy || "",
-          referralEarnings: 0,
-          referralCount: 0,
           schoolType: "", 
           schoolName: "", 
           state: "", 
@@ -1020,19 +1013,6 @@ export default function AuthPage({
           hasPassword: true
         };
         await setDoc(doc(db, "users", firebaseUser.uid), userProfile);
-        
-        // If referred by someone, increment their referral count
-        if (referredBy) {
-          const referrersQ = query(collection(db, "users"), where("referralCode", "==", referredBy));
-          const referrersSnap = await getDocs(referrersQ);
-          if (!referrersSnap.empty) {
-            const referrerDoc = referrersSnap.docs[0];
-            const currentCount = referrerDoc.data().referralCount || 0;
-            await updateDoc(referrerDoc.ref, { referralCount: currentCount + 1 });
-          }
-        }
-
-        localStorage.removeItem('referredBy');
         
         // Add welcome notification for new user
         try {
@@ -1055,6 +1035,14 @@ export default function AuthPage({
         let dispatchError = "";
         let nextToken = "";
 
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem("shopiversity_auth_mode", "signup");
+          sessionStorage.setItem("shopiversity_in_signup", "true");
+          sessionStorage.setItem("shopiversity_verifying_email", cleanEmail);
+          sessionStorage.setItem("shopiversity_chosen_role", role);
+          sessionStorage.setItem(`shopiversity_otp_sent_${cleanEmail}`, "true");
+        }
+
         try {
           console.log(`[SIGNUP EMAIL] Dispatching Brevo verification code to ${cleanEmail}`);
           const vRes = await fetch("/api/send-verification", {
@@ -1068,22 +1056,22 @@ export default function AuthPage({
           const vData = await vRes.json().catch(() => ({}));
           if (vRes.ok && vData.sent) {
             nextToken = vData.verificationToken || "";
-            noticeMessage = `A 6-digit verification code has been sent to ${cleanEmail} via Brevo. Please check your email inbox and enter it below.`;
+            noticeMessage = `A 6-digit verification code has been sent to ${cleanEmail} via Brevo. Please check your Inbox (and Spam/Promotions folder) and enter it below.`;
+            if (typeof window !== "undefined" && nextToken) {
+              sessionStorage.setItem(`shopiversity_verify_token_${cleanEmail}`, nextToken);
+            }
           } else {
+            if (typeof window !== "undefined") {
+              sessionStorage.removeItem(`shopiversity_otp_sent_${cleanEmail}`);
+            }
             dispatchError = vData.error || `Failed to send verification code to ${cleanEmail} via Brevo. Please click Resend Code.`;
           }
         } catch (vErr: any) {
           console.warn("Email verification API dispatch notice:", vErr);
-          dispatchError = "Network error sending verification code via Brevo. Please click Resend Code.";
-        }
-
-        if (typeof window !== "undefined") {
-          sessionStorage.setItem("shopiversity_verifying_email", cleanEmail);
-          sessionStorage.setItem("shopiversity_chosen_role", role);
-          sessionStorage.setItem(`shopiversity_otp_sent_${cleanEmail}`, "true");
-          if (nextToken) {
-            sessionStorage.setItem(`shopiversity_verify_token_${cleanEmail}`, nextToken);
+          if (typeof window !== "undefined") {
+            sessionStorage.removeItem(`shopiversity_otp_sent_${cleanEmail}`);
           }
+          dispatchError = "Network error sending verification code via Brevo. Please click Resend Code.";
         }
 
         setEmail(cleanEmail);
@@ -1172,8 +1160,8 @@ export default function AuthPage({
           sessionStorage.setItem(`shopiversity_verify_token_${targetEmail}`, vData.verificationToken);
         }
       }
-      setBrevoNotice(`A fresh 6-digit verification code has been dispatched to ${targetEmail} via Brevo! Check your email inbox.`);
-      setError(`A fresh 6-digit verification code has been dispatched to ${targetEmail} via Brevo! Please check your email inbox.`);
+      setBrevoNotice(`A fresh 6-digit verification code has been dispatched to ${targetEmail} via Brevo! Check your Inbox (and Spam/Promotions folder).`);
+      setError(`A fresh 6-digit verification code has been dispatched to ${targetEmail} via Brevo! Check your Inbox (and Spam/Promotions folder).`);
       setResendCooldown(30);
     } catch (err: any) {
       console.error("Resend Brevo verification error:", err);
@@ -1197,46 +1185,167 @@ export default function AuthPage({
     }
     const currentAuthUser = auth.currentUser;
     if (!currentAuthUser) {
-      setError("Session lost. Please log in to change your email address.");
+      setError("Session lost. Please sign up or log in again to change your email address.");
+      return;
+    }
+
+    const formerEmail = (email || currentAuthUser.email || "").trim().toLowerCase();
+    if (trimmed === formerEmail) {
+      setError("Please enter a different email address from your current one.");
       return;
     }
 
     setLoading(true);
     setError("");
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem("shopiversity_auth_mode", "signup");
+      sessionStorage.setItem("shopiversity_in_signup", "true");
+    }
     try {
-      await updateEmail(currentAuthUser, trimmed);
+      // 1. Ensure the new email is not already registered to another account in Firestore
+      const [existingUsersSnap, existingLogisticsSnap] = await Promise.all([
+        getDocs(query(collection(db, "users"), where("email", "==", trimmed))),
+        getDocs(query(collection(db, "logistics_companies"), where("email", "==", trimmed))).catch(() => ({ docs: [] } as any))
+      ]);
+      const conflictUser = existingUsersSnap.docs.find(d => d.id !== currentAuthUser.uid);
+      const conflictLogistics = (existingLogisticsSnap.docs || []).find((d: any) => d.id !== currentAuthUser.uid);
+      if (conflictUser || conflictLogistics) {
+        setError("This email address is already registered to another account.");
+        setLoading(false);
+        return;
+      }
+
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem("shopiversity_verifying_email", trimmed);
+      }
+
+      let activeUid = currentAuthUser.uid;
+      let activeUserDisplayName = fullName || username || currentAuthUser.displayName || "Student";
+
+      // 2. Update Firebase Auth email (client SDK -> server Admin SDK -> unverified password replacement fallback)
+      let authEmailUpdated = false;
       try {
-        await updateDoc(doc(db, "users", currentAuthUser.uid), { email: trimmed });
+        await updateEmail(currentAuthUser, trimmed);
+        authEmailUpdated = true;
+      } catch (uEmailErr: any) {
+        if (uEmailErr?.code === "auth/email-already-in-use") {
+          setError("This email address is already registered to another account.");
+          setLoading(false);
+          return;
+        }
+        // Try server-side Admin SDK update
+        try {
+          const idToken = await currentAuthUser.getIdToken();
+          const adminUpdRes = await fetch("/api/account/update-verification-email", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${idToken}`
+            },
+            body: JSON.stringify({ newEmail: trimmed })
+          });
+          const adminUpdData = await adminUpdRes.json().catch(() => ({}));
+          if (adminUpdData.code === "auth/email-already-in-use") {
+            setError("This email address is already registered to another account.");
+            setLoading(false);
+            return;
+          }
+          if (adminUpdData.success) {
+            await currentAuthUser.reload().catch(() => {});
+            authEmailUpdated = true;
+          }
+        } catch (adminErr) {
+          console.warn("Admin verification email update notice:", adminErr);
+        }
+
+        // If client updateEmail was blocked (e.g. Firebase Email Enumeration Protection auth/operation-not-allowed)
+        // and we have the user's signup password, migrate cleanly to a new unverified Auth record for the new email.
+        const isPasswordSignup = Boolean(password && !currentAuthUser.providerData?.some(p => p.providerId === "google.com"));
+        if (!authEmailUpdated && isPasswordSignup) {
+          const oldUid = currentAuthUser.uid;
+          const oldDocSnap = await getDoc(doc(db, "users", oldUid)).catch(() => null);
+          const oldProfileData = oldDocSnap?.exists() ? oldDocSnap.data() : null;
+
+          const newCred = await createUserWithEmailAndPassword(auth, trimmed, password);
+          const newUser = newCred.user;
+          activeUid = newUser.uid;
+          if (activeUserDisplayName) {
+            await updateProfile(newUser, { displayName: activeUserDisplayName }).catch(() => {});
+          }
+
+          if (oldProfileData) {
+            await setDoc(doc(db, "users", activeUid), {
+              ...oldProfileData,
+              uid: activeUid,
+              email: trimmed,
+              isVerified: false
+            });
+          } else {
+            await setDoc(doc(db, "users", activeUid), {
+              uid: activeUid,
+              email: trimmed,
+              isVerified: false
+            }, { merge: true });
+          }
+
+          if (oldUid !== activeUid) {
+            await deleteDoc(doc(db, "users", oldUid)).catch(() => {});
+            fetch("/api/account/purge-orphaned-auth", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ uid: oldUid })
+            }).catch(() => {});
+          }
+          authEmailUpdated = true;
+        }
+      }
+
+      // 3. Always update Firestore users document with the new email
+      try {
+        await setDoc(doc(db, "users", activeUid), { email: trimmed }, { merge: true });
       } catch (uErr) {
         console.warn("Firestore email update notice:", uErr);
       }
-      setEmail(trimmed);
 
+      // 4. Replace former email in component state & sessionStorage immediately
+      if (typeof window !== "undefined") {
+        if (formerEmail) {
+          sessionStorage.removeItem(`shopiversity_verify_token_${formerEmail}`);
+          sessionStorage.removeItem(`shopiversity_otp_sent_${formerEmail}`);
+        }
+        sessionStorage.setItem("shopiversity_verifying_email", trimmed);
+        sessionStorage.setItem(`shopiversity_otp_sent_${trimmed}`, "true");
+      }
+
+      setEmail(trimmed);
+      setEnteredOtpCode("");
+      setVerificationToken("");
+      setShowChangeEmail(false);
+      setNewEmailInput("");
+
+      // 5. Send fresh 6-digit verification code via Brevo to the newly updated email
       const vRes = await fetch("/api/send-verification", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           email: trimmed,
-          userName: fullName || username || currentAuthUser.displayName || "Student"
+          userName: activeUserDisplayName
         })
       });
       const vData = await vRes.json().catch(() => ({}));
-      setEnteredOtpCode("");
 
       if (vRes.ok && vData.sent && vData.verificationToken) {
         setVerificationToken(vData.verificationToken);
         if (typeof window !== "undefined") {
-          sessionStorage.setItem("shopiversity_verifying_email", trimmed);
           sessionStorage.setItem(`shopiversity_verify_token_${trimmed}`, vData.verificationToken);
-          sessionStorage.setItem(`shopiversity_otp_sent_${trimmed}`, "true");
         }
-        setError(`Email updated to ${trimmed}! Verification code dispatched via Brevo. Check your inbox.`);
+        setBrevoNotice(`Email updated to ${trimmed}! A new 6-digit verification code has been sent to ${trimmed} via Brevo.`);
+        setError("");
       } else {
+        setBrevoNotice(`Email updated from ${formerEmail} to ${trimmed}.`);
         setError(vData.error || `Email updated to ${trimmed}, but Brevo delivery failed. Please tap Resend Code.`);
       }
 
-      setShowChangeEmail(false);
-      setNewEmailInput("");
       setResendCooldown(30);
     } catch (err: any) {
       console.error("Change email error:", err);
@@ -1285,6 +1394,13 @@ export default function AuthPage({
         }
       }
 
+      if (typeof window !== "undefined" && targetEmail) {
+        sessionStorage.setItem("shopiversity_auth_mode", "signup");
+        sessionStorage.setItem("shopiversity_in_signup", "true");
+        sessionStorage.setItem("shopiversity_verifying_email", targetEmail);
+        sessionStorage.setItem(`shopiversity_otp_sent_${targetEmail}`, "true");
+      }
+
       const vRes = await fetch("/api/send-verification", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1301,12 +1417,17 @@ export default function AuthPage({
         setVerificationToken(token);
         if (typeof window !== "undefined") {
           sessionStorage.setItem("shopiversity_verifying_email", targetEmail);
+          sessionStorage.setItem(`shopiversity_otp_sent_${targetEmail}`, "true");
           if (token) {
             sessionStorage.setItem(`shopiversity_verify_token_${targetEmail}`, token);
           }
         }
         setBrevoNotice(`6-digit verification code sent to ${targetEmail} via Brevo! Please check your inbox.`);
       } else {
+        if (typeof window !== "undefined" && targetEmail) {
+          sessionStorage.removeItem(`shopiversity_otp_sent_${targetEmail}`);
+        }
+        setBrevoNotice("");
         setError(vData.error || `Failed to send verification code to ${targetEmail} via Brevo. Please try Resend Code.`);
       }
 
@@ -1442,7 +1563,8 @@ export default function AuthPage({
           }
           await updateDoc(uRef, {
             isVerified: true,
-            emailVerified: true
+            emailVerified: true,
+            ...(targetEmail ? { email: targetEmail } : {})
           });
         } catch (uErr) {
           console.warn("User doc verification update notice:", uErr);
@@ -1595,8 +1717,6 @@ export default function AuthPage({
         return;
       }
 
-      const referralCode = generateReferralCode(user.displayName || "USER");
-      const referredBy = referralCodeInput || localStorage.getItem('referredBy');
       const cleanUserEmail = (user.email || "").trim().toLowerCase();
       const chosenRole = role === "seller" ? "seller" : "buyer";
 
@@ -1608,10 +1728,6 @@ export default function AuthPage({
         phoneNumber: user.phoneNumber || "",
         role: chosenRole,
         activeRole: chosenRole,
-        referralCode,
-        referredBy: referredBy || "",
-        referralEarnings: 0,
-        referralCount: 0,
         strikeCount: 0,
         isVerified: false, // 6-digit email verification via Brevo is mandatory
         isSuspended: false,
@@ -1632,26 +1748,15 @@ export default function AuthPage({
       };
       await setDoc(doc(db, "users", user.uid), userProfile, { merge: true });
 
-      // If referred by someone, increment their referral count safely
-      if (referredBy) {
-        try {
-          const referrersQ = query(collection(db, "users"), where("referralCode", "==", referredBy));
-          const referrersSnap = await getDocs(referrersQ);
-          if (!referrersSnap.empty) {
-            const referrerDoc = referrersSnap.docs[0];
-            const currentCount = referrerDoc.data().referralCount || 0;
-            await updateDoc(referrerDoc.ref, { referralCount: currentCount + 1 });
-          }
-        } catch (refErr) {
-          console.warn("Referral count notice:", refErr);
-        }
-      }
-
-      localStorage.removeItem('referredBy');
-
       let noticeMessage = "";
       let dispatchError = "";
       let nextToken = "";
+
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem("shopiversity_verifying_email", cleanUserEmail);
+        sessionStorage.setItem("shopiversity_chosen_role", chosenRole);
+        sessionStorage.setItem(`shopiversity_otp_sent_${cleanUserEmail}`, "true");
+      }
 
       try {
         console.log(`[GOOGLE SIGNUP] Dispatching 6-digit Brevo email verification to ${cleanUserEmail}`);
@@ -1676,13 +1781,8 @@ export default function AuthPage({
         dispatchError = "Network error dispatching verification code via Brevo. Please click Resend Code.";
       }
 
-      if (typeof window !== "undefined") {
-        sessionStorage.setItem("shopiversity_verifying_email", cleanUserEmail);
-        sessionStorage.setItem("shopiversity_chosen_role", chosenRole);
-        sessionStorage.setItem(`shopiversity_otp_sent_${cleanUserEmail}`, "true");
-        if (nextToken) {
-          sessionStorage.setItem(`shopiversity_verify_token_${cleanUserEmail}`, nextToken);
-        }
+      if (typeof window !== "undefined" && nextToken) {
+        sessionStorage.setItem(`shopiversity_verify_token_${cleanUserEmail}`, nextToken);
       }
 
       setEmail(cleanUserEmail);
@@ -1724,6 +1824,12 @@ export default function AuthPage({
         let dispatchError = "";
         let nextToken = "";
 
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem("shopiversity_verifying_email", cleanUserEmail);
+          sessionStorage.setItem("shopiversity_chosen_role", accountRole);
+          sessionStorage.setItem(`shopiversity_otp_sent_${cleanUserEmail}`, "true");
+        }
+
         try {
           console.log(`[EXISTING GOOGLE LOGIN] Dispatching Brevo verification code to ${cleanUserEmail}`);
           const vRes = await fetch("/api/send-verification", {
@@ -1747,13 +1853,8 @@ export default function AuthPage({
           dispatchError = "Network error sending verification code via Brevo. Please click Resend Code.";
         }
 
-        if (typeof window !== "undefined") {
-          sessionStorage.setItem("shopiversity_verifying_email", cleanUserEmail);
-          sessionStorage.setItem("shopiversity_chosen_role", accountRole);
-          sessionStorage.setItem(`shopiversity_otp_sent_${cleanUserEmail}`, "true");
-          if (nextToken) {
-            sessionStorage.setItem(`shopiversity_verify_token_${cleanUserEmail}`, nextToken);
-          }
+        if (typeof window !== "undefined" && nextToken) {
+          sessionStorage.setItem(`shopiversity_verify_token_${cleanUserEmail}`, nextToken);
         }
 
         setEmail(cleanUserEmail);
@@ -1896,8 +1997,6 @@ export default function AuthPage({
           const firebaseUser = userCredential.user;
           await updateProfile(firebaseUser, { displayName: targetName });
 
-          const referralCode = generateReferralCode(targetName);
-
           const userProfile: UserProfile = {
             uid: firebaseUser.uid,
             displayName: targetName,
@@ -1907,10 +2006,6 @@ export default function AuthPage({
             gender: "male",
             role: sandboxRole === "buyer" ? "buyer" : "seller",
             activeRole: sandboxRole === "buyer" ? "buyer" : "seller",
-            referralCode,
-            referredBy: "",
-            referralEarnings: 0,
-            referralCount: 0,
             schoolType: "University",
             schoolName: "University of Ibadan",
             state: "Oyo",
@@ -2530,7 +2625,7 @@ export default function AuthPage({
                     Verify Your Email Address
                   </h3>
                   <p className="text-xs text-slate-600 dark:text-zinc-300 mt-1.5 max-w-sm mx-auto leading-relaxed">
-                    We sent a 6-digit confirmation code to: <br />
+                    {error && !brevoNotice ? "Verification code delivery pending for:" : "We sent a 6-digit confirmation code to:"} <br />
                     <span className="font-extrabold text-orange-600 dark:text-orange-400 break-all text-sm">
                       {email || auth.currentUser?.email}
                     </span>
@@ -2659,7 +2754,7 @@ export default function AuthPage({
                           disabled={loading}
                           className="flex-1 h-9 bg-orange-600 hover:bg-orange-700 text-white font-bold rounded-lg text-xs transition-all touch-manipulation cursor-pointer flex items-center justify-center gap-1.5"
                         >
-                          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Update & Send Code"}
+                          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Update & Save"}
                         </button>
                         <button 
                           type="button"
@@ -2677,6 +2772,9 @@ export default function AuthPage({
                     onClick={async () => {
                       if (typeof window !== "undefined") {
                         sessionStorage.removeItem("shopiversity_verifying_email");
+                        sessionStorage.removeItem("shopiversity_in_signup");
+                        sessionStorage.removeItem("shopiversity_google_pending");
+                        sessionStorage.setItem("shopiversity_auth_mode", "login");
                         if (email) {
                           sessionStorage.removeItem(`shopiversity_otp_sent_${email}`);
                           sessionStorage.removeItem(`shopiversity_verify_token_${email}`);
@@ -2908,6 +3006,7 @@ export default function AuthPage({
                         onClick={() => {
                           setRole("buyer");
                           sessionStorage.setItem("shopiversity_chosen_role", "buyer");
+                          onRoleChange?.("buyer");
                         }}
                         className={cn(
                           "min-h-[38px] py-1.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer touch-manipulation active:scale-95 whitespace-nowrap",
@@ -2924,6 +3023,7 @@ export default function AuthPage({
                         onClick={() => {
                           setRole("seller");
                           sessionStorage.setItem("shopiversity_chosen_role", "seller");
+                          onRoleChange?.("seller");
                         }}
                         className={cn(
                           "min-h-[38px] py-1.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer touch-manipulation active:scale-95 whitespace-nowrap",
@@ -3169,7 +3269,7 @@ export default function AuthPage({
                     {isLogin ? "Create your SHOPIVERSITY account" : "Sign-In with existing account"}
                   </button>
 
-                  {auth.currentUser && (
+                  {auth.currentUser && currentUser?.isVerified && (
                     <div className="pt-2 flex flex-col items-center gap-1.5">
                       <button 
                         type="button"

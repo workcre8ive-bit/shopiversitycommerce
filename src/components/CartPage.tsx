@@ -157,25 +157,11 @@ export default function CartPage({
         sellerOrderIdMap[sellerId] = `ORD-${randOrd}`;
       });
 
-      // Get referrer if buyer was referred
-      let referrerDoc: any = null;
-      if (currentUser?.referredBy) {
-        const referrersQ = query(collection(db, "users"), where("referralCode", "==", currentUser.referredBy));
-        const referrersSnap = await getDocs(referrersQ);
-        if (!referrersSnap.empty) {
-          referrerDoc = referrersSnap.docs[0];
-          if (referrerDoc.id === auth.currentUser!.uid) {
-            referrerDoc = null; 
-          }
-        }
-      }
-
       // Create an order for each unique selected item
       const orderPromises = uniqueSelectedItems.map(async (item) => {
         const itemTotal = item.price * item.quantity;
         const commissionRate = item.type === "service" ? 0.06 : 0.05;
-        const itemReferralCommission = referrerDoc ? Math.floor((itemTotal * commissionRate) * 0.013) : 0;
-        const itemPlatformCommission = (itemTotal * commissionRate) - itemReferralCommission;
+        const itemPlatformCommission = itemTotal * commissionRate;
         const itemSellerEarnings = itemTotal - (itemTotal * commissionRate);
 
         // Fetch seller profile details
@@ -231,8 +217,6 @@ export default function CartPage({
           deliveryPrice: 0,
           logisticsOfferStatus: "not_booked",
           commissionAmount: itemPlatformCommission,
-          referrerId: referrerDoc?.id || null,
-          referralCommissionAmount: itemReferralCommission,
           sellerEarnings: itemSellerEarnings,
           deliveryType,
           paymentMethod: item.ticketTierId ? "online" : paymentMethod,

@@ -21,11 +21,6 @@ export interface UserProfile {
   photoURL?: string;
   role: "buyer" | "seller" | "admin" | "both" | "logistics";
   activeRole?: "buyer" | "seller" | "logistics";
-  referralCode?: string;
-  referredBy?: string;
-  referralEarnings?: number;
-  referralCount?: number;
-  referralWalletBalance?: number;
   campus?: string;
   school?: string;
   schoolType?: string;
@@ -185,8 +180,6 @@ export interface Order {
   quantity: number;
   totalPrice: number;
   commissionAmount?: number;
-  referralCommissionAmount?: number;
-  referralCommissionAwarded?: boolean;
   sellerEarnings?: number;
   deliveryType: "delivery" | "pickup";
   paymentMethod: "online" | "pod";
@@ -415,16 +408,6 @@ export interface DeliveryJob {
   sellerHandoverVerified?: boolean;
   createdAt: string;
   updatedAt: string;
-}
-
-export interface ReferralTransaction {
-  id: string;
-  referrerId: string;
-  referredUserId: string;
-  orderId: string;
-  amount: number; // 1.3% of platform commission
-  platformCommission: number;
-  createdAt: string;
 }
 
 export interface Notification {

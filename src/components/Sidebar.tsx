@@ -19,7 +19,6 @@ import {
   ChevronRight,
   LogOut,
   ArrowLeftRight,
-  Share2,
   HeartHandshake,
   DollarSign,
   Zap,
@@ -83,7 +82,6 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
     { id: "logistics", label: "Campus Logistics", icon: Truck },
     { id: "orders", label: "My Orders", icon: ShoppingBag },
     { id: "wishlist", label: "My Wishlist", icon: Heart },
-    { id: "referrals", label: "Referral Program", icon: Share2 },
     { id: "history", label: "Product Trash", icon: Trash2 },
     { id: "support", label: "Customer Support", icon: HeartHandshake },
     { id: "feedback-help", label: "Feedback & Help", icon: MessageSquare },
@@ -100,7 +98,6 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
     { id: "orders", label: "Orders", icon: ShoppingBag },
     { id: "payouts", label: "Earnings & Payouts", icon: DollarSign },
     { id: "storefront", label: "Storefront", icon: Store },
-    { id: "referrals", label: "Referral Program", icon: Share2 },
     { id: "support", label: "Customer Support", icon: HeartHandshake },
     { id: "feedback-help", label: "Feedback & Help", icon: MessageSquare },
     { id: "notifications", label: "Notifications", icon: Bell },
@@ -113,7 +110,6 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
     { id: "search", label: "Search", icon: Search },
     { id: "logistics", label: "Campus Logistics", icon: Truck },
     { id: "orders", label: "My Orders", icon: ShoppingBag },
-    { id: "referrals", label: "Referral Program", icon: Share2 },
     { id: "support", label: "Customer Support", icon: HeartHandshake },
     { id: "feedback-help", label: "Feedback & Help", icon: MessageSquare },
     { id: "history", label: "Product Trash", icon: Trash2 },
@@ -253,7 +249,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
                <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-widest">Your Experience</h3>
             </div>
             <div className="space-y-1">
-              {navItems.filter(item => ["auth", "signup", "settings", "orders", "wishlist", "notifications", "messages", "history", "referrals", "support", "feedback-help", "admin", "payouts"].includes(item.id)).map((item, idx) => (
+              {navItems.filter(item => ["auth", "signup", "settings", "orders", "wishlist", "notifications", "messages", "history", "support", "feedback-help", "admin", "payouts"].includes(item.id)).map((item, idx) => (
                 <button
                    key={`nav-exp-${item.id}-${idx}`}
                    onClick={() => {

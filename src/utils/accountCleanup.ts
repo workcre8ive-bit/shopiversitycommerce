@@ -296,7 +296,6 @@ export async function cascadeDeleteUserAccount(
     try {
       localStorage.removeItem("shopiversity_cart");
       localStorage.removeItem(`shopiversity_bank_details_${uid}`);
-      localStorage.removeItem("referredBy");
       localStorage.removeItem("shopiversity_recent_searches");
       sessionStorage.clear();
     } catch (storageErr) {

@@ -31,17 +31,20 @@ export default async function handler(req: any, res: any) {
     });
   }
 
-  const apiKey = (
-    process.env.BREVO_API_KEY ||
-    process.env.brevo_api_key ||
-    process.env.BREVO_KEY ||
-    process.env.brevo_key ||
-    process.env.BREVO_SMTP_KEY ||
-    process.env.VITE_BREVO_API_KEY ||
-    req.body?.apiKey ||
-    req.query?.apiKey ||
-    ""
-  ).trim();
+  const candidateKeys = [
+    req.body?.apiKey,
+    req.query?.apiKey,
+    process.env.BREVO_API_KEY,
+    process.env.brevo_api_key,
+    process.env.BREVO_KEY,
+    process.env.brevo_key,
+    process.env.BREVO_SMTP_KEY,
+    process.env.VITE_BREVO_API_KEY
+  ]
+    .map(k => (typeof k === "string" ? k.trim() : ""))
+    .filter(k => k.length > 7);
+
+  const apiKey = candidateKeys.find(k => !k.startsWith("xsmtpsib-")) || candidateKeys[0] || "";
 
   if (!apiKey || apiKey.length < 8) {
     return res.status(400).json({
@@ -131,13 +134,31 @@ export default async function handler(req: any, res: any) {
 
   // Brevo SMTP Relay fallback if key starts with xsmtpsib-
   if (apiKey.startsWith("xsmtpsib-")) {
+    const smtpUser = String(
+      req.body?.smtpUser ||
+      req.query?.smtpUser ||
+      process.env.BREVO_SMTP_USER ||
+      process.env.brevo_smtp_user ||
+      process.env.BREVO_SMTP_LOGIN ||
+      process.env.brevo_smtp_login ||
+      process.env.SMTP_USER ||
+      ""
+    ).trim();
+
+    if (!smtpUser || !smtpUser.includes("@")) {
+      return res.status(400).json({
+        success: false,
+        error: "Brevo SMTP key (xsmtpsib-) requires your Brevo SMTP Login (e.g. xxxxx@smtp-brevo.com from Brevo > SMTP & API > SMTP) in BREVO_SMTP_USER, or use a Brevo REST API v3 key (xkeysib-...) instead."
+      });
+    }
+
     try {
       const transporter = nodemailer.createTransport({
         host: "smtp-relay.brevo.com",
         port: 587,
         secure: false,
         auth: {
-          user: fromEmail,
+          user: smtpUser,
           pass: apiKey
         }
       });
@@ -161,7 +182,9 @@ export default async function handler(req: any, res: any) {
     } catch (smtpErr: any) {
       return res.status(400).json({
         success: false,
-        error: `Brevo SMTP Relay error: ${smtpErr.message}`
+        error: String(smtpErr?.message || "").includes("535")
+          ? "Brevo SMTP authentication failed (535). Please verify your Brevo SMTP Login (xxxxx@smtp-brevo.com) and SMTP key (xsmtpsib-), or switch to a Brevo REST API v3 key (xkeysib-...)."
+          : `Brevo SMTP Relay error: ${smtpErr.message}`
       });
     }
   }

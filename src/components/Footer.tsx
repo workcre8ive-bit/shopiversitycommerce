@@ -77,20 +77,6 @@ export default function Footer({ setActiveTab, activeTab, onOpenCookieSettings, 
                 <button
                   type="button"
                   onClick={() => {
-                    setActiveTab("referrals");
-                    window.scrollTo({ top: 0, behavior: "smooth" });
-                  }}
-                  className={`hover:text-[#ff6b00] transition-colors bg-transparent border-none p-0 cursor-pointer text-left py-1 block ${
-                    activeTab === "referrals" ? "text-[#ff6b00]" : "text-slate-400"
-                  }`}
-                >
-                  Ambassador Program
-                </button>
-              </li>
-              <li>
-                <button
-                  type="button"
-                  onClick={() => {
                     setActiveTab("orders");
                     window.scrollTo({ top: 0, behavior: "smooth" });
                   }}

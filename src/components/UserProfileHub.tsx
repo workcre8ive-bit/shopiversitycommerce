@@ -4,7 +4,6 @@ import {
   MapPin, 
   CreditCard, 
   ShoppingBag, 
-  Share2, 
   History, 
   Trash2,
   HeartHandshake, 
@@ -93,14 +92,6 @@ export default function UserProfileHub({
           icon: ShoppingBag,
           color: "bg-purple-500/10 text-purple-600 dark:text-purple-400",
           onClick: () => onNavigateTab("orders")
-        },
-        {
-          id: "referrals",
-          label: "Refer & Earn ₦1,500",
-          sublabel: `Referrals: ${user?.referralCount || 0} • Share dynamic link`,
-          icon: Share2,
-          color: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-          onClick: () => onNavigateTab("referrals")
         },
         ...(activeRole === "buyer" ? [
           {
@@ -223,8 +214,8 @@ export default function UserProfileHub({
         {activeRole === "buyer" ? (
           <>
             <div className="bg-slate-50/50 dark:bg-zinc-900/40 p-3 rounded-2xl border border-slate-100 dark:border-zinc-800/50 text-center">
-              <span className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 block uppercase tracking-wider">Referrals</span>
-              <span className="text-lg font-black text-slate-800 dark:text-white block mt-0.5">{user?.referralCount || 0}</span>
+              <span className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 block uppercase tracking-wider">Role</span>
+              <span className="text-xs font-black text-slate-800 dark:text-white block mt-1.5 uppercase">Buyer</span>
             </div>
             <div className="bg-slate-50/50 dark:bg-zinc-900/40 p-3 rounded-2xl border border-slate-100 dark:border-zinc-800/50 text-center">
               <span className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 block uppercase tracking-wider">Status</span>
@@ -233,8 +224,8 @@ export default function UserProfileHub({
               </span>
             </div>
             <div className="bg-slate-50/50 dark:bg-zinc-900/40 p-3 rounded-2xl border border-slate-100 dark:border-zinc-800/50 text-center">
-              <span className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 block uppercase tracking-wider">Points</span>
-              <span className="text-lg font-black text-amber-500 block mt-0.5">{(user?.referralCount || 0) * 1500} pts</span>
+              <span className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 block uppercase tracking-wider">Escrow</span>
+              <span className="text-xs font-black text-[#ff6b00] block mt-1.5 uppercase">Active</span>
             </div>
           </>
         ) : (
