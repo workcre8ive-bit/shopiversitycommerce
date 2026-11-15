@@ -4379,18 +4379,192 @@ const FALLBACK_BANKS = [
   // Cascade delete all public and private data when an account is deleted
   app.post("/api/account/cascade-delete", async (req, res) => {
     try {
-      const { uid } = req.body;
+      const {
+        uid,
+        email: bodyEmail,
+        displayName: bodyDisplayName,
+        storeName: bodyStoreName,
+        companyName: bodyCompanyName,
+        role: bodyRole,
+        deletedProductsCount: bodyDeletedProductsCount
+      } = req.body || {};
       if (!uid) {
         return res.status(400).json({ error: "Missing uid parameter" });
       }
 
       console.log(`[ACCOUNT PURGE] Initiating complete cascade deletion for user: ${uid}`);
 
+      let capturedEmail = String(bodyEmail || "").trim().toLowerCase();
+      let capturedName = String(bodyDisplayName || "Shopiversity User").trim();
+      let capturedStoreName = String(bodyStoreName || "Your Store").trim();
+      let capturedCompanyName = String(bodyCompanyName || capturedName).trim();
+      let capturedRole = String(bodyRole || "buyer").toLowerCase();
+      let capturedDeletedProducts = Number(bodyDeletedProductsCount || 0);
+      let isLogisticsAccount = Boolean(bodyCompanyName && capturedRole === "logistics");
+
+      if (firebaseAdminDb && isAdminDbAuthorized) {
+        try {
+          // 1. Snapshot user/logistics metadata before deletion
+          const [uSnap, lSnap, sOrdersSnap, lOrdersSnap, sDelivSnap, lDelivSnap, prodSnap] = await Promise.all([
+            firebaseAdminDb.collection("users").doc(uid).get().catch(() => null),
+            firebaseAdminDb.collection("logistics_companies").doc(uid).get().catch(() => null),
+            firebaseAdminDb.collection("orders").where("sellerId", "==", uid).get().catch(() => null),
+            firebaseAdminDb.collection("orders").where("logisticsId", "==", uid).get().catch(() => null),
+            firebaseAdminDb.collection("logistics_deliveries").where("senderId", "==", uid).get().catch(() => null),
+            firebaseAdminDb.collection("logistics_deliveries").where("logisticsId", "==", uid).get().catch(() => null),
+            firebaseAdminDb.collection("products").where("sellerId", "==", uid).get().catch(() => null)
+          ]);
+
+          if (uSnap && uSnap.exists) {
+            const u = uSnap.data() || {};
+            if (!capturedEmail && u.email) capturedEmail = String(u.email).trim().toLowerCase();
+            if (u.displayName) capturedName = String(u.displayName).trim();
+            if (u.businessName) capturedStoreName = String(u.businessName).trim();
+            if (u.role) capturedRole = String(u.role).toLowerCase();
+          }
+          if (lSnap && lSnap.exists) {
+            const l = lSnap.data() || {};
+            isLogisticsAccount = true;
+            if (!capturedEmail && l.email) capturedEmail = String(l.email).trim().toLowerCase();
+            if (l.companyName) capturedCompanyName = String(l.companyName).trim();
+          }
+          if (prodSnap && prodSnap.size > 0 && capturedDeletedProducts === 0) {
+            capturedDeletedProducts = prodSnap.size;
+          }
+
+          // 2. Enforce server-side order & delivery deletion guards
+          const ACTIVE_DELIVERY_STATUSES = new Set(["accepted", "picked_up", "in_transit", "out_for_delivery"]);
+          const TERMINAL_ORDER_STATUSES = new Set(["completed", "cancelled", "acquired"]);
+          const DELIVERED_ORDER_STATUSES = new Set(["delivered", "order delivered"]);
+          const UNACCEPTED_PENDING_STATUSES = new Set(["pending", "pending seller acceptance"]);
+
+          const activeSellerDeliveryIds = new Set<string>();
+          if (sDelivSnap) {
+            for (const d of sDelivSnap.docs) {
+              const data = d.data() || {};
+              if (ACTIVE_DELIVERY_STATUSES.has(String(data.status || "").trim().toLowerCase()) && data.orderId) {
+                activeSellerDeliveryIds.add(String(data.orderId));
+              }
+            }
+          }
+
+          if (sOrdersSnap) {
+            const blockingSellerOrders: string[] = [];
+            for (const oDoc of sOrdersSnap.docs) {
+              const o = oDoc.data() || {};
+              const st = String(o.status || "").trim().toLowerCase();
+              const escrow = String(o.escrowStatus || "").trim().toLowerCase();
+              const dispute = String(o.disputeStatus || "").trim().toLowerCase();
+              const refund = String(o.refundStatus || "").trim().toLowerCase();
+              const offerStatus = String(o.logisticsOfferStatus || "").trim().toLowerCase();
+
+              if (dispute === "active" || dispute === "seller_responded" || ["requested", "under_review", "processing"].includes(refund)) {
+                blockingSellerOrders.push(String(o.uniqueOrderId || oDoc.id));
+                continue;
+              }
+              if (TERMINAL_ORDER_STATUSES.has(st)) continue;
+              if (DELIVERED_ORDER_STATUSES.has(st)) {
+                if (o.confirmOrderPressed === true || escrow === "released" || escrow === "refunded") continue;
+                blockingSellerOrders.push(String(o.uniqueOrderId || oDoc.id));
+                continue;
+              }
+              if (offerStatus === "accepted" || Boolean(o.logisticsAcceptedAt) || activeSellerDeliveryIds.has(oDoc.id)) {
+                blockingSellerOrders.push(String(o.uniqueOrderId || oDoc.id));
+                continue;
+              }
+              if (UNACCEPTED_PENDING_STATUSES.has(st) && !o.acceptedAt) continue;
+              blockingSellerOrders.push(String(o.uniqueOrderId || oDoc.id));
+            }
+            if (blockingSellerOrders.length > 0) {
+              return res.status(409).json({
+                success: false,
+                error: `Cannot delete seller account: ${blockingSellerOrders.length} accepted or in-process order(s) (${blockingSellerOrders.slice(0, 3).join(", ")}) remain active or accepted by a logistics company.`
+              });
+            }
+          }
+
+          const blockingLogisticsRefs: string[] = [];
+          if (lDelivSnap) {
+            for (const d of lDelivSnap.docs) {
+              const data = d.data() || {};
+              if (ACTIVE_DELIVERY_STATUSES.has(String(data.status || "").trim().toLowerCase())) {
+                blockingLogisticsRefs.push(String(data.orderId || d.id));
+              }
+            }
+          }
+          if (lOrdersSnap) {
+            for (const oDoc of lOrdersSnap.docs) {
+              const o = oDoc.data() || {};
+              const st = String(o.status || "").trim().toLowerCase();
+              const offerStatus = String(o.logisticsOfferStatus || "").trim().toLowerCase();
+              const finished = TERMINAL_ORDER_STATUSES.has(st) || DELIVERED_ORDER_STATUSES.has(st);
+              if (!finished && (offerStatus === "accepted" || Boolean(o.logisticsAcceptedAt))) {
+                blockingLogisticsRefs.push(String(o.uniqueOrderId || oDoc.id));
+              }
+            }
+          }
+          if (blockingLogisticsRefs.length > 0) {
+            return res.status(409).json({
+              success: false,
+              error: `Cannot delete logistics company account: active accepted/in-process deliveries (${blockingLogisticsRefs.slice(0, 3).join(", ")}) are not yet completed.`
+            });
+          }
+        } catch (guardErr: any) {
+          if (guardErr?.code === 7 || guardErr?.message?.includes("PERMISSION_DENIED")) {
+            isAdminDbAuthorized = false;
+          } else {
+            console.warn("[ACCOUNT PURGE] Guard inspection warning:", guardErr);
+          }
+        }
+      }
+
       if (!firebaseAdminDb || !isAdminDbAuthorized) {
         try {
           await admin.auth().deleteUser(uid);
           console.log(`[ACCOUNT PURGE] Firebase Auth user deleted: ${uid}`);
         } catch (e) {}
+
+        // Ensure deletion confirmation email is still queued if recipient was supplied and not already sent
+        if (capturedEmail) {
+          const ts = new Date().toUTCString();
+          if (isLogisticsAccount) {
+            dispatchTemplatedEmail({
+              templateId: "logistics_account_deleted",
+              recipientEmail: capturedEmail,
+              recipientUserId: uid,
+              recipientRole: "logistics",
+              variables: { courier_name: capturedCompanyName, recipient_email: capturedEmail, event_timestamp: ts },
+              idempotencyKey: `logistics_deleted_${uid}`,
+              origin: resolveRequestOrigin(req)
+            }).catch(() => {});
+          } else if (capturedRole === "seller" || capturedRole === "both" || capturedDeletedProducts > 0) {
+            dispatchTemplatedEmail({
+              templateId: "seller_account_deleted",
+              recipientEmail: capturedEmail,
+              recipientUserId: uid,
+              recipientRole: "seller",
+              variables: {
+                seller_name: capturedName,
+                store_name: capturedStoreName,
+                deleted_products_count: `${capturedDeletedProducts} listing${capturedDeletedProducts === 1 ? "" : "s"}`,
+                recipient_email: capturedEmail,
+                event_timestamp: ts
+              },
+              idempotencyKey: `account_deleted_${uid}`,
+              origin: resolveRequestOrigin(req)
+            }).catch(() => {});
+          } else {
+            dispatchTemplatedEmail({
+              templateId: "buyer_account_deleted",
+              recipientEmail: capturedEmail,
+              recipientUserId: uid,
+              recipientRole: "buyer",
+              variables: { buyer_name: capturedName, recipient_email: capturedEmail, event_timestamp: ts },
+              idempotencyKey: `account_deleted_${uid}`,
+              origin: resolveRequestOrigin(req)
+            }).catch(() => {});
+          }
+        }
 
         return res.status(200).json({ 
           success: true, 
@@ -4463,6 +4637,48 @@ const FALLBACK_BANKS = [
         console.log(`[ACCOUNT PURGE] Firebase Auth user deleted: ${uid}`);
       } catch (authErr: any) {
         // If already deleted, ignore
+      }
+
+      // Dispatch account deletion email (idempotent with client-triggered email)
+      if (capturedEmail) {
+        const ts = new Date().toUTCString();
+        if (isLogisticsAccount) {
+          dispatchTemplatedEmail({
+            templateId: "logistics_account_deleted",
+            recipientEmail: capturedEmail,
+            recipientUserId: uid,
+            recipientRole: "logistics",
+            variables: { courier_name: capturedCompanyName, recipient_email: capturedEmail, event_timestamp: ts },
+            idempotencyKey: `logistics_deleted_${uid}`,
+            origin: resolveRequestOrigin(req)
+          }).catch(() => {});
+        } else if (capturedRole === "seller" || capturedRole === "both" || capturedDeletedProducts > 0) {
+          dispatchTemplatedEmail({
+            templateId: "seller_account_deleted",
+            recipientEmail: capturedEmail,
+            recipientUserId: uid,
+            recipientRole: "seller",
+            variables: {
+              seller_name: capturedName,
+              store_name: capturedStoreName,
+              deleted_products_count: `${capturedDeletedProducts} listing${capturedDeletedProducts === 1 ? "" : "s"}`,
+              recipient_email: capturedEmail,
+              event_timestamp: ts
+            },
+            idempotencyKey: `account_deleted_${uid}`,
+            origin: resolveRequestOrigin(req)
+          }).catch(() => {});
+        } else {
+          dispatchTemplatedEmail({
+            templateId: "buyer_account_deleted",
+            recipientEmail: capturedEmail,
+            recipientUserId: uid,
+            recipientRole: "buyer",
+            variables: { buyer_name: capturedName, recipient_email: capturedEmail, event_timestamp: ts },
+            idempotencyKey: `account_deleted_${uid}`,
+            origin: resolveRequestOrigin(req)
+          }).catch(() => {});
+        }
       }
 
       return res.status(200).json({

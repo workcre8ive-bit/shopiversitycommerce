@@ -898,5 +898,34 @@ export const BUYER_EMAIL_TEMPLATES: EmailTemplateDefinition[] = [
     requiredVariables: ["buyer_name", "ticket_id", "ticket_subject", "resolution_notes", "dashboard_url", "support_email"],
     sendingConditions: "Send only when support ticket status updates to `resolved` or `closed`.",
     recommendedSchedule: "Immediate (Real-time)"
+  },
+  {
+    id: "buyer_account_deleted",
+    code: "B-31",
+    name: "Buyer Account Permanently Deleted",
+    recipientCategory: "buyer",
+    section: "Account and Registration",
+    classification: "transactional",
+    subjectTemplate: "Account Deleted: Your Shopiversity Profile Has Been Permanently Removed",
+    previewTextTemplate: "Your buyer account, saved history, and personal data have been removed from Shopiversity.",
+    badgeLabel: "ACCOUNT DELETED",
+    badgeColor: "#dc2626",
+    heroTitleTemplate: "Your Account Has Been Deleted",
+    greetingTemplate: "Hello {{buyer_name}},",
+    bodyParagraphs: [
+      "This confirms that your Shopiversity buyer account and associated profile, wishlists, browsing history, and personal data have been permanently deleted as requested.",
+      "If you did not authorize this deletion or need assistance recovering an order inquiry, please contact {{support_email}} immediately."
+    ],
+    detailRows: [
+      { label: "Account Email", valueTemplate: "{{recipient_email}}", hideIfEmptyVar: "recipient_email" },
+      { label: "Account Role", valueTemplate: "Buyer" },
+      { label: "Deleted At", valueTemplate: "{{event_timestamp}}", hideIfEmptyVar: "event_timestamp" }
+    ],
+    ctaLabel: "Visit Shopiversity",
+    ctaUrlTemplate: "{{dashboard_url}}",
+    triggerEvent: "buyer.account_deleted",
+    requiredVariables: ["buyer_name", "recipient_email", "event_timestamp", "dashboard_url", "support_email"],
+    sendingConditions: "Send once immediately when buyer account purge succeeds.",
+    recommendedSchedule: "Immediate (Real-time)"
   }
 ];

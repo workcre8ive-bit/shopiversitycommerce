@@ -177,6 +177,7 @@ export function getSampleEmailVariables(
       effective_date: "Monday, Dec 1, 2026",
       report_period: "Nov 08 - Nov 14, 2026",
       orders_count: "34 Completed Deliveries",
+      deleted_products_count: "12 listings",
       gross_sales: "NGN 642,000",
       weekly_revenue: "NGN 642,000",
       monthly_revenue: "NGN 2,480,000",

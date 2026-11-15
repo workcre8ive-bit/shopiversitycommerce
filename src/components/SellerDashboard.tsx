@@ -24,6 +24,11 @@ import DashboardSlideshow from "./DashboardSlideshow";
 import { deduplicateLogisticsCompanies, filterActiveLogisticsCompanies } from "../utils/logisticsDeduplication";
 import { calculateVendorProfileProgress } from "../utils/vendorVerification";
 import { notifySellerOrderUpdate, notifyLogisticsBooked, triggerTemplatedEmail } from "../utils/orderEmailNotifications";
+import {
+  checkCanDeleteProduct,
+  checkCanDeleteSellerAccount,
+  cancelUnacceptedPendingOrdersBeforeDelete
+} from "../utils/deletionGuards";
 import { 
   LayoutDashboard, 
   LayoutGrid,
@@ -157,6 +162,7 @@ export default function SellerDashboard({
   const [deleteLoading, setDeleteLoading] = React.useState(false);
   const [showClearOrdersConfirm, setShowClearOrdersConfirm] = React.useState(false);
   const [showClearAllDataConfirm, setShowClearAllDataConfirm] = React.useState(false);
+  const [clearingAllData, setClearingAllData] = React.useState(false);
   const [showPermanentDeleteConfirm, setShowPermanentDeleteConfirm] = React.useState(false);
   const [clearingOrders, setClearingOrders] = React.useState(false);
   const [restoringProduct, setRestoringProduct] = React.useState<string | null>(null);
@@ -557,6 +563,7 @@ export default function SellerDashboard({
   };
 
   const deleteProduct = async (productId: string) => {
+    setDeleteError(null);
     setProductToDelete(productId);
   };
 
@@ -565,6 +572,20 @@ export default function SellerDashboard({
     setDeleteLoading(true);
     setDeleteError(null);
     try {
+      const sellerUid = auth.currentUser?.uid || currentUser?.uid || "";
+      const guard = await checkCanDeleteProduct(productToDelete, sellerUid);
+      if (!guard.allowed) {
+        setDeleteError(guard.reason || "Cannot delete this product while accepted or in-process orders exist.");
+        return;
+      }
+
+      if (guard.pendingUnacceptedOrders.length > 0) {
+        await cancelUnacceptedPendingOrdersBeforeDelete(
+          guard.pendingUnacceptedOrders,
+          "Seller removed product listing before accepting the order."
+        );
+      }
+
       // Soft delete: move to history
       await updateDoc(doc(db, "products", productToDelete), {
         isDeleted: true,
@@ -599,6 +620,29 @@ export default function SellerDashboard({
     setDeleteLoading(true);
     setDeleteError(null);
     try {
+      const sellerUid = auth.currentUser?.uid || currentUser?.uid || "";
+      const guard = await checkCanDeleteProduct(productToDelete, sellerUid);
+      if (!guard.allowed) {
+        setDeleteError(guard.reason || "Cannot permanently delete this product while accepted or in-process orders exist.");
+        return;
+      }
+
+      const existingProd = products.find((p) => p.id === productToDelete);
+      let prodName = existingProd?.name || "";
+      if (!prodName) {
+        const prodSnap = await getDoc(doc(db, "products", productToDelete)).catch(() => null);
+        if (prodSnap && prodSnap.exists()) {
+          prodName = String(prodSnap.data()?.name || "");
+        }
+      }
+
+      if (guard.pendingUnacceptedOrders.length > 0) {
+        await cancelUnacceptedPendingOrdersBeforeDelete(
+          guard.pendingUnacceptedOrders,
+          "Seller permanently deleted product before accepting the order."
+        );
+      }
+
       // 1. Delete associated reviews
       const reviewsQ = query(collection(db, "reviews"), where("productId", "==", productToDelete));
       const reviewsSnap = await getDocs(reviewsQ);
@@ -615,14 +659,36 @@ export default function SellerDashboard({
       const plansQ = query(
         collection(db, "event_plans"),
         where("listingId", "==", productToDelete),
-        where("userId", "==", auth.currentUser?.uid || "")
+        where("userId", "==", sellerUid)
       );
       const plansSnap = await getDocs(plansQ);
       const deletePlanPromises = plansSnap.docs.map(d => deleteDoc(d.ref));
       await Promise.all(deletePlanPromises);
 
       // 3. Delete the product itself
-      await deleteDoc(doc(db, "products", productToDelete));
+      const deletedId = productToDelete;
+      await deleteDoc(doc(db, "products", deletedId));
+
+      // 4. Send automated seller product deletion email confirmation
+      const sellerEmail = currentUser?.email || auth.currentUser?.email || "";
+      if (sellerEmail) {
+        void triggerTemplatedEmail({
+          templateId: "seller_product_deleted",
+          recipientEmail: sellerEmail,
+          recipientUserId: sellerUid,
+          recipientRole: "seller",
+          variables: {
+            seller_name: currentUser?.displayName || auth.currentUser?.displayName || "Seller",
+            store_name: currentUser?.businessName || currentUser?.displayName || "Your Store",
+            product_name: prodName || "Product Listing",
+            deleted_products_count: "1 listing",
+            recipient_email: sellerEmail,
+            event_timestamp: new Date().toUTCString()
+          },
+          idempotencyKey: `product_deleted_${deletedId}`
+        });
+      }
+
       setProductToDelete(null);
       setShowPermanentDeleteConfirm(false);
     } catch (error: any) {
@@ -681,14 +747,29 @@ export default function SellerDashboard({
   };
 
   const clearAllData = async () => {
-    if (!auth.currentUser) return;
-    setLoading(true);
+    const sellerUid = auth.currentUser?.uid || currentUser?.uid;
+    if (!sellerUid) return;
+    setClearingAllData(true);
+    setDeleteError(null);
     try {
+      const guard = await checkCanDeleteSellerAccount(sellerUid);
+      if (!guard.allowed) {
+        setDeleteError(guard.reason || "Cannot delete all products while accepted or in-process orders exist.");
+        return;
+      }
+
+      if (guard.pendingUnacceptedOrders.length > 0) {
+        await cancelUnacceptedPendingOrdersBeforeDelete(
+          guard.pendingUnacceptedOrders,
+          "Seller deleted all store products prior to accepting the order."
+        );
+      }
+
       // Delete products
-      const productsQ = query(collection(db, "products"), where("sellerId", "==", auth.currentUser.uid));
+      const productsQ = query(collection(db, "products"), where("sellerId", "==", sellerUid));
       const productsSnap = await getDocs(productsQ);
       
-      // For each product, also delete reviews and reports
+      // For each product, also delete reviews, reports, and event plans
       for (const productDoc of productsSnap.docs) {
         const reviewsQ = query(collection(db, "reviews"), where("productId", "==", productDoc.id));
         const reviewsSnap = await getDocs(reviewsQ);
@@ -697,21 +778,49 @@ export default function SellerDashboard({
         const reportsQ = query(collection(db, "reports"), where("productId", "==", productDoc.id));
         const reportsSnap = await getDocs(reportsQ);
         await Promise.all(reportsSnap.docs.map(d => deleteDoc(d.ref)));
+
+        const plansQ = query(
+          collection(db, "event_plans"),
+          where("listingId", "==", productDoc.id),
+          where("userId", "==", sellerUid)
+        );
+        const plansSnap = await getDocs(plansQ);
+        await Promise.all(plansSnap.docs.map(d => deleteDoc(d.ref)));
         
         await deleteDoc(productDoc.ref);
       }
       
       // Delete orders
-      const ordersQ = query(collection(db, "orders"), where("sellerId", "==", auth.currentUser.uid));
+      const ordersQ = query(collection(db, "orders"), where("sellerId", "==", sellerUid));
       const ordersSnap = await getDocs(ordersQ);
       await Promise.all(ordersSnap.docs.map(d => deleteDoc(d.ref)));
+
+      const sellerEmail = currentUser?.email || auth.currentUser?.email || "";
+      if (sellerEmail && productsSnap.size > 0) {
+        void triggerTemplatedEmail({
+          templateId: "seller_product_deleted",
+          recipientEmail: sellerEmail,
+          recipientUserId: sellerUid,
+          recipientRole: "seller",
+          variables: {
+            seller_name: currentUser?.displayName || auth.currentUser?.displayName || "Seller",
+            store_name: currentUser?.businessName || currentUser?.displayName || "Your Store",
+            product_name: `All Store Products (${productsSnap.size} listing${productsSnap.size === 1 ? "" : "s"})`,
+            deleted_products_count: `${productsSnap.size} listing${productsSnap.size === 1 ? "" : "s"}`,
+            recipient_email: sellerEmail,
+            event_timestamp: new Date().toUTCString()
+          },
+          idempotencyKey: `seller_bulk_products_deleted_${sellerUid}_${Date.now()}`
+        });
+      }
       
       setShowClearAllDataConfirm(false);
       alert("All products and orders deleted successfully.");
-    } catch (error) {
+    } catch (error: any) {
+      setDeleteError(getFirestoreErrorMessage(error));
       handleFirestoreError(error, OperationType.DELETE, "seller_data");
     } finally {
-      setLoading(false);
+      setClearingAllData(false);
     }
   };
 
@@ -1282,6 +1391,7 @@ export default function SellerDashboard({
                     key={`trash-${product.id || pIdx}-${pIdx}`} 
                     product={product} 
                     onDelete={(id: string) => {
+                      setDeleteError(null);
                       setProductToDelete(id);
                       setShowPermanentDeleteConfirm(true);
                     }} 
@@ -1522,7 +1632,10 @@ export default function SellerDashboard({
                 Deleting all your data will remove all your listed products and order history. This action is irreversible.
               </p>
               <button 
-                onClick={() => setShowClearAllDataConfirm(true)}
+                onClick={() => {
+                  setDeleteError(null);
+                  setShowClearAllDataConfirm(true);
+                }}
                 className="px-6 py-3 bg-red-600 text-white rounded-2xl font-bold text-sm hover:bg-red-700 transition-all shadow-lg shadow-red-100 dark:shadow-none flex items-center gap-2"
               >
                 <Trash2 className="w-4 h-4" />
@@ -1785,22 +1898,31 @@ export default function SellerDashboard({
                 <AlertCircle className="w-8 h-8" />
               </div>
               <h3 className="text-xl font-bold text-slate-900 dark:text-white text-center mb-2">Delete All Data?</h3>
-              <p className="text-sm text-slate-500 dark:text-slate-400 text-center mb-8">Are you sure you want to delete ALL your products and orders? This action is irreversible.</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400 text-center mb-6">Are you sure you want to delete ALL your products and orders? This action is irreversible.</p>
+
+              {deleteError && (
+                <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/30 rounded-2xl text-red-600 dark:text-red-400 text-xs font-bold">
+                  {deleteError}
+                </div>
+              )}
               
               <div className="flex gap-3">
                 <button 
-                  onClick={() => setShowClearAllDataConfirm(false)}
-                  disabled={loading}
+                  onClick={() => {
+                    setShowClearAllDataConfirm(false);
+                    setDeleteError(null);
+                  }}
+                  disabled={clearingAllData}
                   className="flex-1 py-4 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl font-bold text-sm hover:bg-slate-100 dark:hover:bg-slate-700 transition-all disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button 
                   onClick={clearAllData}
-                  disabled={loading}
+                  disabled={clearingAllData}
                   className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-bold text-sm hover:bg-red-700 transition-all shadow-lg shadow-red-100 dark:shadow-red-900/20 flex items-center justify-center gap-2 disabled:opacity-50"
                 >
-                  {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Delete Everything"}
+                  {clearingAllData ? <Loader2 className="w-4 h-4 animate-spin" /> : "Delete Everything"}
                 </button>
               </div>
             </motion.div>

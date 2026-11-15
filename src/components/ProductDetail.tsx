@@ -14,7 +14,8 @@ import ReviewSuccessModal from "./ReviewSuccessModal";
 import { AlertTriangle } from "lucide-react";
 import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
 import VendorVerificationBadge from "./VendorVerificationBadge";
-import { notifyOrderPlaced } from "../utils/orderEmailNotifications";
+import { notifyOrderPlaced, triggerTemplatedEmail } from "../utils/orderEmailNotifications";
+import { checkCanDeleteProduct, cancelUnacceptedPendingOrdersBeforeDelete } from "../utils/deletionGuards";
 
 interface ProductDetailProps {
   product: Product;
@@ -1623,8 +1624,22 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                         <button
                           type="button"
                           onClick={async () => {
-                            if (!confirm("Are you sure you want to permanently delete this event? This action is irreversible.")) return;
                             try {
+                              const guard = await checkCanDeleteProduct(product.id, product.sellerId);
+                              if (!guard.allowed) {
+                                alert(guard.reason || "Cannot delete this listing while accepted or in-process orders exist.");
+                                return;
+                              }
+
+                              if (!confirm("Are you sure you want to permanently delete this event? This action is irreversible.")) return;
+
+                              if (guard.pendingUnacceptedOrders.length > 0) {
+                                await cancelUnacceptedPendingOrdersBeforeDelete(
+                                  guard.pendingUnacceptedOrders,
+                                  "Seller deleted event listing before accepting the order."
+                                );
+                              }
+
                               // 1. Delete associated event plans if any match the product ID
                               const plansQ = query(collection(db, "event_plans"), where("listingId", "==", product.id));
                               const plansSnap = await getDocs(plansQ);
@@ -1642,6 +1657,37 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                               const reportsQ = query(collection(db, "reports"), where("productId", "==", product.id));
                               const reportsSnap = await getDocs(reportsQ);
                               await Promise.all(reportsSnap.docs.map(d => deleteDoc(d.ref)));
+
+                              // 5. Notify seller of product/event deletion
+                              let sellerEmail = currentUser?.uid === product.sellerId ? currentUser.email : "";
+                              let sellerName = currentUser?.uid === product.sellerId ? currentUser.displayName : product.sellerName;
+                              let storeName = currentUser?.uid === product.sellerId ? (currentUser.businessName || currentUser.displayName) : product.sellerName;
+                              if (!sellerEmail && product.sellerId) {
+                                const sellerSnap = await getDoc(doc(db, "users", product.sellerId)).catch(() => null);
+                                if (sellerSnap && sellerSnap.exists()) {
+                                  const sData = sellerSnap.data();
+                                  sellerEmail = String(sData?.email || "");
+                                  sellerName = String(sData?.displayName || sellerName || "Seller");
+                                  storeName = String(sData?.businessName || sellerName || "Your Store");
+                                }
+                              }
+                              if (sellerEmail) {
+                                void triggerTemplatedEmail({
+                                  templateId: "seller_product_deleted",
+                                  recipientEmail: sellerEmail,
+                                  recipientUserId: product.sellerId,
+                                  recipientRole: "seller",
+                                  variables: {
+                                    seller_name: sellerName || "Seller",
+                                    store_name: storeName || "Your Store",
+                                    product_name: product.name || "Event Listing",
+                                    deleted_products_count: "1 listing",
+                                    recipient_email: sellerEmail,
+                                    event_timestamp: new Date().toUTCString()
+                                  },
+                                  idempotencyKey: `product_deleted_${product.id}`
+                                });
+                              }
 
                               alert("Event has been successfully deleted.");
                               onClose();

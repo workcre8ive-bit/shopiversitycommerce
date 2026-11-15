@@ -899,5 +899,34 @@ export const LOGISTICS_EMAIL_TEMPLATES: EmailTemplateDefinition[] = [
     requiredVariables: ["courier_name", "report_period", "orders_count", "monthly_revenue", "dashboard_url", "support_email"],
     sendingConditions: "Send only when `monthlyReports !== false`.",
     recommendedSchedule: "1st day of every month at 8:00 AM local time"
+  },
+  {
+    id: "logistics_account_deleted",
+    code: "L-32",
+    name: "Courier Account Permanently Deleted",
+    recipientCategory: "logistics",
+    section: "Account and Registration",
+    classification: "transactional",
+    subjectTemplate: "Logistics Account Deleted: {{courier_name}} Has Been Permanently Removed",
+    previewTextTemplate: "Your Shopiversity courier fleet profile, routes, and pricing settings have been removed.",
+    badgeLabel: "COURIER ACCOUNT DELETED",
+    badgeColor: "#dc2626",
+    heroTitleTemplate: "Logistics Company Account Deleted",
+    greetingTemplate: "Hello {{courier_name}},",
+    bodyParagraphs: [
+      "This confirms that {{courier_name}} has been permanently deleted from the Shopiversity Logistics Network after verifying no accepted or in-process deliveries remain.",
+      "Your company has been removed from merchant checkout dispatch selections. Contact {{support_email}} if this deletion was unexpected."
+    ],
+    detailRows: [
+      { label: "Logistics Company", valueTemplate: "{{courier_name}}" },
+      { label: "Account Email", valueTemplate: "{{recipient_email}}", hideIfEmptyVar: "recipient_email" },
+      { label: "Deleted At", valueTemplate: "{{event_timestamp}}", hideIfEmptyVar: "event_timestamp" }
+    ],
+    ctaLabel: "Visit Shopiversity",
+    ctaUrlTemplate: "{{dashboard_url}}",
+    triggerEvent: "logistics.account_deleted",
+    requiredVariables: ["courier_name", "recipient_email", "event_timestamp", "dashboard_url", "support_email"],
+    sendingConditions: "Send only when logistics partner has zero accepted or in-process deliveries and account deletion completes.",
+    recommendedSchedule: "Immediate (Real-time)"
   }
 ];

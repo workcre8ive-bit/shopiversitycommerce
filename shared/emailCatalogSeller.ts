@@ -1174,5 +1174,65 @@ export const SELLER_EMAIL_TEMPLATES: EmailTemplateDefinition[] = [
     requiredVariables: ["seller_name", "announcement_title", "announcement_summary", "effective_date", "dashboard_url", "support_email"],
     sendingConditions: "Triggered intentionally by Shopiversity Admin broadcast for mandatory operational/legal updates.",
     recommendedSchedule: "Scheduled upon policy release (at least 7 days before changes)"
+  },
+  {
+    id: "seller_account_deleted",
+    code: "S-41",
+    name: "Vendor Account & All Products Permanently Deleted",
+    recipientCategory: "seller",
+    section: "Account and Onboarding",
+    classification: "transactional",
+    subjectTemplate: "Store & Account Deleted: {{store_name}} Has Been Permanently Removed",
+    previewTextTemplate: "Your vendor account and {{deleted_products_count}} product listing(s) have been permanently purged.",
+    badgeLabel: "VENDOR ACCOUNT DELETED",
+    badgeColor: "#dc2626",
+    heroTitleTemplate: "Vendor Account & Products Deleted",
+    greetingTemplate: "Hello {{seller_name}},",
+    bodyParagraphs: [
+      "This confirms that your Shopiversity vendor account for {{store_name}} and all {{deleted_products_count}} associated product listing(s) have been permanently deleted after verifying that no accepted or in-process orders remain.",
+      "If you did not initiate this permanent account deletion, please contact {{support_email}} right away."
+    ],
+    detailRows: [
+      { label: "Store Name", valueTemplate: "{{store_name}}" },
+      { label: "Products Purged", valueTemplate: "{{deleted_products_count}}" },
+      { label: "Account Email", valueTemplate: "{{recipient_email}}", hideIfEmptyVar: "recipient_email" },
+      { label: "Deleted At", valueTemplate: "{{event_timestamp}}", hideIfEmptyVar: "event_timestamp" }
+    ],
+    ctaLabel: "Visit Shopiversity",
+    ctaUrlTemplate: "{{dashboard_url}}",
+    triggerEvent: "seller.account_deleted",
+    requiredVariables: ["seller_name", "store_name", "deleted_products_count", "recipient_email", "event_timestamp", "dashboard_url", "support_email"],
+    sendingConditions: "Send only when seller has zero accepted or in-process orders (including logistics-accepted deliveries) and account purge succeeds.",
+    recommendedSchedule: "Immediate (Real-time)"
+  },
+  {
+    id: "seller_product_deleted",
+    code: "S-42",
+    name: "Product(s) Deleted from Storefront",
+    recipientCategory: "seller",
+    section: "Store Management",
+    classification: "transactional",
+    subjectTemplate: "Listing Deleted: {{product_name}} Removed from {{store_name}}",
+    previewTextTemplate: "{{product_name}} has been removed from your Shopiversity vendor catalog.",
+    badgeLabel: "PRODUCT DELETED",
+    badgeColor: "#ef4444",
+    heroTitleTemplate: "Product Listing Deleted",
+    greetingTemplate: "Hello {{seller_name}},",
+    bodyParagraphs: [
+      "This confirms that {{product_name}} in {{store_name}} has been deleted after verifying there are no accepted orders or active courier deliveries tied to it.",
+      "Deleted listings are immediately removed from buyer search and marketplace checkout."
+    ],
+    detailRows: [
+      { label: "Deleted Item(s)", valueTemplate: "{{product_name}}" },
+      { label: "Store Name", valueTemplate: "{{store_name}}" },
+      { label: "Items Removed", valueTemplate: "{{deleted_products_count}}", hideIfEmptyVar: "deleted_products_count" },
+      { label: "Deleted At", valueTemplate: "{{event_timestamp}}", hideIfEmptyVar: "event_timestamp" }
+    ],
+    ctaLabel: "Manage Seller Dashboard",
+    ctaUrlTemplate: "{{dashboard_url}}",
+    triggerEvent: "product.deleted",
+    requiredVariables: ["seller_name", "store_name", "product_name", "deleted_products_count", "event_timestamp", "dashboard_url", "support_email"],
+    sendingConditions: "Send when single product or bulk products are permanently deleted and zero accepted/in-process orders exist.",
+    recommendedSchedule: "Immediate (Real-time)"
   }
 ];

@@ -350,7 +350,7 @@ export default function AdminEmailBrevoSettings() {
           )}
         >
           <Layers className="w-4 h-4" />
-          101-Template Blueprint &amp; Tester
+          105-Template Blueprint &amp; Tester
         </button>
 
         <button

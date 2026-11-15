@@ -2,6 +2,7 @@ import {
   collection, 
   query, 
   where, 
+  getDoc,
   getDocs, 
   deleteDoc, 
   doc,
@@ -10,6 +11,13 @@ import {
 import { deleteUser, signOut } from "firebase/auth";
 import { auth, db } from "../firebase";
 import { Product } from "../types";
+import {
+  checkCanDeleteSellerAccount,
+  checkCanDeleteLogisticsAccount,
+  cancelUnacceptedPendingOrdersBeforeDelete,
+  releasePendingLogisticsJobsBeforeDelete
+} from "./deletionGuards";
+import { triggerTemplatedEmail } from "./orderEmailNotifications";
 
 /**
  * Generates a clean 6-character username using part of the person's name
@@ -64,9 +72,70 @@ export async function cascadeDeleteUserAccount(
     return { success: false, error: "Invalid user ID" };
   }
 
-  console.log(`[CASCADE DELETE] Beginning complete purge of account ${uid} across Firebase and website...`);
+  console.log(`[CASCADE DELETE] Checking deletion eligibility for account ${uid}...`);
 
   try {
+    // 0A. Strictly enforce order & delivery guards BEFORE deleting any data:
+    // Sellers cannot delete accounts while accepted or in-process orders (or logistics-accepted deliveries) exist.
+    // Logistics companies cannot delete accounts while accepted or in-process deliveries exist.
+    const [sellerGuard, logisticsGuard] = await Promise.all([
+      checkCanDeleteSellerAccount(uid),
+      checkCanDeleteLogisticsAccount(uid)
+    ]);
+
+    if (!sellerGuard.allowed) {
+      return { success: false, error: sellerGuard.reason };
+    }
+    if (!logisticsGuard.allowed) {
+      return { success: false, error: logisticsGuard.reason };
+    }
+
+    // 0B. Snapshot profile & logistics info BEFORE deletion so confirmation email always knows recipient details
+    let userSnapshot: Record<string, any> | null = null;
+    let logisticsSnapshot: Record<string, any> | null = null;
+    try {
+      const [uSnap, lSnap] = await Promise.all([
+        getDoc(doc(db, "users", uid)).catch(() => null),
+        getDoc(doc(db, "logistics_companies", uid)).catch(() => null)
+      ]);
+      if (uSnap && uSnap.exists()) userSnapshot = uSnap.data();
+      if (lSnap && lSnap.exists()) logisticsSnapshot = lSnap.data();
+    } catch {
+      // Continue with fallback authUser info
+    }
+
+    const capturedEmail = String(
+      userSnapshot?.email || logisticsSnapshot?.email || authUser?.email || auth.currentUser?.email || ""
+    ).trim();
+    const capturedName = String(
+      userSnapshot?.displayName || authUser?.displayName || logisticsSnapshot?.companyName || "Shopiversity User"
+    ).trim();
+    const capturedStoreName = String(
+      userSnapshot?.businessName || userSnapshot?.displayName || "Your Store"
+    ).trim();
+    const capturedCompanyName = String(
+      logisticsSnapshot?.companyName || userSnapshot?.businessName || capturedName
+    ).trim();
+    const capturedRole = String(userSnapshot?.role || (logisticsSnapshot ? "logistics" : "buyer")).toLowerCase();
+
+    // 0C. Cleanly cancel any unaccepted pending seller orders & release unaccepted pending logistics requests
+    if (sellerGuard.pendingUnacceptedOrders.length > 0) {
+      await cancelUnacceptedPendingOrdersBeforeDelete(
+        sellerGuard.pendingUnacceptedOrders,
+        "Seller deleted account prior to accepting order."
+      );
+    }
+    if (logisticsGuard.pendingDeliveries.length > 0) {
+      await releasePendingLogisticsJobsBeforeDelete(
+        logisticsGuard.pendingDeliveries,
+        capturedCompanyName
+      );
+    }
+
+    console.log(`[CASCADE DELETE] Eligibility passed. Beginning complete purge of account ${uid} across Firebase and website...`);
+
+    let deletedProductsCount = 0;
+
     // 1. Delete all products created or released by this account (and their reviews/wishlists)
     try {
       const [sellerProdSnap, userProdSnap] = await Promise.all([
@@ -75,6 +144,7 @@ export async function cascadeDeleteUserAccount(
       ]);
 
       const allProdDocs = Array.from(new Map([...sellerProdSnap.docs, ...userProdSnap.docs].map(d => [d.id, d])).values());
+      deletedProductsCount = allProdDocs.length;
       console.log(`[CASCADE DELETE] Found ${allProdDocs.length} products to purge for user ${uid}`);
 
       for (const pDoc of allProdDocs) {
@@ -292,6 +362,65 @@ export async function cascadeDeleteUserAccount(
       console.warn("[CASCADE DELETE] Notice deleting user doc:", e);
     }
 
+    // 15B. Dispatch Account Deletion Confirmation Email(s) via Brevo BEFORE clearing auth/session
+    if (capturedEmail) {
+      const deletedTimestamp = new Date().toUTCString();
+      const emailTasks: Promise<any>[] = [];
+
+      if (logisticsSnapshot) {
+        emailTasks.push(
+          triggerTemplatedEmail({
+            templateId: "logistics_account_deleted",
+            recipientEmail: String(logisticsSnapshot.email || capturedEmail).trim(),
+            recipientUserId: uid,
+            recipientRole: "logistics",
+            variables: {
+              courier_name: capturedCompanyName,
+              recipient_email: String(logisticsSnapshot.email || capturedEmail).trim(),
+              event_timestamp: deletedTimestamp
+            },
+            idempotencyKey: `logistics_deleted_${uid}`
+          })
+        );
+      }
+
+      if (capturedRole === "seller" || capturedRole === "both" || deletedProductsCount > 0) {
+        emailTasks.push(
+          triggerTemplatedEmail({
+            templateId: "seller_account_deleted",
+            recipientEmail: capturedEmail,
+            recipientUserId: uid,
+            recipientRole: "seller",
+            variables: {
+              seller_name: capturedName,
+              store_name: capturedStoreName,
+              deleted_products_count: `${deletedProductsCount} listing${deletedProductsCount === 1 ? "" : "s"}`,
+              recipient_email: capturedEmail,
+              event_timestamp: deletedTimestamp
+            },
+            idempotencyKey: `account_deleted_${uid}`
+          })
+        );
+      } else if (!logisticsSnapshot) {
+        emailTasks.push(
+          triggerTemplatedEmail({
+            templateId: "buyer_account_deleted",
+            recipientEmail: capturedEmail,
+            recipientUserId: uid,
+            recipientRole: "buyer",
+            variables: {
+              buyer_name: capturedName,
+              recipient_email: capturedEmail,
+              event_timestamp: deletedTimestamp
+            },
+            idempotencyKey: `account_deleted_${uid}`
+          })
+        );
+      }
+
+      await Promise.allSettled(emailTasks);
+    }
+
     // 16. Clear Local Storage and Session Storage artifacts
     try {
       localStorage.removeItem("shopiversity_cart");
@@ -307,7 +436,15 @@ export async function cascadeDeleteUserAccount(
       fetch("/api/account/cascade-delete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uid })
+        body: JSON.stringify({
+          uid,
+          email: capturedEmail,
+          displayName: capturedName,
+          storeName: capturedStoreName,
+          companyName: capturedCompanyName,
+          role: capturedRole,
+          deletedProductsCount
+        })
       }).catch(() => {});
     } catch (apiErr) {
       console.warn("[CASCADE DELETE] Server-side cascade notice:", apiErr);
