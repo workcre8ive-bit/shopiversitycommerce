@@ -12,6 +12,13 @@ import admin from "firebase-admin";
 import { getFirestore, Firestore } from "firebase-admin/firestore";
 import fs from "fs";
 import { GoogleGenAI, Type } from "@google/genai";
+import {
+  SHOPIVERSITY_EMAIL_TEMPLATES,
+  getEmailTemplateById,
+  renderShopiversityEmail,
+  getSampleEmailVariables,
+  EmailVariableMap
+} from "./shared/emailTemplates.ts";
 
 dotenv.config();
 
@@ -403,6 +410,18 @@ app.use((req, res, next) => {
             try {
               console.log(`[BREVO REST DISPATCHER] Sending email "${options.subject}" from ${senderCandidate.email} to ${recipients.map(r => r.email).join(", ")}`);
 
+              const fallbackPlainText = (
+                options.textContent ||
+                options.htmlContent
+                  .replace(/<style[\s\S]*?<\/style>/gi, " ")
+                  .replace(/<br\s*\/?>/gi, "\n")
+                  .replace(/<\/(p|div|tr|li|h[1-6])>/gi, "\n")
+                  .replace(/<[^>]+>/g, " ")
+                  .replace(/[ \t]+\n/g, "\n")
+                  .replace(/\n{3,}/g, "\n\n")
+                  .trim()
+              );
+
               const brevoPayload: any = {
                 sender: {
                   name: senderCandidate.name || "SHOPIVERSITY Campus Marketplace",
@@ -410,15 +429,17 @@ app.use((req, res, next) => {
                 },
                 to: recipients,
                 subject: options.subject,
-                htmlContent: options.htmlContent
+                htmlContent: options.htmlContent,
+                textContent: fallbackPlainText,
+                replyTo: options.replyTo || {
+                  email: senderCandidate.email,
+                  name: senderCandidate.name || "SHOPIVERSITY Campus Marketplace"
+                },
+                headers: {
+                  "X-Auto-Response-Suppress": "OOF, AutoReply"
+                }
               };
 
-              if (options.textContent) {
-                brevoPayload.textContent = options.textContent;
-              }
-              if (options.replyTo) {
-                brevoPayload.replyTo = options.replyTo;
-              }
               if (options.tags && options.tags.length > 0) {
                 brevoPayload.tags = options.tags;
               }
@@ -460,7 +481,14 @@ app.use((req, res, next) => {
           try {
             const plainTextFallback = (
               options.textContent ||
-              options.htmlContent.replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()
+              options.htmlContent
+                .replace(/<style[\s\S]*?<\/style>/gi, " ")
+                .replace(/<br\s*\/?>/gi, "\n")
+                .replace(/<\/(p|div|tr|li|h[1-6])>/gi, "\n")
+                .replace(/<[^>]+>/g, " ")
+                .replace(/[ \t]+\n/g, "\n")
+                .replace(/\n{3,}/g, "\n\n")
+                .trim()
             );
             console.log(`[BREVO SMTP DISPATCHER] Sending "${options.subject}" from ${fromEmail} via Brevo SMTP (smtp-relay.brevo.com:587)...`);
             const transporter = nodemailer.createTransport({
@@ -477,17 +505,25 @@ app.use((req, res, next) => {
               connectionTimeout: 7000
             });
 
+            const cleanFromEmail = fromEmail.trim().toLowerCase();
             const info = await transporter.sendMail({
-              from: `"${fromName}" <${fromEmail}>`,
-              replyTo: options.replyTo ? `"${options.replyTo.name || fromName}" <${options.replyTo.email}>` : fromEmail,
+              from: `"${fromName}" <${cleanFromEmail}>`,
+              sender: cleanFromEmail,
+              replyTo: options.replyTo ? `"${options.replyTo.name || fromName}" <${options.replyTo.email}>` : cleanFromEmail,
               to: recipients.map(r => r.email).join(", "),
               subject: options.subject,
               html: options.htmlContent,
-              text: plainTextFallback
+              text: plainTextFallback,
+              messageId: `<${crypto.randomUUID()}@shopiversity.app>`,
+              headers: {
+                "X-Mailer": "Shopiversity Transactional",
+                "X-Auto-Response-Suppress": "OOF, AutoReply",
+                ...(options.tags && options.tags.length > 0 ? { "X-Mailin-Tag": options.tags.join(",") } : {})
+              }
             });
 
             if (Array.isArray(info.rejected) && info.rejected.length > 0 && (!info.accepted || info.accepted.length === 0)) {
-              lastError = `Brevo SMTP rejected recipient(s): ${info.rejected.join(", ")}. Please ensure your sender (${fromEmail}) is verified in Brevo.`;
+              lastError = `Brevo SMTP rejected recipient(s): ${info.rejected.join(", ")}. Please ensure your sender (${cleanFromEmail}) is verified in Brevo.`;
               console.warn(`[BREVO SMTP REJECTED]`, info);
               continue;
             }
@@ -603,6 +639,8 @@ app.use((req, res, next) => {
       smsSender: runtimeBrevoConfig.smsSender,
       smtpUser: activeSmtpUser,
       needsSmtpUser: Boolean(isSmtp && !activeSmtpUser),
+      isSmtpKeyOnly: Boolean(isSmtp),
+      isConsumerGmailSender: runtimeBrevoConfig.senderEmail.toLowerCase().endsWith("@gmail.com"),
       provider: "brevo",
       activeFallback: Boolean(process.env.RESEND_FROM_EMAIL || (process.env.SMTP_HOST && process.env.SMTP_USER))
     });
@@ -744,8 +782,9 @@ app.use((req, res, next) => {
 
     const result = await sendBrevoOrFallbackEmail({
       to: targetEmail,
-      subject: "✅ SHOPIVERSITY & Brevo Email Integration Test",
+      subject: "SHOPIVERSITY: Brevo Email Integration Test",
       htmlContent: testHtml,
+      textContent: `SHOPIVERSITY Brevo Integration Test\n\nYour Brevo API key is connected and active.\nSender: ${senderEmail || runtimeBrevoConfig.senderEmail}\nRecipient: ${targetEmail}`,
       senderName: senderName || runtimeBrevoConfig.senderName,
       senderEmail: senderEmail || runtimeBrevoConfig.senderEmail,
       customApiKey: testKey,
@@ -893,8 +932,9 @@ app.use((req, res, next) => {
 
     const result = await sendBrevoOrFallbackEmail({
       to: recipient,
-      subject: "🚀 SHOPIVERSITY & Brevo Email Test Successful",
+      subject: "SHOPIVERSITY: Brevo Email Delivery Verification",
       htmlContent: testHtml,
+      textContent: `SHOPIVERSITY Brevo Delivery Verification\n\nTransactional email delivery is active for ${recipient}.`,
       senderName: req.body?.senderName || runtimeBrevoConfig.senderName,
       senderEmail: req.body?.senderEmail || runtimeBrevoConfig.senderEmail,
       customApiKey: req.body?.apiKey || req.query?.apiKey,
@@ -950,26 +990,27 @@ app.use((req, res, next) => {
     const verificationToken = createVerificationToken(targetEmail, "email", cleanCode, expiresAt);
 
     const htmlContent = `
-      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff; color: #0f172a;">
+        <div style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;">Your SHOPIVERSITY 6-digit verification code is ${cleanCode}. Valid for 15 minutes.</div>
         <div style="text-align: center; padding-bottom: 20px;">
-          <h1 style="color: #ff6b00; font-size: 28px; font-weight: 900; margin: 0; letter-spacing: -0.5px;">SHOPIVERSITY</h1>
+          <h1 style="color: #ea580c; font-size: 28px; font-weight: 900; margin: 0; letter-spacing: -0.5px;">SHOPIVERSITY</h1>
           <p style="color: #64748b; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Campus Marketplace & Secure Escrow</p>
         </div>
-        <div style="background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%); padding: 32px; text-align: center; border-radius: 20px; border: 1px solid #fed7aa; margin-bottom: 24px;">
-          <div style="display: inline-block; background-color: #ff6b00; color: #ffffff; padding: 4px 12px; border-radius: 999px; font-size: 11px; font-weight: 900; letter-spacing: 1px; margin-bottom: 12px;">
+        <div style="background-color: #fff7ed; background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%); padding: 32px; text-align: center; border-radius: 20px; border: 1px solid #fed7aa; margin-bottom: 24px;">
+          <div style="display: inline-block; background-color: #ea580c; color: #ffffff; padding: 4px 12px; border-radius: 999px; font-size: 11px; font-weight: 900; letter-spacing: 1px; margin-bottom: 12px;">
             ACCOUNT VERIFICATION
           </div>
           <h2 style="color: #1e293b; font-size: 22px; font-weight: 800; margin-top: 0; margin-bottom: 8px;">Verify Your Email Address</h2>
-          <p style="color: #475569; font-size: 14px; margin-bottom: 24px; line-height: 1.5;">
+          <p style="color: #334155; font-size: 14px; margin-bottom: 24px; line-height: 1.5;">
             Welcome ${userName ? `<strong>${userName}</strong>` : "to SHOPIVERSITY"}! Please enter the 6-digit confirmation code below on the website to verify your account:
           </p>
-          <div style="background-color: #ffffff; padding: 20px 32px; display: inline-block; border-radius: 16px; border: 2px dashed #ff6b00; box-shadow: 0 10px 20px -3px rgba(255, 107, 0, 0.15);">
-            <span style="font-size: 38px; font-weight: 900; letter-spacing: 12px; color: #ff6b00; font-family: monospace;">${cleanCode}</span>
+          <div style="background-color: #ffffff; padding: 20px 32px; display: inline-block; border-radius: 16px; border: 2px dashed #ea580c; box-shadow: 0 10px 20px -3px rgba(234, 88, 12, 0.15);">
+            <span style="font-size: 38px; font-weight: 900; letter-spacing: 12px; color: #ea580c; font-family: monospace;">${cleanCode}</span>
           </div>
-          <p style="color: #94a3b8; font-size: 11px; margin-top: 16px; margin-bottom: 0;">Code expires in 15 minutes.</p>
+          <p style="color: #64748b; font-size: 11px; margin-top: 16px; margin-bottom: 0;">Code expires in 15 minutes.</p>
         </div>
         <div style="background-color: #f8fafc; padding: 16px; border-radius: 14px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
-          <p style="color: #64748b; font-size: 12px; line-height: 1.5; margin: 0; text-align: center;">
+          <p style="color: #475569; font-size: 12px; line-height: 1.5; margin: 0; text-align: center;">
             🔒 This code was requested for <strong>${targetEmail}</strong>. If you did not initiate this request, no action is needed.
           </p>
         </div>
@@ -992,6 +1033,22 @@ app.use((req, res, next) => {
     });
 
     if (!dispatchResult.success) {
+      await recordEmailAuditLog({
+        id: `ELG_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`,
+        templateId: "buyer_email_verification",
+        templateCode: "B-02",
+        templateName: "Buyer Email Verification",
+        recipientCategory: "buyer",
+        classification: "transactional",
+        recipientEmail: targetEmail,
+        subject: `${cleanCode} is your SHOPIVERSITY Verification Code`,
+        triggerEvent: "auth.email_verification_requested",
+        status: "failed",
+        provider: dispatchResult.provider,
+        retryCount: 0,
+        error: dispatchResult.error,
+        createdAt: new Date().toISOString()
+      });
       console.warn(`[VERIFICATION ENGINE] Brevo delivery notice for ${targetEmail}:`, dispatchResult.error);
       return res.status(400).json({
         success: false,
@@ -1000,6 +1057,23 @@ app.use((req, res, next) => {
         targetEmail
       });
     }
+
+    await recordEmailAuditLog({
+      id: `ELG_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`,
+      templateId: "buyer_email_verification",
+      templateCode: "B-02",
+      templateName: "Buyer Email Verification",
+      recipientCategory: "buyer",
+      classification: "transactional",
+      recipientEmail: targetEmail,
+      subject: `${cleanCode} is your SHOPIVERSITY Verification Code`,
+      triggerEvent: "auth.email_verification_requested",
+      status: "sent",
+      provider: dispatchResult.provider,
+      messageId: dispatchResult.messageId,
+      retryCount: 0,
+      createdAt: new Date().toISOString()
+    });
 
     return res.status(200).json({
       success: true,
@@ -1280,10 +1354,26 @@ app.use((req, res, next) => {
       </div>
     `;
 
+    const receiptText = [
+      "SHOPIVERSITY - Official Escrow Transaction Receipt",
+      `Order Reference: ${finalOrderId}`,
+      `Date: ${orderDate}`,
+      `Item: ${productName} (x${quantity})`,
+      `Total Paid: NGN ${totalPrice.toLocaleString()}`,
+      `Buyer: ${buyerName}`,
+      `Merchant: ${sellerName}`,
+      `Fulfillment: ${deliveryType}`,
+      `Campus: ${campus}`,
+      "",
+      "48-Hour Campus Escrow Guarantee: Funds remain protected in escrow until you confirm physical handover or inspection.",
+      "Track live progress inside your SHOPIVERSITY Orders tab."
+    ].join("\n");
+
     const dispatchResult = await sendBrevoOrFallbackEmail({
       to: targetEmail,
-      subject: `🧾 Official Escrow Receipt: Order ${finalOrderId} (₦${totalPrice.toLocaleString()})`,
+      subject: `SHOPIVERSITY Escrow Receipt: Order ${finalOrderId}`,
       htmlContent: receiptHtml,
+      textContent: receiptText,
       tags: ["receipt", "order-confirmation", "escrow"]
     });
 
@@ -1394,7 +1484,7 @@ app.use((req, res, next) => {
 
     const dispatchResult = await sendBrevoOrFallbackEmail({
       to: targetEmail,
-      subject: `🔑 ${resetCode} is your SHOPIVERSITY Password Reset Code`,
+      subject: `${resetCode} is your SHOPIVERSITY Password Reset Code`,
       htmlContent,
       textContent,
       tags: ["security", "password-reset"],
@@ -1402,6 +1492,22 @@ app.use((req, res, next) => {
     });
 
     if (!dispatchResult.success) {
+      await recordEmailAuditLog({
+        id: `ELG_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`,
+        templateId: "buyer_password_reset_request",
+        templateCode: "B-04",
+        templateName: "Password Reset Request",
+        recipientCategory: "buyer",
+        classification: "transactional",
+        recipientEmail: targetEmail,
+        subject: `${resetCode} is your SHOPIVERSITY Password Reset Code`,
+        triggerEvent: "auth.password_reset_requested",
+        status: "failed",
+        provider: dispatchResult.provider,
+        retryCount: 0,
+        error: dispatchResult.error,
+        createdAt: new Date().toISOString()
+      });
       return res.status(400).json({
         success: false,
         sent: false,
@@ -1409,6 +1515,23 @@ app.use((req, res, next) => {
         targetEmail
       });
     }
+
+    await recordEmailAuditLog({
+      id: `ELG_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`,
+      templateId: "buyer_password_reset_request",
+      templateCode: "B-04",
+      templateName: "Password Reset Request",
+      recipientCategory: "buyer",
+      classification: "transactional",
+      recipientEmail: targetEmail,
+      subject: `${resetCode} is your SHOPIVERSITY Password Reset Code`,
+      triggerEvent: "auth.password_reset_requested",
+      status: "sent",
+      provider: dispatchResult.provider,
+      messageId: dispatchResult.messageId,
+      retryCount: 0,
+      createdAt: new Date().toISOString()
+    });
 
     return res.status(200).json({
       success: true,
@@ -1472,6 +1595,21 @@ app.use((req, res, next) => {
       }
 
       await admin.auth().updateUser(authUser.uid, { password: String(newPassword) });
+
+      // Dispatch B-05 Password Successfully Changed confirmation email
+      dispatchTemplatedEmail({
+        templateId: "buyer_password_changed",
+        recipientEmail: cleanEmail,
+        recipientUserId: authUser.uid,
+        recipientRole: "buyer",
+        variables: {
+          buyer_name: authUser.displayName || "Student",
+          changed_at: new Date().toLocaleString()
+        },
+        idempotencyKey: `password_changed_${authUser.uid}_${Math.floor(Date.now() / 60000)}`,
+        origin: resolveRequestOrigin(req)
+      }).catch((e) => console.warn("[EMAIL ENGINE] password_changed notice:", e?.message));
+
       return res.status(200).json({
         success: true,
         message: "Your password has been updated! You can now sign in with your new password."
@@ -1542,16 +1680,23 @@ app.use((req, res, next) => {
       </div>
     `;
 
-    // 1. Send confirmation to student
+    // 1. Send standardized confirmation (B-29) via unified template engine + audit log
     let studentSent = false;
     if (requesterEmail) {
-      const studentResult = await sendBrevoOrFallbackEmail({
-        to: requesterEmail,
-        subject: `[Ticket ${refId}] SHOPIVERSITY Support: ${subject || category || "Inquiry Received"}`,
-        htmlContent: studentHtml,
-        tags: ["customer-service", "support-ticket"]
+      const tplResult = await dispatchTemplatedEmail({
+        templateId: "buyer_support_ticket_confirmation",
+        recipientEmail: requesterEmail,
+        recipientRole: "buyer",
+        variables: {
+          buyer_name: requesterName,
+          support_ticket_id: refId,
+          ticket_category: category || "General Inquiry",
+          ticket_subject: subject || category || "Inquiry Received"
+        },
+        idempotencyKey: `support_ticket_conf_${refId}_${requesterEmail.toLowerCase()}`,
+        origin: resolveRequestOrigin(req)
       });
-      studentSent = studentResult.success;
+      studentSent = tplResult.success;
     }
 
     // 2. Alert the support team desk
@@ -1662,14 +1807,550 @@ app.use((req, res, next) => {
   // Idempotency store to prevent duplicate automated transactional emails for the same event
   const sentEmailEventFingerprints = new Set<string>();
 
+  // ==================== 101-TEMPLATE AUTOMATION ENGINE, LOGGING & PREFERENCES ====================
+  interface UserEmailPreferences {
+    email: string;
+    userId?: string;
+    marketingOptIn: boolean;
+    abandonedCartReminders: boolean;
+    wishlistAlerts: boolean;
+    promotionsAndDiscounts: boolean;
+    weeklyReports: boolean;
+    monthlyReports: boolean;
+    unsubscribedAllMarketing: boolean;
+    updatedAt: string;
+  }
+
+  interface EmailAuditLogEntry {
+    id: string;
+    templateId: string;
+    templateCode: string;
+    templateName: string;
+    recipientCategory: string;
+    classification: "transactional" | "marketing";
+    recipientEmail: string;
+    subject: string;
+    triggerEvent: string;
+    status: "sent" | "failed" | "suppressed_duplicate" | "skipped_unsubscribed";
+    provider?: string;
+    messageId?: string;
+    retryCount: number;
+    error?: string;
+    isTest?: boolean;
+    createdAt: string;
+  }
+
+  const EMAIL_PREFS_FILE = path.join(process.cwd(), "email-preferences.json");
+  const EMAIL_LOGS_FILE = path.join(process.cwd(), "email-logs.json");
+  const TMP_EMAIL_PREFS_FILE = "/tmp/email-preferences.json";
+  const TMP_EMAIL_LOGS_FILE = "/tmp/email-logs.json";
+
+  const emailPreferencesStore = new Map<string, UserEmailPreferences>();
+  let emailAuditLogs: EmailAuditLogEntry[] = [];
+
+  for (const pFile of [EMAIL_PREFS_FILE, TMP_EMAIL_PREFS_FILE]) {
+    try {
+      if (fs.existsSync(pFile)) {
+        const parsed = JSON.parse(fs.readFileSync(pFile, "utf-8"));
+        if (parsed && typeof parsed === "object") {
+          for (const [k, v] of Object.entries(parsed)) {
+            if (v && typeof v === "object") {
+              emailPreferencesStore.set(k.toLowerCase(), v as UserEmailPreferences);
+            }
+          }
+          break;
+        }
+      }
+    } catch {
+      // Non-fatal
+    }
+  }
+
+  for (const lFile of [EMAIL_LOGS_FILE, TMP_EMAIL_LOGS_FILE]) {
+    try {
+      if (fs.existsSync(lFile)) {
+        const parsed = JSON.parse(fs.readFileSync(lFile, "utf-8"));
+        if (Array.isArray(parsed)) {
+          emailAuditLogs = parsed.slice(0, 400);
+          break;
+        }
+      }
+    } catch {
+      // Non-fatal
+    }
+  }
+
+  function resolveRequestOrigin(req?: express.Request): string {
+    if (!req) return process.env.APP_URL || "https://shopiversity.app";
+    const proto = (req.headers["x-forwarded-proto"] as string)?.split(",")[0] || req.protocol || "https";
+    const host = (req.headers["x-forwarded-host"] as string)?.split(",")[0] || req.get("host");
+    if (host) return `${proto}://${host}`;
+    return process.env.APP_URL || "https://shopiversity.app";
+  }
+
+  function persistEmailPrefsToDisk() {
+    const obj: Record<string, UserEmailPreferences> = {};
+    for (const [k, v] of emailPreferencesStore.entries()) obj[k] = v;
+    const json = JSON.stringify(obj, null, 2);
+    for (const target of [EMAIL_PREFS_FILE, TMP_EMAIL_PREFS_FILE]) {
+      try {
+        fs.writeFileSync(target, json, "utf-8");
+      } catch {
+        // Ignore read-only filesystem errors
+      }
+    }
+  }
+
+  function persistEmailLogsToDisk() {
+    const json = JSON.stringify(emailAuditLogs.slice(0, 300), null, 2);
+    for (const target of [EMAIL_LOGS_FILE, TMP_EMAIL_LOGS_FILE]) {
+      try {
+        fs.writeFileSync(target, json, "utf-8");
+      } catch {
+        // Ignore read-only filesystem errors
+      }
+    }
+  }
+
+  function getDefaultPreferences(email: string, userId?: string): UserEmailPreferences {
+    return {
+      email,
+      userId,
+      marketingOptIn: true,
+      abandonedCartReminders: true,
+      wishlistAlerts: true,
+      promotionsAndDiscounts: true,
+      weeklyReports: true,
+      monthlyReports: true,
+      unsubscribedAllMarketing: false,
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  async function resolveUserPreferences(email?: string, userId?: string): Promise<UserEmailPreferences> {
+    const cleanEmail = (email || "").trim().toLowerCase();
+    if (cleanEmail && emailPreferencesStore.has(cleanEmail)) {
+      return emailPreferencesStore.get(cleanEmail)!;
+    }
+    if (userId && emailPreferencesStore.has(`uid:${userId}`)) {
+      return emailPreferencesStore.get(`uid:${userId}`)!;
+    }
+    if (firebaseAdminDb && isAdminDbAuthorized && (cleanEmail || userId)) {
+      try {
+        const docId = cleanEmail || `uid_${userId}`;
+        const snap = await firebaseAdminDb.collection("email_preferences").doc(docId).get();
+        if (snap.exists) {
+          const data = snap.data() as UserEmailPreferences;
+          if (cleanEmail) emailPreferencesStore.set(cleanEmail, data);
+          return data;
+        }
+      } catch {
+        // Non-fatal
+      }
+    }
+    return getDefaultPreferences(cleanEmail, userId);
+  }
+
+  function isMarketingTemplateAllowed(templateId: string, prefs: UserEmailPreferences): boolean {
+    if (prefs.unsubscribedAllMarketing || !prefs.marketingOptIn) return false;
+    if (templateId === "buyer_abandoned_cart") return prefs.abandonedCartReminders !== false;
+    if (templateId === "buyer_wishlist_price_drop" || templateId === "buyer_wishlist_back_in_stock") {
+      return prefs.wishlistAlerts !== false;
+    }
+    if (templateId === "buyer_special_promotions" || templateId === "buyer_new_products_favourite_seller") {
+      return prefs.promotionsAndDiscounts !== false;
+    }
+    if (templateId.includes("weekly")) return prefs.weeklyReports !== false;
+    if (templateId.includes("monthly")) return prefs.monthlyReports !== false;
+    return true;
+  }
+
+  async function recordEmailAuditLog(entry: EmailAuditLogEntry) {
+    emailAuditLogs.unshift(entry);
+    if (emailAuditLogs.length > 400) {
+      emailAuditLogs = emailAuditLogs.slice(0, 400);
+    }
+    persistEmailLogsToDisk();
+    if (firebaseAdminDb && isAdminDbAuthorized) {
+      try {
+        await firebaseAdminDb.collection("email_logs").doc(entry.id).set(entry);
+      } catch {
+        // Non-fatal
+      }
+    }
+  }
+
+  async function dispatchTemplatedEmail(options: {
+    templateId: string;
+    recipientEmail?: string;
+    recipientUserId?: string;
+    recipientRole?: "buyer" | "seller" | "logistics";
+    variables?: EmailVariableMap;
+    idempotencyKey?: string;
+    origin?: string;
+    isTest?: boolean;
+  }): Promise<{
+    success: boolean;
+    suppressed?: boolean;
+    skipped?: boolean;
+    reason?: string;
+    provider?: string;
+    messageId?: string;
+    error?: string;
+    logId?: string;
+    subject?: string;
+  }> {
+    const template = getEmailTemplateById(options.templateId);
+    if (!template) {
+      return { success: false, error: `Unknown email templateId: ${options.templateId}` };
+    }
+
+    let resolvedEmail = (options.recipientEmail || "").trim().toLowerCase();
+    if ((!resolvedEmail || !resolvedEmail.includes("@")) && options.recipientUserId && firebaseAdminDb && isAdminDbAuthorized) {
+      try {
+        if ((options.recipientRole || template.recipientCategory) === "logistics") {
+          const lSnap = await firebaseAdminDb.collection("logistics_companies").doc(String(options.recipientUserId)).get();
+          if (lSnap.exists && lSnap.data()?.email) {
+            resolvedEmail = String(lSnap.data()?.email).trim().toLowerCase();
+          }
+        }
+        if (!resolvedEmail || !resolvedEmail.includes("@")) {
+          const uSnap = await firebaseAdminDb.collection("users").doc(String(options.recipientUserId)).get();
+          if (uSnap.exists && uSnap.data()?.email) {
+            resolvedEmail = String(uSnap.data()?.email).trim().toLowerCase();
+          }
+        }
+      } catch {
+        // Ignore lookup warnings
+      }
+    }
+
+    if (!resolvedEmail || !resolvedEmail.includes("@")) {
+      return { success: false, skipped: true, reason: "no_recipient_email", error: "No valid recipient email available." };
+    }
+
+    const logId = `ELG_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
+    const eventKey = options.idempotencyKey ? `${template.id}:${options.idempotencyKey}:${resolvedEmail}` : "";
+
+    if (!options.isTest && eventKey && sentEmailEventFingerprints.has(eventKey)) {
+      await recordEmailAuditLog({
+        id: logId,
+        templateId: template.id,
+        templateCode: template.code,
+        templateName: template.name,
+        recipientCategory: template.recipientCategory,
+        classification: template.classification,
+        recipientEmail: resolvedEmail,
+        subject: template.subjectTemplate,
+        triggerEvent: template.triggerEvent,
+        status: "suppressed_duplicate",
+        retryCount: 0,
+        createdAt: new Date().toISOString()
+      });
+      return { success: true, suppressed: true, logId };
+    }
+
+    if (!options.isTest && template.classification === "marketing") {
+      const prefs = await resolveUserPreferences(resolvedEmail, options.recipientUserId);
+      if (!isMarketingTemplateAllowed(template.id, prefs)) {
+        await recordEmailAuditLog({
+          id: logId,
+          templateId: template.id,
+          templateCode: template.code,
+          templateName: template.name,
+          recipientCategory: template.recipientCategory,
+          classification: template.classification,
+          recipientEmail: resolvedEmail,
+          subject: template.subjectTemplate,
+          triggerEvent: template.triggerEvent,
+          status: "skipped_unsubscribed",
+          retryCount: 0,
+          createdAt: new Date().toISOString()
+        });
+        return { success: true, skipped: true, reason: "unsubscribed", logId };
+      }
+    }
+
+    const sampleVars = options.isTest ? getSampleEmailVariables(template.id, options.origin) : {};
+    const mergedVars: EmailVariableMap = {
+      ...sampleVars,
+      ...(options.variables || {}),
+      recipient_email: resolvedEmail
+    };
+    const rendered = renderShopiversityEmail(template, mergedVars, options.origin);
+
+    let sendRes = await sendBrevoOrFallbackEmail({
+      to: resolvedEmail,
+      subject: rendered.subject,
+      htmlContent: rendered.html,
+      textContent: rendered.text,
+      tags: [template.code, template.recipientCategory, template.classification, template.id]
+    });
+
+    let retryCount = 0;
+    if (!sendRes.success) {
+      retryCount = 1;
+      await new Promise((r) => setTimeout(r, 350));
+      sendRes = await sendBrevoOrFallbackEmail({
+        to: resolvedEmail,
+        subject: rendered.subject,
+        htmlContent: rendered.html,
+        textContent: rendered.text,
+        tags: [template.code, template.recipientCategory, template.classification, template.id, "retry-1"]
+      });
+    }
+
+    if (sendRes.success && eventKey && !options.isTest) {
+      sentEmailEventFingerprints.add(eventKey);
+      if (sentEmailEventFingerprints.size > 5000) sentEmailEventFingerprints.clear();
+    }
+
+    await recordEmailAuditLog({
+      id: logId,
+      templateId: template.id,
+      templateCode: template.code,
+      templateName: template.name,
+      recipientCategory: template.recipientCategory,
+      classification: template.classification,
+      recipientEmail: resolvedEmail,
+      subject: rendered.subject,
+      triggerEvent: template.triggerEvent,
+      status: sendRes.success ? "sent" : "failed",
+      provider: sendRes.provider,
+      messageId: sendRes.messageId,
+      retryCount,
+      error: sendRes.error,
+      isTest: Boolean(options.isTest),
+      createdAt: new Date().toISOString()
+    });
+
+    return {
+      success: sendRes.success,
+      provider: sendRes.provider,
+      messageId: sendRes.messageId,
+      error: sendRes.error,
+      logId,
+      subject: rendered.subject
+    };
+  }
+
+  // 1. Return full 101-template catalog metadata
+  app.get("/api/emails/catalog", (_req, res) => {
+    const counts = {
+      total: SHOPIVERSITY_EMAIL_TEMPLATES.length,
+      buyer: SHOPIVERSITY_EMAIL_TEMPLATES.filter((t) => t.recipientCategory === "buyer").length,
+      seller: SHOPIVERSITY_EMAIL_TEMPLATES.filter((t) => t.recipientCategory === "seller").length,
+      logistics: SHOPIVERSITY_EMAIL_TEMPLATES.filter((t) => t.recipientCategory === "logistics").length,
+      transactional: SHOPIVERSITY_EMAIL_TEMPLATES.filter((t) => t.classification === "transactional").length,
+      marketing: SHOPIVERSITY_EMAIL_TEMPLATES.filter((t) => t.classification === "marketing").length
+    };
+    return res.status(200).json({ success: true, counts, templates: SHOPIVERSITY_EMAIL_TEMPLATES });
+  });
+
+  // 2. Render live HTML + plain text preview for any template ID
+  app.post("/api/emails/preview", (req, res) => {
+    const { templateId, variables } = req.body || {};
+    const template = getEmailTemplateById(String(templateId || ""));
+    if (!template) {
+      return res.status(404).json({ success: false, error: "Template not found" });
+    }
+    const origin = resolveRequestOrigin(req);
+    const sampleVars = getSampleEmailVariables(template.id, origin);
+    const mergedVars = { ...sampleVars, ...(variables && typeof variables === "object" ? variables : {}) };
+    const rendered = renderShopiversityEmail(template, mergedVars, origin);
+    return res.status(200).json({
+      success: true,
+      template,
+      variablesUsed: mergedVars,
+      rendered
+    });
+  });
+
+  // 3. Dispatch any of the 101 automated templates (live event or admin test)
+  app.post("/api/emails/send-template", async (req, res) => {
+    const {
+      templateId,
+      recipientEmail,
+      recipientUserId,
+      recipientRole,
+      variables,
+      idempotencyKey,
+      isTest
+    } = req.body || {};
+
+    if (!templateId) {
+      return res.status(400).json({ success: false, error: "templateId is required" });
+    }
+
+    const result = await dispatchTemplatedEmail({
+      templateId: String(templateId),
+      recipientEmail,
+      recipientUserId,
+      recipientRole,
+      variables: variables || {},
+      idempotencyKey,
+      origin: resolveRequestOrigin(req),
+      isTest: Boolean(isTest)
+    });
+
+    if (!result.success && !result.skipped) {
+      return res.status(400).json(result);
+    }
+    return res.status(200).json(result);
+  });
+
+  // 4. Inspect outgoing email audit logs & aggregate stats
+  app.get("/api/emails/logs", (req, res) => {
+    const category = String(req.query.category || "all").toLowerCase();
+    const statusFilter = String(req.query.status || "all").toLowerCase();
+    const search = String(req.query.search || "").trim().toLowerCase();
+    const limit = Math.min(200, Math.max(10, Number(req.query.limit || 80)));
+
+    const filtered = emailAuditLogs.filter((entry) => {
+      if (category !== "all" && entry.recipientCategory !== category) return false;
+      if (statusFilter !== "all" && entry.status !== statusFilter) return false;
+      if (search) {
+        const hay = `${entry.templateCode} ${entry.templateName} ${entry.recipientEmail} ${entry.subject} ${entry.triggerEvent}`.toLowerCase();
+        if (!hay.includes(search)) return false;
+      }
+      return true;
+    });
+
+    const stats = {
+      totalLogged: emailAuditLogs.length,
+      sent: emailAuditLogs.filter((l) => l.status === "sent").length,
+      failed: emailAuditLogs.filter((l) => l.status === "failed").length,
+      suppressed: emailAuditLogs.filter((l) => l.status === "suppressed_duplicate").length,
+      unsubscribedSkipped: emailAuditLogs.filter((l) => l.status === "skipped_unsubscribed").length
+    };
+
+    return res.status(200).json({
+      success: true,
+      stats,
+      logs: filtered.slice(0, limit)
+    });
+  });
+
+  // 5. Get & Save User Email Notification Preferences
+  app.get("/api/emails/preferences", async (req, res) => {
+    const email = String(req.query.email || "").trim().toLowerCase();
+    const userId = String(req.query.userId || "").trim();
+    const prefs = await resolveUserPreferences(email, userId);
+    return res.status(200).json({ success: true, preferences: prefs });
+  });
+
+  app.post("/api/emails/preferences", async (req, res) => {
+    const {
+      email,
+      userId,
+      marketingOptIn,
+      abandonedCartReminders,
+      wishlistAlerts,
+      promotionsAndDiscounts,
+      weeklyReports,
+      monthlyReports,
+      unsubscribedAllMarketing
+    } = req.body || {};
+
+    const cleanEmail = String(email || "").trim().toLowerCase();
+    if (!cleanEmail && !userId) {
+      return res.status(400).json({ success: false, error: "email or userId is required" });
+    }
+
+    const existing = await resolveUserPreferences(cleanEmail, userId);
+    const updated: UserEmailPreferences = {
+      ...existing,
+      email: cleanEmail || existing.email,
+      userId: userId || existing.userId,
+      marketingOptIn: typeof marketingOptIn === "boolean" ? marketingOptIn : existing.marketingOptIn,
+      abandonedCartReminders: typeof abandonedCartReminders === "boolean" ? abandonedCartReminders : existing.abandonedCartReminders,
+      wishlistAlerts: typeof wishlistAlerts === "boolean" ? wishlistAlerts : existing.wishlistAlerts,
+      promotionsAndDiscounts: typeof promotionsAndDiscounts === "boolean" ? promotionsAndDiscounts : existing.promotionsAndDiscounts,
+      weeklyReports: typeof weeklyReports === "boolean" ? weeklyReports : existing.weeklyReports,
+      monthlyReports: typeof monthlyReports === "boolean" ? monthlyReports : existing.monthlyReports,
+      unsubscribedAllMarketing:
+        typeof unsubscribedAllMarketing === "boolean"
+          ? unsubscribedAllMarketing
+          : typeof marketingOptIn === "boolean"
+            ? !marketingOptIn
+            : existing.unsubscribedAllMarketing,
+      updatedAt: new Date().toISOString()
+    };
+
+    if (cleanEmail) emailPreferencesStore.set(cleanEmail, updated);
+    if (userId) emailPreferencesStore.set(`uid:${userId}`, updated);
+    persistEmailPrefsToDisk();
+
+    if (firebaseAdminDb && isAdminDbAuthorized) {
+      try {
+        const docId = cleanEmail || `uid_${userId}`;
+        await firebaseAdminDb.collection("email_preferences").doc(docId).set(updated, { merge: true });
+      } catch {
+        // Non-fatal
+      }
+    }
+
+    return res.status(200).json({ success: true, preferences: updated });
+  });
+
+  // 6. One-Click Unsubscribe Link for Promotional/Marketing Emails
+  app.get("/api/emails/unsubscribe", async (req, res) => {
+    const cleanEmail = String(req.query.email || "").trim().toLowerCase();
+    if (cleanEmail && cleanEmail.includes("@")) {
+      const existing = await resolveUserPreferences(cleanEmail);
+      const updated: UserEmailPreferences = {
+        ...existing,
+        email: cleanEmail,
+        marketingOptIn: false,
+        abandonedCartReminders: false,
+        wishlistAlerts: false,
+        promotionsAndDiscounts: false,
+        unsubscribedAllMarketing: true,
+        updatedAt: new Date().toISOString()
+      };
+      emailPreferencesStore.set(cleanEmail, updated);
+      persistEmailPrefsToDisk();
+      if (firebaseAdminDb && isAdminDbAuthorized) {
+        try {
+          await firebaseAdminDb.collection("email_preferences").doc(cleanEmail).set(updated, { merge: true });
+        } catch {
+          // Non-fatal
+        }
+      }
+    }
+
+    const origin = resolveRequestOrigin(req);
+    return res.status(200).send(`<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /><title>Unsubscribed - Shopiversity</title></head>
+<body style="margin:0;padding:32px 16px;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#0f172a;">
+  <div style="max-width:520px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:20px;padding:32px;text-align:center;">
+    <img src="${origin}/shopiversity-logo.png" alt="Shopiversity" width="48" height="48" style="border-radius:10px;margin-bottom:12px;" />
+    <h1 style="margin:0 0 8px 0;font-size:22px;font-weight:900;color:#ff6b00;">shopiversity</h1>
+    <h2 style="margin:0 0 12px 0;font-size:18px;font-weight:800;color:#0f172a;">Promotional Emails Unsubscribed</h2>
+    <p style="margin:0 0 20px 0;font-size:14px;line-height:1.6;color:#475569;">
+      ${cleanEmail ? `<strong>${cleanEmail}</strong> has been opted out of Shopiversity promotional &amp; marketing emails.` : "Your email address has been opted out of promotional updates."}
+      Essential transactional emails (security codes, order confirmations, escrow receipts, and delivery updates) remain active.
+    </p>
+    <a href="${origin}/?tab=profile" style="display:inline-block;background:#ff6b00;color:#ffffff;font-weight:800;font-size:13px;padding:12px 24px;border-radius:12px;text-decoration:none;">
+      Manage Email Preferences
+    </a>
+  </div>
+</body>
+</html>`);
+  });
+
   // API Routes: 6. Comprehensive Transactional Order & Lifecycle Notifications (Powered by Brevo)
   app.post("/api/send-order-status", async (req, res) => {
     const {
       orderId,
       recipientEmail,
+      recipientUserId,
+      recipientRole,
       recipientName,
       buyerName,
       sellerName,
+      logisticsName,
       productName,
       quantity,
       totalPrice,
@@ -1679,14 +2360,43 @@ app.use((req, res, next) => {
       statusTitle,
       statusMessage,
       deliveryOtp,
+      pinLabel,
       idempotencyKey
     } = req.body;
 
-    if (!recipientEmail || !orderId) {
-      return res.status(400).json({ error: "Recipient email and order ID required" });
+    if (!orderId || (!recipientEmail && !recipientUserId)) {
+      return res.status(400).json({ error: "Order ID and recipient email or user ID required" });
     }
 
-    const targetEmail = recipientEmail.trim().toLowerCase();
+    let resolvedEmail = recipientEmail ? String(recipientEmail).trim().toLowerCase() : "";
+    if ((!resolvedEmail || !resolvedEmail.includes("@")) && recipientUserId && firebaseAdminDb && isAdminDbAuthorized) {
+      try {
+        if (recipientRole === "logistics") {
+          const logSnap = await firebaseAdminDb.collection("logistics_companies").doc(String(recipientUserId)).get();
+          if (logSnap.exists && logSnap.data()?.email) {
+            resolvedEmail = String(logSnap.data()?.email).trim().toLowerCase();
+          }
+        }
+        if (!resolvedEmail || !resolvedEmail.includes("@")) {
+          const uSnap = await firebaseAdminDb.collection("users").doc(String(recipientUserId)).get();
+          if (uSnap.exists && uSnap.data()?.email) {
+            resolvedEmail = String(uSnap.data()?.email).trim().toLowerCase();
+          }
+        }
+      } catch (lookupErr: any) {
+        console.warn("[ORDER STATUS EMAIL] Admin recipient lookup warning:", lookupErr?.message);
+      }
+    }
+
+    if (!resolvedEmail || !resolvedEmail.includes("@")) {
+      return res.status(200).json({
+        success: false,
+        skipped: true,
+        message: "No recipient email address on file for this account."
+      });
+    }
+
+    const targetEmail = resolvedEmail;
     const eventKey = idempotencyKey || `${orderId}_${status}_${targetEmail}`;
 
     // Prevent duplicate emails for the exact same event
@@ -1700,23 +2410,28 @@ app.use((req, res, next) => {
     }
 
     const cleanOrderId = String(orderId).trim();
+    const stripEmojis = (val: string) =>
+      val.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\uFE0F]/gu, "").replace(/\s+/g, " ").trim();
+    const cleanStatusTitle = stripEmojis(String(statusTitle || "Order Status Updated")) || "Order Status Updated";
     const itemTitle = productName || "Campus Marketplace Product";
     const qty = quantity || 1;
     const priceText = totalPrice ? `₦${Number(totalPrice).toLocaleString()}` : "";
-    const bName = recipientName || buyerName || "Valued Customer";
+    const plainPriceText = totalPrice ? `NGN ${Number(totalPrice).toLocaleString()}` : "";
+    const rName = recipientName || buyerName || "Valued User";
     const sName = sellerName || "Campus Merchant";
+    const resolvedPinLabel = pinLabel || "Secure Handover Delivery PIN";
 
-    // Dynamic banner color and icon based on status
+    // Dynamic banner color based on status
     let bannerGradient = "linear-gradient(135deg, #0f172a 0%, #1e293b 100%)";
     let badgeText = "ORDER NOTIFICATION";
     let badgeColor = "#ff6b00";
 
     const sLower = String(status || "").toLowerCase();
-    if (sLower.includes("accept") || sLower.includes("placed")) {
+    if (sLower.includes("accept") || sLower.includes("placed") || sLower.includes("book")) {
       bannerGradient = "linear-gradient(135deg, #1e293b 0%, #334155 100%)";
       badgeText = "ORDER CONFIRMED";
       badgeColor = "#3b82f6";
-    } else if (sLower.includes("transit") || sLower.includes("dispatch") || sLower.includes("way")) {
+    } else if (sLower.includes("transit") || sLower.includes("dispatch") || sLower.includes("way") || sLower.includes("picked_up")) {
       bannerGradient = "linear-gradient(135deg, #312e81 0%, #4338ca 100%)";
       badgeText = "DISPATCH IN PROGRESS";
       badgeColor = "#8b5cf6";
@@ -1724,10 +2439,15 @@ app.use((req, res, next) => {
       bannerGradient = "linear-gradient(135deg, #064e3b 0%, #047857 100%)";
       badgeText = "SUCCESSFUL DELIVERY";
       badgeColor = "#10b981";
+    } else if (sLower.includes("cancel")) {
+      bannerGradient = "linear-gradient(135deg, #7f1d1d 0%, #991b1b 100%)";
+      badgeText = "ORDER CANCELLED";
+      badgeColor = "#ef4444";
     }
 
     const htmlContent = `
-      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff; color: #0f172a;">
+        <div style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;">${cleanStatusTitle} - Order ${cleanOrderId} (${itemTitle}).</div>
         <!-- Header -->
         <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ff6b00;">
           <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0; letter-spacing: -0.5px;">SHOPIVERSITY</h1>
@@ -1735,12 +2455,12 @@ app.use((req, res, next) => {
         </div>
 
         <!-- Hero Status Card -->
-        <div style="background: ${bannerGradient}; padding: 26px; border-radius: 20px; color: #ffffff; margin: 20px 0; text-align: left;">
+        <div style="background-color: #0f172a; background: ${bannerGradient}; padding: 26px; border-radius: 20px; color: #ffffff; margin: 20px 0; text-align: left;">
           <div style="display: inline-block; background-color: ${badgeColor}; color: #ffffff; padding: 4px 12px; border-radius: 999px; font-size: 10px; font-weight: 900; letter-spacing: 1px; margin-bottom: 12px; text-transform: uppercase;">
             ${badgeText}
           </div>
           <h2 style="font-size: 21px; font-weight: 800; margin: 0 0 8px 0; color: #ffffff; line-height: 1.3;">
-            ${statusTitle || "Your Order Has Been Updated"}
+            ${cleanStatusTitle}
           </h2>
           <p style="color: #cbd5e1; font-size: 13px; margin: 0; line-height: 1.5;">
             Order Reference: <strong style="color: #38bdf8; font-family: monospace;">${cleanOrderId}</strong>
@@ -1749,6 +2469,9 @@ app.use((req, res, next) => {
 
         <!-- Detail Box -->
         <div style="background-color: #f8fafc; padding: 20px; border-radius: 18px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
+          <p style="color: #334155; font-size: 13px; font-weight: 700; margin: 0 0 8px 0;">
+            Hello ${rName},
+          </p>
           <p style="color: #1e293b; font-size: 14px; line-height: 1.6; margin: 0 0 16px 0;">
             ${statusMessage || `Your order status is now: <strong>${status}</strong>`}
           </p>
@@ -1774,18 +2497,24 @@ app.use((req, res, next) => {
               <td style="padding: 8px 0; font-weight: 600;">Merchant / Vendor:</td>
               <td style="padding: 8px 0; text-align: right; font-weight: 600; color: #0f172a;">${sName}</td>
             </tr>
+            ${logisticsName ? `
+            <tr>
+              <td style="padding: 8px 0; font-weight: 600;">Logistics Partner:</td>
+              <td style="padding: 8px 0; text-align: right; font-weight: 600; color: #0f172a;">${logisticsName}</td>
+            </tr>
+            ` : ""}
           </table>
 
           ${deliveryOtp ? `
             <div style="background-color: #ffffff; padding: 16px; border-radius: 14px; border: 2px dashed #ff6b00; text-align: center; margin-top: 18px;">
               <span style="font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; display: block; margin-bottom: 4px; letter-spacing: 1px;">
-                Secure Handover Delivery PIN
+                ${resolvedPinLabel}
               </span>
               <span style="font-size: 32px; font-weight: 900; letter-spacing: 10px; color: #ff6b00; font-family: monospace;">
                 ${deliveryOtp}
               </span>
-              <span style="font-size: 11px; color: #94a3b8; display: block; margin-top: 6px;">
-                Provide this PIN to your courier or vendor strictly upon inspecting the received item.
+              <span style="font-size: 11px; color: #64748b; display: block; margin-top: 6px;">
+                Share this PIN strictly during physical handover after inspection.
               </span>
             </div>
           ` : ""}
@@ -1794,39 +2523,76 @@ app.use((req, res, next) => {
         <!-- Escrow Protection Note -->
         <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; padding: 14px 18px; border-radius: 14px; margin-bottom: 22px;">
           <p style="color: #166534; font-size: 12px; font-weight: 700; margin: 0; line-height: 1.5;">
-            🛡️ <strong>SHOPIVERSITY Escrow Protection:</strong> Funds remain securely vaulted in escrow until delivery is verified. You have 72 hours from receipt to inspect goods and raise a dispute if needed.
+            <strong>SHOPIVERSITY Escrow Protection:</strong> Funds remain securely vaulted in escrow until delivery is verified. Buyers have 72 hours from receipt to inspect goods and raise a dispute if needed.
           </p>
         </div>
 
         <!-- Footer -->
         <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;" />
         <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0; line-height: 1.5;">
-          Need assistance? Reply directly to this email or reach our campus support desk.<br />
+          This is an automated transactional update from SHOPIVERSITY for your active order.<br />
           &copy; 2026 SHOPIVERSITY Campus Network. All rights reserved.
         </p>
       </div>
     `;
 
+    const textContentLines = [
+      `SHOPIVERSITY - ${cleanStatusTitle}`,
+      `Order Reference: ${cleanOrderId}`,
+      "",
+      `Hello ${rName},`,
+      stripEmojis(String(statusMessage || `Your order status is now: ${status}`)).replace(/<[^>]+>/g, ""),
+      "",
+      `Product: ${itemTitle} (x${qty})`,
+      plainPriceText ? `Amount: ${plainPriceText}` : "",
+      deliveryType ? `Fulfillment: ${deliveryType}` : "",
+      `Merchant: ${sName}`,
+      logisticsName ? `Logistics Partner: ${logisticsName}` : "",
+      deliveryOtp ? `\n${resolvedPinLabel}: ${deliveryOtp}` : "",
+      "",
+      "SHOPIVERSITY Escrow Protection: Funds remain protected until handover verification."
+    ].filter(Boolean);
+
     const dispatchResult = await sendBrevoOrFallbackEmail({
       to: targetEmail,
-      subject: `📦 Order ${cleanOrderId}: ${statusTitle || "Status Updated"}`,
+      subject: `SHOPIVERSITY Order ${cleanOrderId}: ${cleanStatusTitle}`,
       htmlContent,
+      textContent: textContentLines.join("\n"),
       tags: ["order-lifecycle", status || "status-update"]
     });
 
     if (dispatchResult.success) {
       sentEmailEventFingerprints.add(eventKey);
-      // Clean up cache if it grows over 5000 items
       if (sentEmailEventFingerprints.size > 5000) {
         sentEmailEventFingerprints.clear();
       }
     }
 
+    await recordEmailAuditLog({
+      id: `ELG_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`,
+      templateId: `order_lifecycle_${recipientRole || "buyer"}_${String(status || "update").toLowerCase().replace(/[^a-z0-9]+/g, "_")}`,
+      templateCode: recipientRole === "seller" ? "S-ORD" : recipientRole === "logistics" ? "L-ORD" : "B-ORD",
+      templateName: cleanStatusTitle,
+      recipientCategory: recipientRole || "buyer",
+      classification: "transactional",
+      recipientEmail: targetEmail,
+      subject: `SHOPIVERSITY Order ${cleanOrderId}: ${cleanStatusTitle}`,
+      triggerEvent: `order.lifecycle.${String(status || "update").toLowerCase()}`,
+      status: dispatchResult.success ? "sent" : "failed",
+      provider: dispatchResult.provider,
+      messageId: dispatchResult.messageId,
+      retryCount: 0,
+      error: dispatchResult.error,
+      createdAt: new Date().toISOString()
+    });
+
     return res.status(200).json({
       success: dispatchResult.success,
       provider: dispatchResult.provider,
       messageId: dispatchResult.messageId,
-      message: `Status email dispatched to ${targetEmail} via ${dispatchResult.provider.toUpperCase()}`
+      message: dispatchResult.success
+        ? `Status email dispatched to ${targetEmail} via ${dispatchResult.provider.toUpperCase()}`
+        : (dispatchResult.error || `Failed to dispatch status email to ${targetEmail}`)
     });
   });
 
@@ -4054,69 +4820,45 @@ const FALLBACK_BANKS = [
         }
       }
 
-      // Automated Brevo Transactional Email: Notify Buyer that refund is lodged
+      // Automated Brevo Transactional Emails via Unified 101-Template Engine (B-21 & S-22)
       const buyerEmail = (req.body.buyerEmail || "").trim();
       if (buyerEmail) {
-        sendBrevoOrFallbackEmail({
-          to: buyerEmail,
-          subject: `🛡️ Refund Request Lodged: Order ${orderId.slice(0, 8)}`,
-          htmlContent: `
-            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
-              <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ff6b00;">
-                <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">SHOPIVERSITY</h1>
-                <p style="color: #64748b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Escrow Dispute & Refund Desk</p>
-              </div>
-              <div style="background: linear-gradient(135deg, #7c2d12 0%, #9a3412 100%); padding: 24px; border-radius: 18px; color: #ffffff; margin: 20px 0;">
-                <div style="display: inline-block; background-color: #f97316; color: #ffffff; padding: 3px 10px; border-radius: 999px; font-size: 10px; font-weight: 900; letter-spacing: 1px; margin-bottom: 8px;">
-                  REFUND REQUEST LODGED
-                </div>
-                <h2 style="font-size: 20px; font-weight: 800; margin: 0 0 6px 0; color: #ffffff;">Refund Claim Under 24-Hour Review</h2>
-                <p style="color: #fed7aa; font-size: 13px; margin: 0;">Order Reference: <strong style="color: #ffffff; font-family: monospace;">${orderId}</strong></p>
-              </div>
-              <div style="background-color: #f8fafc; padding: 18px; border-radius: 16px; border: 1px solid #e2e8f0; margin-bottom: 20px; font-size: 13px; color: #334155;">
-                <p style="margin: 0 0 10px 0; line-height: 1.6;">Hello <strong>${buyerName || "Student"}</strong>, your refund claim for <strong>₦${amount.toLocaleString()}</strong> has been submitted to the SHOPIVERSITY Dispute Resolution Team.</p>
-                <p style="margin: 0 0 10px 0; line-height: 1.6;"><strong>Reason Category:</strong> ${reasonCategory}<br/><strong>Reason:</strong> ${reason}</p>
-                <div style="background-color: #fff7ed; border-left: 4px solid #ff6b00; padding: 12px; border-radius: 8px; margin: 12px 0;">
-                  <p style="margin: 0; color: #9a3412; font-size: 12px;"><strong>Important Policy:</strong> Per campus safety rules, items must be returned intact and untampered with. Perishable goods or tampered merchandise are strictly non-refundable.</p>
-                </div>
-                <p style="margin: 0; font-size: 12px; color: #64748b;">Target Bank: <strong>${bankName || "Specified Account"}</strong> (Acc: <strong>${accountNumber ? `••••${accountNumber.slice(-4)}` : "Provided"}</strong>)</p>
-              </div>
-              <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">&copy; 2026 SHOPIVERSITY Campus Escrow Network.</p>
-            </div>
-          `,
-          tags: ["refund-request", "escrow-dispute"]
-        }).catch(e => console.warn("[BREVO NOTICE] Buyer refund email err:", e.message));
+        dispatchTemplatedEmail({
+          templateId: "buyer_refund_initiated",
+          recipientEmail: buyerEmail,
+          recipientUserId: buyerId,
+          recipientRole: "buyer",
+          variables: {
+            buyer_name: buyerName || "Student",
+            order_id: orderId,
+            refund_id: refundRecord.id,
+            refund_amount: `NGN ${amount.toLocaleString()}`,
+            refund_reason: reason || reasonCategory || "Buyer dispute submitted",
+            bank_account: `${bankName || "Bank"} (${accountNumber ? `••••${accountNumber.slice(-4)}` : "On File"})`
+          },
+          idempotencyKey: `refund_req_buyer_${orderId}_${refundRecord.id}`,
+          origin: resolveRequestOrigin(req)
+        }).catch((e) => console.warn("[BREVO NOTICE] Buyer refund email err:", e?.message));
       }
 
-      // Automated Brevo Transactional Email: Notify Seller of refund/dispute
       const sellerEmail = (req.body.sellerEmail || "").trim();
-      if (sellerEmail) {
-        sendBrevoOrFallbackEmail({
-          to: sellerEmail,
-          subject: `⚠️ Refund Claim Lodged: Order ${orderId.slice(0, 8)}`,
-          htmlContent: `
-            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
-              <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ff6b00;">
-                <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">SHOPIVERSITY</h1>
-                <p style="color: #64748b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Merchant Alert Desk</p>
-              </div>
-              <div style="background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); padding: 24px; border-radius: 18px; color: #ffffff; margin: 20px 0;">
-                <div style="display: inline-block; background-color: #f59e0b; color: #ffffff; padding: 3px 10px; border-radius: 999px; font-size: 10px; font-weight: 900; letter-spacing: 1px; margin-bottom: 8px;">
-                  ESCROW SETTLEMENT ON HOLD
-                </div>
-                <h2 style="font-size: 20px; font-weight: 800; margin: 0 0 6px 0; color: #ffffff;">Buyer Filed a Refund Request</h2>
-                <p style="color: #c7d2fe; font-size: 13px; margin: 0;">Order Reference: <strong style="color: #ffffff; font-family: monospace;">${orderId}</strong></p>
-              </div>
-              <div style="background-color: #f8fafc; padding: 18px; border-radius: 16px; border: 1px solid #e2e8f0; margin-bottom: 20px; font-size: 13px; color: #334155;">
-                <p style="margin: 0 0 10px 0; line-height: 1.6;">Hello <strong>${sellerName || "Merchant"}</strong>, buyer ${buyerName || "Customer"} has submitted a refund claim for <strong>₦${amount.toLocaleString()}</strong>.</p>
-                <p style="margin: 0 0 10px 0;"><strong>Category:</strong> ${reasonCategory}<br/><strong>Reason:</strong> "${reason}"</p>
-                <p style="margin: 0; color: #64748b; font-size: 12px;">Escrow disbursement is temporarily held pending 24-hour review. You can respond in your Seller Dashboard with proof of dispatch or inspection.</p>
-              </div>
-              <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">&copy; 2026 SHOPIVERSITY Campus Escrow Network.</p>
-            </div>
-          `,
-          tags: ["refund-seller-notice", "escrow-dispute"]
-        }).catch(e => console.warn("[BREVO NOTICE] Seller refund email err:", e.message));
+      if (sellerEmail || sellerId) {
+        dispatchTemplatedEmail({
+          templateId: "seller_refund_requested",
+          recipientEmail: sellerEmail || undefined,
+          recipientUserId: sellerId,
+          recipientRole: "seller",
+          variables: {
+            seller_name: sellerName || "Campus Merchant",
+            buyer_name: buyerName || "Customer",
+            order_id: orderId,
+            refund_id: refundRecord.id,
+            refund_amount: `NGN ${amount.toLocaleString()}`,
+            refund_reason: reason || reasonCategory || "Refund requested by buyer"
+          },
+          idempotencyKey: `refund_req_seller_${orderId}_${refundRecord.id}`,
+          origin: resolveRequestOrigin(req)
+        }).catch((e) => console.warn("[BREVO NOTICE] Seller refund email err:", e?.message));
       }
 
       return res.status(200).json({
@@ -4239,36 +4981,43 @@ const FALLBACK_BANKS = [
         }
       }
 
-      // Automated Brevo Transactional Email: Notify Buyer on resolution
+      // Automated Brevo Transactional Emails for Refund Resolution (B-22, S-23, S-24)
       const buyerEmail = (req.body.buyerEmail || "").trim();
+      const sellerEmailReview = (req.body.sellerEmail || "").trim();
+      const isApproved = action === "approve" || action === "complete";
       if (buyerEmail) {
-        const isApproved = action === "approve" || action === "complete";
-        sendBrevoOrFallbackEmail({
-          to: buyerEmail,
-          subject: `${isApproved ? "✅" : "⚠️"} Refund Update: Order ${orderId.slice(0, 8)} (${newRefundStatus.toUpperCase()})`,
-          htmlContent: `
-            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
-              <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ff6b00;">
-                <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">SHOPIVERSITY</h1>
-                <p style="color: #64748b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Refund & Escrow Settlement</p>
-              </div>
-              <div style="background: ${isApproved ? "linear-gradient(135deg, #064e3b 0%, #047857 100%)" : "linear-gradient(135deg, #1e293b 0%, #334155 100%)"}; padding: 24px; border-radius: 18px; color: #ffffff; margin: 20px 0;">
-                <div style="display: inline-block; background-color: ${isApproved ? "#10b981" : "#f59e0b"}; color: #ffffff; padding: 3px 10px; border-radius: 999px; font-size: 10px; font-weight: 900; letter-spacing: 1px; margin-bottom: 8px;">
-                  REFUND ${newRefundStatus.toUpperCase()}
-                </div>
-                <h2 style="font-size: 20px; font-weight: 800; margin: 0 0 6px 0; color: #ffffff;">${isApproved ? "Refund Processed & Settlement Credited" : "Refund Claim Update"}</h2>
-                <p style="color: #cbd5e1; font-size: 13px; margin: 0;">Order Reference: <strong style="color: #ffffff; font-family: monospace;">${orderId}</strong></p>
-              </div>
-              <div style="background-color: #f8fafc; padding: 18px; border-radius: 16px; border: 1px solid #e2e8f0; margin-bottom: 20px; font-size: 13px; color: #334155;">
-                <p style="margin: 0 0 10px 0; line-height: 1.6;">Your refund claim for Order <strong>#${orderId}</strong> has been processed with status: <strong>${newRefundStatus.toUpperCase()}</strong>.</p>
-                ${finalBuyerDisbursed ? `<p style="margin: 0 0 10px 0; font-size: 15px; font-weight: 800; color: #047857;">Disbursed Amount: ₦${finalBuyerDisbursed.toLocaleString()}</p>` : ""}
-                ${decisionNotes ? `<p style="margin: 0 0 10px 0; color: #475569;"><strong>Review Notes:</strong> ${decisionNotes}</p>` : ""}
-              </div>
-              <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">&copy; 2026 SHOPIVERSITY Campus Escrow Network.</p>
-            </div>
-          `,
-          tags: ["refund-resolved", newRefundStatus]
-        }).catch(e => console.warn("[BREVO NOTICE] Resolution email error:", e.message));
+        dispatchTemplatedEmail({
+          templateId: "buyer_refund_processed",
+          recipientEmail: buyerEmail,
+          recipientRole: "buyer",
+          variables: {
+            buyer_name: req.body.buyerName || "Student",
+            order_id: orderId,
+            refund_id: refundId,
+            refund_amount: finalBuyerDisbursed ? `NGN ${finalBuyerDisbursed.toLocaleString()}` : "Approved Refund",
+            payment_status: newRefundStatus.toUpperCase(),
+            bank_account: decisionNotes || "Original Payment Method / Bank Account"
+          },
+          idempotencyKey: `refund_review_buyer_${refundId}_${newRefundStatus}`,
+          origin: resolveRequestOrigin(req)
+        }).catch((e) => console.warn("[BREVO NOTICE] Resolution buyer email error:", e?.message));
+      }
+      if (sellerEmailReview || req.body.sellerId) {
+        dispatchTemplatedEmail({
+          templateId: isApproved ? "seller_return_refund_approved" : "seller_return_refund_rejected",
+          recipientEmail: sellerEmailReview || undefined,
+          recipientUserId: req.body.sellerId,
+          recipientRole: "seller",
+          variables: {
+            seller_name: req.body.sellerName || "Campus Merchant",
+            order_id: orderId,
+            refund_id: refundId,
+            refund_amount: finalApproved ? `NGN ${finalApproved.toLocaleString()}` : "Escrow Order Total",
+            rejection_reason: decisionNotes || "Resolved by Shopiversity Dispute Desk"
+          },
+          idempotencyKey: `refund_review_seller_${refundId}_${newRefundStatus}`,
+          origin: resolveRequestOrigin(req)
+        }).catch((e) => console.warn("[BREVO NOTICE] Resolution seller email error:", e?.message));
       }
 
       return res.status(200).json({
@@ -4586,6 +5335,73 @@ const FALLBACK_BANKS = [
         }
       }
 
+      if (nextStatus === "completed" && orderDocData) {
+        const displayOrdId = orderDocData.uniqueOrderId || orderId;
+        const prodName = orderDocData.productName || "Campus Order";
+        const notifyTarget = async (
+          emailVal: string | undefined,
+          uidVal: string | undefined,
+          roleType: "buyer" | "seller" | "logistics",
+          nameVal: string,
+          titleVal: string,
+          msgVal: string
+        ) => {
+          let resolved = emailVal ? String(emailVal).trim().toLowerCase() : "";
+          if ((!resolved || !resolved.includes("@")) && uidVal && firebaseAdminDb && isAdminDbAuthorized) {
+            try {
+              if (roleType === "logistics") {
+                const lSnap = await firebaseAdminDb.collection("logistics_companies").doc(uidVal).get();
+                if (lSnap.exists && lSnap.data()?.email) resolved = String(lSnap.data()?.email).trim().toLowerCase();
+              }
+              if (!resolved || !resolved.includes("@")) {
+                const uSnap = await firebaseAdminDb.collection("users").doc(uidVal).get();
+                if (uSnap.exists && uSnap.data()?.email) resolved = String(uSnap.data()?.email).trim().toLowerCase();
+              }
+            } catch {}
+          }
+          if (!resolved || !resolved.includes("@")) return;
+          const evKey = `order_completed_${orderId}_${roleType}`;
+          if (sentEmailEventFingerprints.has(evKey)) return;
+          const sendRes = await sendBrevoOrFallbackEmail({
+            to: resolved,
+            subject: `SHOPIVERSITY Order ${displayOrdId}: ${titleVal}`,
+            htmlContent: `<div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;border:1px solid #e2e8f0;border-radius:18px;background:#fff;color:#0f172a;"><h2 style="color:#ff6b00;margin:0 0 8px 0;">SHOPIVERSITY</h2><p style="font-size:15px;font-weight:700;margin:0 0 12px 0;">${titleVal}</p><p style="font-size:14px;line-height:1.6;color:#334155;">Hello ${nameVal},</p><p style="font-size:14px;line-height:1.6;color:#334155;">${msgVal}</p><p style="font-size:12px;color:#64748b;margin-top:16px;">Order Reference: ${displayOrdId} | Product: ${prodName}</p></div>`,
+            textContent: `SHOPIVERSITY - ${titleVal}\nOrder: ${displayOrdId}\nHello ${nameVal},\n${msgVal}`,
+            tags: ["order-lifecycle", "completed"]
+          });
+          if (sendRes.success) sentEmailEventFingerprints.add(evKey);
+        };
+
+        void Promise.all([
+          notifyTarget(
+            orderDocData.buyerEmail,
+            orderDocData.buyerId,
+            "buyer",
+            orderDocData.buyerName || "Customer",
+            "Order Completed Successfully",
+            `Handover for "${prodName}" has been verified and completed. Thank you for shopping on SHOPIVERSITY.`
+          ),
+          notifyTarget(
+            orderDocData.sellerEmail,
+            orderDocData.sellerId,
+            "seller",
+            orderDocData.sellerName || "Merchant",
+            "Order Completed and Escrow Payout Unlocked",
+            `Buyer handover for "${prodName}" is complete. Earnings have been credited toward your Seller Dashboard payout pool.`
+          ),
+          orderDocData.logisticsId && orderDocData.logisticsId !== "outsourced"
+            ? notifyTarget(
+                orderDocData.logisticsEmail,
+                orderDocData.logisticsId,
+                "logistics",
+                orderDocData.logisticsName || "Logistics Partner",
+                `Order Completed and Closed (${displayOrdId})`,
+                `Delivery for "${prodName}" (${displayOrdId}) has been verified and marked completed by the buyer.`
+              )
+            : Promise.resolve()
+        ]);
+      }
+
       return res.status(200).json({
         success: true,
         message: isOrderPod 
@@ -4834,6 +5650,73 @@ const FALLBACK_BANKS = [
           await firebaseAdminDb.collection("order_events").doc(auditEvent.id).set(auditEvent);
         } catch (dbErr: any) {
           console.warn("[DELIVERY ATTEMPT API] DB write error:", dbErr.message);
+        }
+      }
+
+      // Dispatch automated delivery-failure emails across Buyer, Seller, and Logistics (B-19, S-20, L-20..L-23)
+      if (firebaseAdminDb && isAdminDbAuthorized) {
+        try {
+          const orderSnap = await firebaseAdminDb.collection("orders").doc(orderId).get();
+          const ord = orderSnap.exists ? (orderSnap.data() as any) : null;
+          if (ord) {
+            const origin = resolveRequestOrigin(req);
+            const commonVars: EmailVariableMap = {
+              buyer_name: ord.buyerName || "Student Buyer",
+              seller_name: ord.sellerName || "Campus Merchant",
+              courier_name: ord.logisticsName || "Campus Logistics",
+              order_id: ord.uniqueOrderId || orderId,
+              product_name: ord.productName || "Marketplace Item",
+              delivery_address: ord.deliveryAddress || ord.location || "Campus Address",
+              failure_reason: notes || reason
+            };
+
+            if (ord.buyerEmail || ord.buyerId) {
+              dispatchTemplatedEmail({
+                templateId: "buyer_order_delivery_failed",
+                recipientEmail: ord.buyerEmail,
+                recipientUserId: ord.buyerId,
+                recipientRole: "buyer",
+                variables: commonVars,
+                idempotencyKey: `delivery_attempt_${orderId}_${now.slice(0, 16)}_buyer`,
+                origin
+              }).catch(() => {});
+            }
+
+            if (ord.sellerEmail || ord.sellerId) {
+              dispatchTemplatedEmail({
+                templateId: "seller_order_delivery_failed",
+                recipientEmail: ord.sellerEmail,
+                recipientUserId: ord.sellerId,
+                recipientRole: "seller",
+                variables: commonVars,
+                idempotencyKey: `delivery_attempt_${orderId}_${now.slice(0, 16)}_seller`,
+                origin
+              }).catch(() => {});
+            }
+
+            const targetLogisticsId = logisticsId || ord.logisticsId;
+            if (targetLogisticsId || ord.logisticsEmail) {
+              const courierTpl =
+                resolutionAction === "return_to_seller"
+                  ? "logistics_package_returned_to_seller"
+                  : reason === "buyer_unavailable"
+                    ? "logistics_customer_unavailable"
+                    : reason === "incorrect_address"
+                      ? "logistics_wrong_address"
+                      : "logistics_delivery_unsuccessful";
+              dispatchTemplatedEmail({
+                templateId: courierTpl,
+                recipientEmail: ord.logisticsEmail,
+                recipientUserId: targetLogisticsId,
+                recipientRole: "logistics",
+                variables: commonVars,
+                idempotencyKey: `delivery_attempt_${orderId}_${now.slice(0, 16)}_logistics`,
+                origin
+              }).catch(() => {});
+            }
+          }
+        } catch (emailErr) {
+          console.warn("[DELIVERY ATTEMPT EMAIL NOTICE]", emailErr);
         }
       }
 

@@ -14,6 +14,7 @@ import ReviewSuccessModal from "./ReviewSuccessModal";
 import { AlertTriangle } from "lucide-react";
 import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
 import VendorVerificationBadge from "./VendorVerificationBadge";
+import { notifyOrderPlaced } from "../utils/orderEmailNotifications";
 
 interface ProductDetailProps {
   product: Product;
@@ -273,10 +274,12 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
       const uniqueProductId = `PRD-${randPrd}`;
 
       let dbSellerName = product.sellerName || "Merchant";
+      let dbSellerEmail = "";
       try {
         const sellerSnap = await getDoc(doc(db, "users", product.sellerId));
         if (sellerSnap.exists()) {
           dbSellerName = sellerSnap.data().displayName || "Merchant";
+          dbSellerEmail = sellerSnap.data().email || "";
         }
       } catch (err) {
         console.error("Error fetching seller profile name:", err);
@@ -320,13 +323,20 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
         formResponses: serviceDoneInputs
       };
 
-      await addDoc(collection(db, "orders"), orderData);
+      const orderRef = await addDoc(collection(db, "orders"), orderData);
 
       await addDoc(collection(db, "analytics"), {
         productId: product.id,
         sellerId: product.sellerId,
         type: "purchase",
         timestamp: new Date().toISOString()
+      });
+
+      void notifyOrderPlaced({
+        orderId: orderRef.id,
+        order: { ...orderData, campus: currentUser?.campus || "Campus" },
+        buyerEmail: orderData.buyerEmail,
+        sellerEmail: dbSellerEmail
       });
 
       alert("Success! Your service request has been placed. Redirecting to your service tracking dashboard...");
@@ -377,10 +387,12 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
       const uniqueProductId = `PRD-${randPrd}`;
 
       let dbSellerName = product.sellerName || "Merchant";
+      let dbSellerEmail = "";
       try {
         const sellerSnap = await getDoc(doc(db, "users", product.sellerId));
         if (sellerSnap.exists()) {
           dbSellerName = sellerSnap.data().displayName || "Merchant";
+          dbSellerEmail = sellerSnap.data().email || "";
         }
       } catch (err) {
         console.error("Error fetching seller profile name:", err);
@@ -422,7 +434,7 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
         formResponses: responses || {}
       };
 
-      await addDoc(collection(db, "orders"), orderData);
+      const orderRef = await addDoc(collection(db, "orders"), orderData);
 
       const productRef = doc(db, "products", product.id);
       const productSnap = await getDoc(productRef);
@@ -440,6 +452,13 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
         sellerId: product.sellerId,
         type: "purchase",
         timestamp: new Date().toISOString()
+      });
+
+      void notifyOrderPlaced({
+        orderId: orderRef.id,
+        order: { ...orderData, campus: currentUser?.campus || "Campus" },
+        buyerEmail: orderData.buyerEmail,
+        sellerEmail: dbSellerEmail
       });
 
       alert("Registration Successful! You have successfully booked your ticket. Check your profile or tickets to view.");

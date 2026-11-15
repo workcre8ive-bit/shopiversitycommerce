@@ -53,6 +53,7 @@ import AdminUserDetailModal from "./AdminUserDetailModal";
 import AdminAnalyticsCharts from "./AdminAnalyticsCharts";
 import AdminSecurityRenewalModal from "./AdminSecurityRenewalModal";
 import AdminEmailBrevoSettings from "./AdminEmailBrevoSettings";
+import { triggerTemplatedEmail } from "../utils/orderEmailNotifications";
 
 interface AdminDashboardProps {
   currentUser: any;
@@ -193,8 +194,25 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
   const handleToggleVerification = async (userId: string, currentStatus: boolean) => {
     try {
       const userRef = doc(db, "users", userId);
-      await updateDoc(userRef, { isVerified: !currentStatus });
-      setActionSuccessMessage(`User verification status updated to ${!currentStatus ? "Verified" : "Unverified"}`);
+      const nextVerified = !currentStatus;
+      await updateDoc(userRef, { isVerified: nextVerified });
+      if (nextVerified) {
+        const targetU = users.find((u: any) => (u.uid || u.id) === userId);
+        void triggerTemplatedEmail({
+          templateId: targetU?.role === "logistics" ? "logistics_account_approved" : "seller_application_approved",
+          recipientEmail: targetU?.email,
+          recipientUserId: userId,
+          recipientRole: targetU?.role === "logistics" ? "logistics" : "seller",
+          variables: {
+            seller_name: targetU?.displayName || "Campus Vendor",
+            store_name: targetU?.businessName || targetU?.displayName || "Vendor Store",
+            courier_name: targetU?.businessName || targetU?.displayName || "Logistics Partner",
+            campus_name: targetU?.campus || "University Campus"
+          },
+          idempotencyKey: `admin_verify_${userId}_${new Date().toISOString().slice(0, 10)}`
+        });
+      }
+      setActionSuccessMessage(`User verification status updated to ${nextVerified ? "Verified" : "Unverified"}`);
       setTimeout(() => setActionSuccessMessage(null), 3000);
     } catch (err: any) {
       handleFirestoreError(err, OperationType.UPDATE, `users/${userId}`);
@@ -210,6 +228,18 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
         status: "approved",
         approvedAt: new Date().toISOString(),
         approvedBy: currentUser?.email || "Admin"
+      });
+      void triggerTemplatedEmail({
+        templateId: "seller_payout_processing",
+        recipientUserId: payout.sellerId,
+        recipientRole: "seller",
+        variables: {
+          seller_name: payout.sellerName || "Campus Merchant",
+          payout_id: payout.id,
+          payout_amount: `NGN ${Number(payout.amount || 0).toLocaleString()}`,
+          bank_account: payout.bankDetails?.bankName || "Settlement Bank"
+        },
+        idempotencyKey: `payout_approved_${payout.id}`
       });
       setActionSuccessMessage(`Payout ₦${payout.amount.toLocaleString()} approved.`);
       setTimeout(() => setActionSuccessMessage(null), 3000);
@@ -230,6 +260,18 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
         rejectionReason: reason,
         rejectedAt: new Date().toISOString(),
         rejectedBy: currentUser?.email || "Admin"
+      });
+      void triggerTemplatedEmail({
+        templateId: "seller_payout_failed",
+        recipientUserId: payout.sellerId,
+        recipientRole: "seller",
+        variables: {
+          seller_name: payout.sellerName || "Campus Merchant",
+          payout_id: payout.id,
+          payout_amount: `NGN ${Number(payout.amount || 0).toLocaleString()}`,
+          failure_reason: reason
+        },
+        idempotencyKey: `payout_rejected_${payout.id}`
       });
     } catch (err: any) {
       handleFirestoreError(err, OperationType.UPDATE, `payoutRequests/${payout.id}`);

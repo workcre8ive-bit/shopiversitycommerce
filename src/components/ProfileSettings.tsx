@@ -42,13 +42,16 @@ import {
   Scan,
   ScanLine,
   Edit2,
-  Check
+  Check,
+  Mail,
+  Bell
 } from "lucide-react";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
 import { compressImage } from "../lib/imageUtils";
 import { auth } from "../firebase";
 import { deleteUser, signOut } from "firebase/auth";
 import { cascadeDeleteUserAccount, generateSmartUsername } from "../utils/accountCleanup";
+import { triggerTemplatedEmail } from "../utils/orderEmailNotifications";
 import { cn } from "../lib/utils";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -208,6 +211,57 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
   const [bankSearchQuery, setBankSearchQuery] = React.useState("");
   const [isBankDropdownOpen, setIsBankDropdownOpen] = React.useState(false);
   const [isVerifying, setIsVerifying] = React.useState(false);
+
+  // Email & Notification Preferences (Transactional Always Active vs Marketing Opt-In)
+  const [emailPrefs, setEmailPrefs] = React.useState({
+    marketingOptIn: true,
+    abandonedCartReminders: true,
+    wishlistAlerts: true,
+    promotionsAndDiscounts: true,
+    weeklyReports: true,
+    monthlyReports: true,
+    unsubscribedAllMarketing: false
+  });
+  const [savingEmailPrefs, setSavingEmailPrefs] = React.useState(false);
+  const [emailPrefsSaved, setEmailPrefsSaved] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!user?.email && !user?.uid) return;
+    const qs = new URLSearchParams();
+    if (user.email) qs.set("email", user.email);
+    if (user.uid) qs.set("userId", user.uid);
+    fetch(`/api/emails/preferences?${qs.toString()}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.success && data.preferences) {
+          setEmailPrefs((prev) => ({ ...prev, ...data.preferences }));
+        }
+      })
+      .catch(() => {});
+  }, [user?.email, user?.uid]);
+
+  const handleSaveEmailPreferences = async (nextPrefs: typeof emailPrefs) => {
+    setEmailPrefs(nextPrefs);
+    setSavingEmailPrefs(true);
+    setEmailPrefsSaved(false);
+    try {
+      await fetch("/api/emails/preferences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: user.email,
+          userId: user.uid,
+          ...nextPrefs
+        })
+      });
+      setEmailPrefsSaved(true);
+      setTimeout(() => setEmailPrefsSaved(false), 3000);
+    } catch (err) {
+      console.warn("Unable to save email preferences:", err);
+    } finally {
+      setSavingEmailPrefs(false);
+    }
+  };
   
   // ID Verification
   const [isVerifyingId, setIsVerifyingId] = React.useState(false);
@@ -679,6 +733,20 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
         bankDetails: currentBank,
         createdAt: new Date().toISOString()
       });
+      void triggerTemplatedEmail({
+        templateId: "seller_payout_requested",
+        recipientEmail: user.email,
+        recipientUserId: user.uid,
+        recipientRole: "seller",
+        variables: {
+          seller_name: fullName || user.displayName || "Campus Merchant",
+          store_name: businessName || user.businessName || user.displayName || "Your Store",
+          payout_id: `PAY-${Date.now().toString().slice(-6)}`,
+          payout_amount: `NGN ${availableBalance.toLocaleString()}`,
+          bank_account: `${currentBank.bankName || "Bank"} (${currentBank.accountNumber ? `••••${String(currentBank.accountNumber).slice(-4)}` : "On File"})`
+        },
+        idempotencyKey: `payout_req_${user.uid}_${Math.floor(Date.now() / 60000)}`
+      });
       alert("Payout request submitted successfully!");
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, "payoutRequests");
@@ -890,6 +958,20 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
       }
 
       await updateDoc(doc(db, "users", user.uid), updateData);
+
+      void triggerTemplatedEmail({
+        templateId: displayRole === "seller" ? "seller_profile_updated" : "buyer_profile_updated",
+        recipientEmail: user.email,
+        recipientUserId: user.uid,
+        recipientRole: displayRole === "seller" ? "seller" : "buyer",
+        variables: {
+          buyer_name: fullName || user.displayName || "Student",
+          seller_name: fullName || user.displayName || "Vendor",
+          store_name: businessName || user.businessName || user.displayName || "Store",
+          updated_fields: displayRole === "seller" ? "Storefront, Campus & Settlement Details" : "Personal & Campus Delivery Information"
+        },
+        idempotencyKey: `profile_updated_${user.uid}_${Math.floor(Date.now() / 60000)}`
+      });
       
       if (isNowComplete && (wasIncomplete || !user.profileCompleted)) {
         setShowCongratsModal(true);
@@ -2267,13 +2349,110 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
           </button>
         </form>
       </div>
-      {/* Account Management */}
+      {/* Email & Notification Preferences + Account Management */}
       {activeSection === "security" && (
-        <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 p-8 shadow-sm space-y-8 transition-colors">
-        <div className="flex items-center gap-3">
-          <Settings className="w-5 h-5 text-slate-400" />
-          <h3 className="text-xl font-bold text-slate-900 dark:text-white">Account Management</h3>
-        </div>
+        <div className="space-y-8">
+          {/* Email & Notification Preferences */}
+          <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 p-8 shadow-sm space-y-6 transition-colors">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-5">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-orange-50 dark:bg-orange-950/30 flex items-center justify-center text-orange-600">
+                  <Mail className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold text-slate-900 dark:text-white">Email &amp; Notification Preferences</h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Manage promotional &amp; summary updates. Transactional security &amp; order escrow emails stay active automatically.
+                  </p>
+                </div>
+              </div>
+              {emailPrefsSaved && (
+                <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 px-3 py-1.5 rounded-full">
+                  <CheckCircle2 className="w-3.5 h-3.5" /> Preferences Saved
+                </span>
+              )}
+            </div>
+
+            <div className="p-4 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/20 border border-emerald-200/80 dark:border-emerald-900 flex items-start gap-3">
+              <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+              <div className="text-xs text-emerald-950 dark:text-emerald-200 leading-relaxed">
+                <strong>Essential Transactional Emails (Always Enabled):</strong> Email OTP verification, password reset codes, new-device login alerts, order confirmations, escrow payment receipts, courier PIN updates, and refund/dispute decisions cannot be opted out for account protection.
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {[
+                {
+                  key: "marketingOptIn",
+                  title: "Receive Optional Marketing & Digest Emails",
+                  desc: "Master consent toggle for non-transactional reminders, promotions, and analytics digests."
+                },
+                {
+                  key: "abandonedCartReminders",
+                  title: "Abandoned Cart Reminders",
+                  desc: "Helpful reminder emails when items wait in your campus cart."
+                },
+                {
+                  key: "wishlistAlerts",
+                  title: "Wishlist Price Drop & Restock Alerts",
+                  desc: "Instant alerts when saved items drop in price or come back in stock."
+                },
+                {
+                  key: "promotionsAndDiscounts",
+                  title: "Campus Promotions & Favourite Vendors",
+                  desc: "Seasonal campus offers and new drops from stores you love."
+                },
+                {
+                  key: "weeklyReports",
+                  title: "Weekly Sales / Delivery Summaries",
+                  desc: "Weekly earnings, order throughput, and rating summaries for sellers & couriers."
+                },
+                {
+                  key: "monthlyReports",
+                  title: "Monthly Performance Statements",
+                  desc: "Monthly payout, fulfillment speed, and store analytics digests."
+                }
+              ].map((item) => {
+                const checked = Boolean((emailPrefs as any)[item.key]) && !emailPrefs.unsubscribedAllMarketing;
+                return (
+                  <label
+                    key={item.key}
+                    className="flex items-start justify-between gap-4 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/30 cursor-pointer hover:border-orange-300 transition-colors"
+                  >
+                    <div className="space-y-1">
+                      <div className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                        <Bell className="w-3.5 h-3.5 text-orange-500" />
+                        <span>{item.title}</span>
+                      </div>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">{item.desc}</p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      disabled={savingEmailPrefs}
+                      checked={item.key === "marketingOptIn" ? emailPrefs.marketingOptIn && !emailPrefs.unsubscribedAllMarketing : checked}
+                      onChange={(e) => {
+                        const val = e.target.checked;
+                        const next = {
+                          ...emailPrefs,
+                          [item.key]: val,
+                          ...(item.key === "marketingOptIn" ? { unsubscribedAllMarketing: !val } : val ? { marketingOptIn: true, unsubscribedAllMarketing: false } : {})
+                        };
+                        void handleSaveEmailPreferences(next);
+                      }}
+                      className="mt-1 h-5 w-5 accent-orange-600 rounded cursor-pointer shrink-0"
+                    />
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Account Management */}
+          <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 p-8 shadow-sm space-y-8 transition-colors">
+          <div className="flex items-center gap-3">
+            <Settings className="w-5 h-5 text-slate-400" />
+            <h3 className="text-xl font-bold text-slate-900 dark:text-white">Account Management</h3>
+          </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-8">
           {/* Hibernate */}
@@ -2428,6 +2607,7 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
               </div>
             )}
           </AnimatePresence>
+          </div>
         </div>
       )}
     </div>

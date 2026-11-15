@@ -55,6 +55,7 @@ import {
 import Logo from "./Logo";
 import { cn } from "../lib/utils";
 import { generateSmartUsername } from "../utils/accountCleanup";
+import { triggerTemplatedEmail } from "../utils/orderEmailNotifications";
 import { UserProfile, Notification } from "../types";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
 import { compressImage } from "../lib/imageUtils";
@@ -174,13 +175,19 @@ export default function AuthPage({
     onSecondaryAction?: () => void;
   } | null>(null);
 
-  // Synchronize mode if prop changes
+  // Synchronize mode if prop changes (never wipe verification notices/errors while verifying)
   React.useEffect(() => {
     if (!initialNeedsProfile && initialMode) {
       setIsLogin(initialMode === "login");
-      setStep(1);
-      setError("");
-      setFieldErrors({});
+      const currentlyVerifying =
+        isVerifyingEmail ||
+        isVerifyingPhone ||
+        (typeof window !== "undefined" && Boolean(sessionStorage.getItem("shopiversity_verifying_email")));
+      if (!currentlyVerifying) {
+        setStep(1);
+        setError("");
+        setFieldErrors({});
+      }
     }
   }, [initialMode, initialNeedsProfile]);
 
@@ -536,12 +543,19 @@ export default function AuthPage({
         setVerificationToken(cachedToken);
       }
 
-      const sentFlagKey = `shopiversity_otp_sent_${cleanTarget}`;
-      const alreadySent = typeof window !== "undefined" ? sessionStorage.getItem(sentFlagKey) : null;
+      const cachedNotice = typeof window !== "undefined" ? sessionStorage.getItem(`shopiversity_verify_notice_${cleanTarget}`) : null;
+      if (cachedNotice && !brevoNotice) {
+        setBrevoNotice(cachedNotice);
+      }
 
-      if (!alreadySent) {
+      const sentFlagKey = `shopiversity_otp_sent_${cleanTarget}`;
+      const rawSentVal = typeof window !== "undefined" ? sessionStorage.getItem(sentFlagKey) : null;
+      const sentTs = rawSentVal === "true" ? 0 : Number(rawSentVal || 0);
+      const recentlySent = Boolean(rawSentVal && sentTs > 0 && Date.now() - sentTs < 20000);
+
+      if (!recentlySent) {
         if (typeof window !== "undefined") {
-          sessionStorage.setItem(sentFlagKey, "true");
+          sessionStorage.setItem(sentFlagKey, String(Date.now()));
         }
 
         fetch("/api/send-verification", {
@@ -562,19 +576,28 @@ export default function AuthPage({
                 sessionStorage.setItem(`shopiversity_verify_token_${cleanTarget}`, data.verificationToken);
               }
             }
-            setBrevoNotice(`A 6-digit verification code has been sent to ${cleanTarget} via Brevo. Check your Inbox (and Spam/Promotions folder).`);
+            const nextNotice = `A 6-digit verification code has been sent to ${cleanTarget} via Brevo. Check your Inbox, Spam/Junk, and Promotions folders (it may take 1-2 minutes).`;
+            if (typeof window !== "undefined") {
+              sessionStorage.setItem(`shopiversity_verify_notice_${cleanTarget}`, nextNotice);
+            }
+            setBrevoNotice(nextNotice);
+            setError("");
           } else {
             if (typeof window !== "undefined") {
               sessionStorage.removeItem(sentFlagKey);
+              sessionStorage.removeItem(`shopiversity_verify_notice_${cleanTarget}`);
             }
+            setBrevoNotice("");
             setError(data.error || `Could not send verification code to ${cleanTarget} via Brevo. Please tap Resend Code.`);
           }
         }).catch(err => {
           console.warn("Auto verification dispatch error:", err);
           if (typeof window !== "undefined") {
             sessionStorage.removeItem(sentFlagKey);
+            sessionStorage.removeItem(`shopiversity_verify_notice_${cleanTarget}`);
           }
           setEnteredOtpCode("");
+          setBrevoNotice("");
           setError("Failed to connect to Brevo verification service. Please tap Resend Code.");
         });
       }
@@ -746,6 +769,7 @@ export default function AuthPage({
               if (typeof window !== "undefined") {
                 sessionStorage.setItem("shopiversity_chosen_role", accountRole);
                 sessionStorage.setItem("shopiversity_verifying_email", targetEmail);
+                sessionStorage.setItem(`shopiversity_otp_sent_${targetEmail}`, String(Date.now()));
               }
 
               setEmail(targetEmail);
@@ -763,6 +787,23 @@ export default function AuthPage({
             const signedInRole = userData.role === "seller" ? "seller" : "buyer";
             if (typeof window !== "undefined") {
               sessionStorage.setItem("shopiversity_chosen_role", signedInRole);
+              const deviceKey = `shopiversity_known_device_${user.uid}`;
+              if (!localStorage.getItem(deviceKey)) {
+                localStorage.setItem(deviceKey, new Date().toISOString());
+                void triggerTemplatedEmail({
+                  templateId: "buyer_new_device_login",
+                  recipientEmail: userData.email || user.email || cleanEmail,
+                  recipientUserId: user.uid,
+                  recipientRole: "buyer",
+                  variables: {
+                    buyer_name: userData.displayName || "Student",
+                    device_name: typeof navigator !== "undefined" ? navigator.userAgent.slice(0, 64) : "Web Browser",
+                    login_location: userData.campus || userData.state || "Campus Network",
+                    login_time: new Date().toLocaleString()
+                  },
+                  idempotencyKey: `new_device_${user.uid}_${Math.floor(Date.now() / 60000)}`
+                });
+              }
             }
             handleGoToMarket(signedInRole);
             return;
@@ -1040,7 +1081,7 @@ export default function AuthPage({
           sessionStorage.setItem("shopiversity_in_signup", "true");
           sessionStorage.setItem("shopiversity_verifying_email", cleanEmail);
           sessionStorage.setItem("shopiversity_chosen_role", role);
-          sessionStorage.setItem(`shopiversity_otp_sent_${cleanEmail}`, "true");
+          sessionStorage.setItem(`shopiversity_otp_sent_${cleanEmail}`, String(Date.now()));
         }
 
         try {
@@ -1056,13 +1097,17 @@ export default function AuthPage({
           const vData = await vRes.json().catch(() => ({}));
           if (vRes.ok && vData.sent) {
             nextToken = vData.verificationToken || "";
-            noticeMessage = `A 6-digit verification code has been sent to ${cleanEmail} via Brevo. Please check your Inbox (and Spam/Promotions folder) and enter it below.`;
-            if (typeof window !== "undefined" && nextToken) {
-              sessionStorage.setItem(`shopiversity_verify_token_${cleanEmail}`, nextToken);
+            noticeMessage = `A 6-digit verification code has been sent to ${cleanEmail} via Brevo. Check your Inbox, Spam/Junk, and Promotions folders and enter it below.`;
+            if (typeof window !== "undefined") {
+              sessionStorage.setItem(`shopiversity_verify_notice_${cleanEmail}`, noticeMessage);
+              if (nextToken) {
+                sessionStorage.setItem(`shopiversity_verify_token_${cleanEmail}`, nextToken);
+              }
             }
           } else {
             if (typeof window !== "undefined") {
               sessionStorage.removeItem(`shopiversity_otp_sent_${cleanEmail}`);
+              sessionStorage.removeItem(`shopiversity_verify_notice_${cleanEmail}`);
             }
             dispatchError = vData.error || `Failed to send verification code to ${cleanEmail} via Brevo. Please click Resend Code.`;
           }
@@ -1070,6 +1115,7 @@ export default function AuthPage({
           console.warn("Email verification API dispatch notice:", vErr);
           if (typeof window !== "undefined") {
             sessionStorage.removeItem(`shopiversity_otp_sent_${cleanEmail}`);
+            sessionStorage.removeItem(`shopiversity_verify_notice_${cleanEmail}`);
           }
           dispatchError = "Network error sending verification code via Brevo. Please click Resend Code.";
         }
@@ -1140,6 +1186,9 @@ export default function AuthPage({
     setError("");
 
     try {
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem(`shopiversity_otp_sent_${targetEmail}`, String(Date.now()));
+      }
       const vRes = await fetch("/api/send-verification", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1151,6 +1200,11 @@ export default function AuthPage({
       const vData = await vRes.json().catch(() => ({}));
       setEnteredOtpCode("");
       if (!vRes.ok || !vData.sent) {
+        if (typeof window !== "undefined") {
+          sessionStorage.removeItem(`shopiversity_otp_sent_${targetEmail}`);
+          sessionStorage.removeItem(`shopiversity_verify_notice_${targetEmail}`);
+        }
+        setBrevoNotice("");
         setError(vData.error || `Failed to resend verification email to ${targetEmail} via Brevo. Please try again.`);
         return;
       }
@@ -1160,11 +1214,16 @@ export default function AuthPage({
           sessionStorage.setItem(`shopiversity_verify_token_${targetEmail}`, vData.verificationToken);
         }
       }
-      setBrevoNotice(`A fresh 6-digit verification code has been dispatched to ${targetEmail} via Brevo! Check your Inbox (and Spam/Promotions folder).`);
-      setError(`A fresh 6-digit verification code has been dispatched to ${targetEmail} via Brevo! Check your Inbox (and Spam/Promotions folder).`);
+      const nextNotice = `A fresh 6-digit verification code has been dispatched to ${targetEmail} via Brevo! Check your Inbox, Spam/Junk, and Promotions folders.`;
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem(`shopiversity_verify_notice_${targetEmail}`, nextNotice);
+      }
+      setBrevoNotice(nextNotice);
+      setError("");
       setResendCooldown(30);
     } catch (err: any) {
       console.error("Resend Brevo verification error:", err);
+      setBrevoNotice("");
       setError("Failed to resend verification email via Brevo. Please try again in a moment.");
     } finally {
       setResendingCode(false);
@@ -1312,9 +1371,10 @@ export default function AuthPage({
         if (formerEmail) {
           sessionStorage.removeItem(`shopiversity_verify_token_${formerEmail}`);
           sessionStorage.removeItem(`shopiversity_otp_sent_${formerEmail}`);
+          sessionStorage.removeItem(`shopiversity_verify_notice_${formerEmail}`);
         }
         sessionStorage.setItem("shopiversity_verifying_email", trimmed);
-        sessionStorage.setItem(`shopiversity_otp_sent_${trimmed}`, "true");
+        sessionStorage.setItem(`shopiversity_otp_sent_${trimmed}`, String(Date.now()));
       }
 
       setEmail(trimmed);
@@ -1336,13 +1396,19 @@ export default function AuthPage({
 
       if (vRes.ok && vData.sent && vData.verificationToken) {
         setVerificationToken(vData.verificationToken);
+        const nextNotice = `Email updated to ${trimmed}! A new 6-digit verification code has been sent to ${trimmed} via Brevo. Check your Inbox, Spam/Junk, and Promotions folders.`;
         if (typeof window !== "undefined") {
           sessionStorage.setItem(`shopiversity_verify_token_${trimmed}`, vData.verificationToken);
+          sessionStorage.setItem(`shopiversity_verify_notice_${trimmed}`, nextNotice);
         }
-        setBrevoNotice(`Email updated to ${trimmed}! A new 6-digit verification code has been sent to ${trimmed} via Brevo.`);
+        setBrevoNotice(nextNotice);
         setError("");
       } else {
-        setBrevoNotice(`Email updated from ${formerEmail} to ${trimmed}.`);
+        if (typeof window !== "undefined") {
+          sessionStorage.removeItem(`shopiversity_otp_sent_${trimmed}`);
+          sessionStorage.removeItem(`shopiversity_verify_notice_${trimmed}`);
+        }
+        setBrevoNotice("");
         setError(vData.error || `Email updated to ${trimmed}, but Brevo delivery failed. Please tap Resend Code.`);
       }
 
@@ -1398,7 +1464,7 @@ export default function AuthPage({
         sessionStorage.setItem("shopiversity_auth_mode", "signup");
         sessionStorage.setItem("shopiversity_in_signup", "true");
         sessionStorage.setItem("shopiversity_verifying_email", targetEmail);
-        sessionStorage.setItem(`shopiversity_otp_sent_${targetEmail}`, "true");
+        sessionStorage.setItem(`shopiversity_otp_sent_${targetEmail}`, String(Date.now()));
       }
 
       const vRes = await fetch("/api/send-verification", {
@@ -1415,17 +1481,20 @@ export default function AuthPage({
       if (vRes.ok && vData.sent) {
         const token = vData.verificationToken || "";
         setVerificationToken(token);
+        const nextNotice = `6-digit verification code sent to ${targetEmail} via Brevo! Please check your Inbox, Spam/Junk, and Promotions folders.`;
         if (typeof window !== "undefined") {
           sessionStorage.setItem("shopiversity_verifying_email", targetEmail);
-          sessionStorage.setItem(`shopiversity_otp_sent_${targetEmail}`, "true");
+          sessionStorage.setItem(`shopiversity_otp_sent_${targetEmail}`, String(Date.now()));
+          sessionStorage.setItem(`shopiversity_verify_notice_${targetEmail}`, nextNotice);
           if (token) {
             sessionStorage.setItem(`shopiversity_verify_token_${targetEmail}`, token);
           }
         }
-        setBrevoNotice(`6-digit verification code sent to ${targetEmail} via Brevo! Please check your inbox.`);
+        setBrevoNotice(nextNotice);
       } else {
         if (typeof window !== "undefined" && targetEmail) {
           sessionStorage.removeItem(`shopiversity_otp_sent_${targetEmail}`);
+          sessionStorage.removeItem(`shopiversity_verify_notice_${targetEmail}`);
         }
         setBrevoNotice("");
         setError(vData.error || `Failed to send verification code to ${targetEmail} via Brevo. Please try Resend Code.`);
@@ -1579,11 +1648,40 @@ export default function AuthPage({
         if (targetEmail) {
           sessionStorage.removeItem(`shopiversity_verify_token_${targetEmail}`);
           sessionStorage.removeItem(`shopiversity_otp_sent_${targetEmail}`);
+          sessionStorage.removeItem(`shopiversity_verify_notice_${targetEmail}`);
         }
       }
 
       setIsVerificationSuccess(true);
       setError("");
+
+      // Dispatch B-03 Verification Success & B-01 / S-01 Welcome Email via Brevo
+      const finalIsSeller = confirmedRole === "seller" || (typeof window !== "undefined" && sessionStorage.getItem("shopiversity_chosen_role") === "seller");
+      const welcomeName = fullName || username || auth.currentUser?.displayName || "Student";
+      void triggerTemplatedEmail({
+        templateId: "buyer_email_verified",
+        recipientEmail: targetEmail,
+        recipientUserId: currentUid,
+        recipientRole: finalIsSeller ? "seller" : "buyer",
+        variables: {
+          buyer_name: welcomeName,
+          campus_name: schoolName || state || "University Campus"
+        },
+        idempotencyKey: `email_verified_${currentUid || targetEmail}`
+      });
+      void triggerTemplatedEmail({
+        templateId: finalIsSeller ? "seller_welcome" : "buyer_welcome",
+        recipientEmail: targetEmail,
+        recipientUserId: currentUid,
+        recipientRole: finalIsSeller ? "seller" : "buyer",
+        variables: {
+          buyer_name: welcomeName,
+          seller_name: welcomeName,
+          store_name: businessName || welcomeName,
+          campus_name: schoolName || state || "University Campus"
+        },
+        idempotencyKey: `welcome_${finalIsSeller ? "seller" : "buyer"}_${currentUid || targetEmail}`
+      });
 
       setTimeout(() => {
         setIsVerifyingEmail(false);
@@ -1755,7 +1853,7 @@ export default function AuthPage({
       if (typeof window !== "undefined") {
         sessionStorage.setItem("shopiversity_verifying_email", cleanUserEmail);
         sessionStorage.setItem("shopiversity_chosen_role", chosenRole);
-        sessionStorage.setItem(`shopiversity_otp_sent_${cleanUserEmail}`, "true");
+        sessionStorage.setItem(`shopiversity_otp_sent_${cleanUserEmail}`, String(Date.now()));
       }
 
       try {
@@ -1772,12 +1870,23 @@ export default function AuthPage({
         const vData = await vRes.json().catch(() => ({}));
         if (vRes.ok && vData.sent) {
           nextToken = vData.verificationToken || "";
-          noticeMessage = `A 6-digit verification code has been dispatched to ${cleanUserEmail} via Brevo! Check your email inbox.`;
+          noticeMessage = `A 6-digit verification code has been dispatched to ${cleanUserEmail} via Brevo! Check your Inbox, Spam/Junk, and Promotions folders.`;
+          if (typeof window !== "undefined") {
+            sessionStorage.setItem(`shopiversity_verify_notice_${cleanUserEmail}`, noticeMessage);
+          }
         } else {
+          if (typeof window !== "undefined") {
+            sessionStorage.removeItem(`shopiversity_otp_sent_${cleanUserEmail}`);
+            sessionStorage.removeItem(`shopiversity_verify_notice_${cleanUserEmail}`);
+          }
           dispatchError = vData.error || `Failed to dispatch verification code to ${cleanUserEmail} via Brevo. Please click Resend Code.`;
         }
       } catch (vErr) {
         console.warn("Google email verification API dispatch notice:", vErr);
+        if (typeof window !== "undefined") {
+          sessionStorage.removeItem(`shopiversity_otp_sent_${cleanUserEmail}`);
+          sessionStorage.removeItem(`shopiversity_verify_notice_${cleanUserEmail}`);
+        }
         dispatchError = "Network error dispatching verification code via Brevo. Please click Resend Code.";
       }
 
@@ -1827,7 +1936,7 @@ export default function AuthPage({
         if (typeof window !== "undefined") {
           sessionStorage.setItem("shopiversity_verifying_email", cleanUserEmail);
           sessionStorage.setItem("shopiversity_chosen_role", accountRole);
-          sessionStorage.setItem(`shopiversity_otp_sent_${cleanUserEmail}`, "true");
+          sessionStorage.setItem(`shopiversity_otp_sent_${cleanUserEmail}`, String(Date.now()));
         }
 
         try {
@@ -1844,12 +1953,23 @@ export default function AuthPage({
           const vData = await vRes.json().catch(() => ({}));
           if (vRes.ok && vData.sent) {
             nextToken = vData.verificationToken || "";
-            noticeMessage = `A 6-digit verification code has been sent to ${cleanUserEmail} via Brevo! Check your email inbox.`;
+            noticeMessage = `A 6-digit verification code has been sent to ${cleanUserEmail} via Brevo! Check your Inbox, Spam/Junk, and Promotions folders.`;
+            if (typeof window !== "undefined") {
+              sessionStorage.setItem(`shopiversity_verify_notice_${cleanUserEmail}`, noticeMessage);
+            }
           } else {
+            if (typeof window !== "undefined") {
+              sessionStorage.removeItem(`shopiversity_otp_sent_${cleanUserEmail}`);
+              sessionStorage.removeItem(`shopiversity_verify_notice_${cleanUserEmail}`);
+            }
             dispatchError = vData.error || `Failed to send verification code to ${cleanUserEmail} via Brevo. Please click Resend Code.`;
           }
         } catch (vErr) {
           console.warn("Google verification dispatch notice:", vErr);
+          if (typeof window !== "undefined") {
+            sessionStorage.removeItem(`shopiversity_otp_sent_${cleanUserEmail}`);
+            sessionStorage.removeItem(`shopiversity_verify_notice_${cleanUserEmail}`);
+          }
           dispatchError = "Network error sending verification code via Brevo. Please click Resend Code.";
         }
 
@@ -2778,6 +2898,7 @@ export default function AuthPage({
                         if (email) {
                           sessionStorage.removeItem(`shopiversity_otp_sent_${email}`);
                           sessionStorage.removeItem(`shopiversity_verify_token_${email}`);
+                          sessionStorage.removeItem(`shopiversity_verify_notice_${email}`);
                         }
                       }
                       setIsVerifyingEmail(false);

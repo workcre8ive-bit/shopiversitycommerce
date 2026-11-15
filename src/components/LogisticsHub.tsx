@@ -4,6 +4,7 @@ import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from ".
 import { cn, getOrderDeliveryPin, getOrderSellerHandoverPin, cleanPinInput } from "../lib/utils";
 import Logo from "./Logo";
 import AuthErrorModal, { AuthErrorModalProps } from "./AuthErrorModal";
+import { notifyLogisticsAccepted, notifyLogisticsProgress, triggerTemplatedEmail } from "../utils/orderEmailNotifications";
 import { 
   createUserWithEmailAndPassword, 
   signInWithEmailAndPassword, 
@@ -1577,6 +1578,17 @@ export default function LogisticsHub({
       }
 
       setSuccessMsg("Logistics company account created and verified successfully! Welcome to your Logistics Hub.");
+      void triggerTemplatedEmail({
+        templateId: "logistics_welcome",
+        recipientEmail: cleanEmail,
+        recipientUserId: user.uid,
+        recipientRole: "logistics",
+        variables: {
+          courier_name: profile.companyName,
+          campus_name: profile.coveredCampuses.join(", ") || "University Main Campus"
+        },
+        idempotencyKey: `logistics_welcome_${user.uid}`
+      });
       setView("dashboard");
       
       // Clear forms
@@ -1760,30 +1772,6 @@ export default function LogisticsHub({
             isRead: false,
             createdAt: new Date().toISOString()
           });
-
-          // Brevo email to seller
-          if (orderData.sellerEmail) {
-            fetch("/api/send-order-status", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                orderId: actualOrderId,
-                recipientEmail: orderData.sellerEmail,
-                recipientName: orderData.sellerName || "Merchant",
-                buyerName: orderData.buyerName || "Customer",
-                sellerName: orderData.sellerName || "Merchant",
-                productName: orderData.productName,
-                quantity: orderData.quantity || 1,
-                totalPrice: orderData.totalPrice,
-                deliveryType: orderData.deliveryType,
-                status: "Logistics Accepted",
-                statusTitle: "🚚 Logistics Courier Accepted Dispatch Request",
-                statusMessage: `Logistics partner "${companyProfile.companyName}" (${companyProfile.phoneNumber}) has accepted the delivery assignment for ${orderData.productName}. Courier will arrive for seller handover. Handover PIN: ${sellerPin}`,
-                deliveryOtp: sellerPin,
-                idempotencyKey: `logistics_accepted_${actualOrderId}_seller`
-              })
-            }).catch(e => console.warn("[BREVO NOTICE] Logistics accept email to seller:", e));
-          }
         }
 
         // 4. Notify the buyer
@@ -1796,31 +1784,26 @@ export default function LogisticsHub({
             isRead: false,
             createdAt: new Date().toISOString()
           });
-
-          const buyerTargetEmail = orderData.buyerEmail;
-          if (buyerTargetEmail) {
-            fetch("/api/send-order-status", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                orderId: actualOrderId,
-                recipientEmail: buyerTargetEmail,
-                recipientName: orderData.buyerName || "Customer",
-                buyerName: orderData.buyerName || "Customer",
-                sellerName: orderData.sellerName || "Merchant",
-                productName: orderData.productName,
-                quantity: orderData.quantity || 1,
-                totalPrice: orderData.totalPrice,
-                deliveryType: orderData.deliveryType,
-                status: "Logistics Accepted",
-                statusTitle: "🚚 Logistics Courier Assigned to Deliver Your Order",
-                statusMessage: `Campus courier "${companyProfile.companyName}" (${companyProfile.phoneNumber}) has accepted your delivery! Estimated handover timeline: ${timeline}. Keep your Delivery PIN ready.`,
-                deliveryOtp: deliveryPin,
-                idempotencyKey: `logistics_accepted_${actualOrderId}_buyer`
-              })
-            }).catch(e => console.warn("[BREVO NOTICE] Logistics accept email to buyer:", e));
-          }
         }
+
+        // 5. Brevo Emails to Seller, Buyer, and Logistics Company (with Firestore fallback lookup)
+        void notifyLogisticsAccepted({
+          orderId: actualOrderId,
+          order: {
+            ...orderData,
+            totalPrice: newTotalPrice
+          },
+          logisticsCompany: {
+            id: companyProfile.id,
+            companyName: companyProfile.companyName,
+            email: companyProfile.email,
+            phoneNumber: companyProfile.phoneNumber
+          },
+          timeline,
+          deliveryFee: finalDeliveryPrice,
+          sellerPin,
+          deliveryPin
+        });
       }
 
       setJobAcceptingId(null);
@@ -1883,6 +1866,19 @@ export default function LogisticsHub({
             createdAt: new Date().toISOString()
           });
         }
+        void triggerTemplatedEmail({
+          templateId: "logistics_assignment_rejected",
+          recipientEmail: companyProfile.email,
+          recipientUserId: companyProfile.id,
+          recipientRole: "logistics",
+          variables: {
+            courier_name: companyProfile.companyName,
+            order_id: orderData.uniqueOrderId || actualOrderId,
+            product_name: orderData.productName || "Marketplace Item",
+            seller_name: orderData.sellerName || "Campus Merchant"
+          },
+          idempotencyKey: `logistics_declined_${actualOrderId}_${companyProfile.id}`
+        });
       }
       setSuccessMsg("Delivery offer declined.");
       setTimeout(() => setSuccessMsg(""), 4000);
@@ -2006,57 +2002,23 @@ export default function LogisticsHub({
               isRead: false,
               createdAt: new Date().toISOString()
             });
-
-            // Brevo email to seller
-            if (orderData.sellerEmail) {
-              fetch("/api/send-order-status", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  orderId: actualOrderId,
-                  recipientEmail: orderData.sellerEmail,
-                  recipientName: orderData.sellerName || "Merchant",
-                  buyerName: orderData.buyerName || "Customer",
-                  sellerName: orderData.sellerName || "Merchant",
-                  productName: orderData.productName,
-                  quantity: orderData.quantity || 1,
-                  totalPrice: orderData.totalPrice,
-                  deliveryType: orderData.deliveryType,
-                  status: nextStatus,
-                  statusTitle: sellerNotifTitle,
-                  statusMessage: sellerNotifMsg,
-                  idempotencyKey: `courier_update_${actualOrderId}_${nextStatus}_seller`
-                })
-              }).catch(e => console.warn("[BREVO NOTICE] Logistics status email to seller err:", e));
-            }
           } catch (notifErr) {
             console.warn("Could not send seller notification:", notifErr);
           }
         }
 
-        // Brevo email to buyer
-        if (orderData.buyerEmail) {
-          fetch("/api/send-order-status", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              orderId: actualOrderId,
-              recipientEmail: orderData.buyerEmail,
-              recipientName: orderData.buyerName || "Customer",
-              buyerName: orderData.buyerName || "Customer",
-              sellerName: orderData.sellerName || "Merchant",
-              productName: orderData.productName,
-              quantity: orderData.quantity || 1,
-              totalPrice: orderData.totalPrice,
-              deliveryType: orderData.deliveryType,
-              status: nextStatus,
-              statusTitle: notifTitle,
-              statusMessage: notifMsg,
-              deliveryOtp: orderData.deliveryOtp || orderData.deliveryPin,
-              idempotencyKey: `courier_update_${actualOrderId}_${nextStatus}_buyer`
-            })
-          }).catch(e => console.warn("[BREVO NOTICE] Logistics status email to buyer err:", e));
-        }
+        // Brevo transactional emails to Buyer, Seller, and Logistics Company (including "Order Reached Buyer" on delivered)
+        void notifyLogisticsProgress({
+          orderId: actualOrderId,
+          order: orderData,
+          nextStatus,
+          logisticsCompany: {
+            id: companyProfile.id,
+            companyName: companyProfile.companyName,
+            email: companyProfile.email,
+            phoneNumber: companyProfile.phoneNumber
+          }
+        });
       }
       setSuccessMsg(`Status updated to: ${nextStatus.replace("_", " ").toUpperCase()}`);
       setTimeout(() => setSuccessMsg(""), 4000);

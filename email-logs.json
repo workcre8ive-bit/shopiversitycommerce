@@ -1,0 +1,16 @@
+[
+  {
+    "id": "ELG_1794733835779_f9db4a",
+    "templateId": "buyer_special_promotions",
+    "templateCode": "B-26",
+    "templateName": "Special Promotions and Discounts",
+    "recipientCategory": "buyer",
+    "classification": "marketing",
+    "recipientEmail": "qa-test@shopiversity.app",
+    "subject": "Campus Marketplace Deals: {{promo_title}}",
+    "triggerEvent": "marketing.campaign_launched",
+    "status": "skipped_unsubscribed",
+    "retryCount": 0,
+    "createdAt": "2026-11-15T09:10:35.780Z"
+  }
+]

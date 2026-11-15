@@ -14,6 +14,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { doc, updateDoc, addDoc, collection } from "firebase/firestore";
 import { db } from "../firebase";
 import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
+import { triggerTemplatedEmail } from "../utils/orderEmailNotifications";
 
 interface AdminSuspendModalProps {
   isOpen: boolean;
@@ -135,6 +136,22 @@ export default function AdminSuspendModal({
         console.warn("Could not dispatch suspension in-app notification:", notifErr);
       }
 
+      const isLogistics = user.role === "logistics" || user.state === "Logistics Partner";
+      void triggerTemplatedEmail({
+        templateId: isLogistics ? "logistics_account_status_changed" : "seller_account_suspended",
+        recipientEmail: user.email,
+        recipientUserId: user.uid || user.id,
+        recipientRole: isLogistics ? "logistics" : "seller",
+        variables: {
+          seller_name: user.displayName || "Vendor",
+          store_name: user.businessName || user.displayName || "Store",
+          courier_name: user.businessName || user.displayName || "Courier Partner",
+          suspension_reason: finalReason,
+          account_status: finalBanType === "permanent" ? "Permanently Restricted" : `Suspended until ${expiryIso ? new Date(expiryIso).toLocaleDateString() : "further notice"}`
+        },
+        idempotencyKey: `suspend_${user.uid || user.id}_${Math.floor(Date.now() / 60000)}`
+      });
+
       if (onSuccess) onSuccess();
       onClose();
     } catch (err: any) {
@@ -174,6 +191,22 @@ export default function AdminSuspendModal({
       } catch (notifErr) {
         console.warn("Could not dispatch unsuspend notification:", notifErr);
       }
+
+      const isLogisticsReinstate = user.role === "logistics" || user.state === "Logistics Partner";
+      void triggerTemplatedEmail({
+        templateId: isLogisticsReinstate ? "logistics_account_status_changed" : "seller_account_reinstated",
+        recipientEmail: user.email,
+        recipientUserId: user.uid || user.id,
+        recipientRole: isLogisticsReinstate ? "logistics" : "seller",
+        variables: {
+          seller_name: user.displayName || "Vendor",
+          store_name: user.businessName || user.displayName || "Store",
+          courier_name: user.businessName || user.displayName || "Courier Partner",
+          reinstatement_note: "Your Shopiversity account access has been fully restored by Trust & Safety.",
+          account_status: "Active & Reinstated"
+        },
+        idempotencyKey: `reinstate_${user.uid || user.id}_${Math.floor(Date.now() / 60000)}`
+      });
 
       if (onSuccess) onSuccess();
       onClose();

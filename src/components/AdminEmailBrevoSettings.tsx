@@ -19,9 +19,12 @@ import {
   MessageSquare, 
   Phone,
   Key,
-  ShieldAlert
+  ShieldAlert,
+  Layers,
+  History
 } from "lucide-react";
 import { cn } from "../lib/utils";
+import AdminEmailTemplateHub from "./AdminEmailTemplateHub";
 
 export default function AdminEmailBrevoSettings() {
   const [apiKey, setApiKey] = useState("");
@@ -29,6 +32,7 @@ export default function AdminEmailBrevoSettings() {
   const [senderName, setSenderName] = useState("SHOPIVERSITY Campus Marketplace");
   const [smsSender, setSmsSender] = useState("SHOPIV");
   const [smtpUser, setSmtpUser] = useState("");
+  const [activeHubTab, setActiveHubTab] = useState<"setup" | "blueprint" | "logs">("setup");
   
   const [showApiKey, setShowApiKey] = useState(false);
   const [loadingStatus, setLoadingStatus] = useState(true);
@@ -46,6 +50,8 @@ export default function AdminEmailBrevoSettings() {
     smsSender?: string;
     smtpUser?: string;
     needsSmtpUser?: boolean;
+    isSmtpKeyOnly?: boolean;
+    isConsumerGmailSender?: boolean;
     provider: string;
     activeFallback: boolean;
   } | null>(null);
@@ -317,8 +323,63 @@ export default function AdminEmailBrevoSettings() {
         </div>
       )}
 
-      {/* Services Powered by Brevo Info Box */}
-      <div className="bg-gradient-to-r from-orange-50 via-amber-50 to-orange-50 dark:from-zinc-900 dark:to-zinc-800/80 p-5 rounded-2xl border border-orange-200/80 dark:border-zinc-700 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+      {/* Sub-Tab Navigation */}
+      <div className="flex flex-wrap items-center gap-2 bg-white dark:bg-slate-900 p-2 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+        <button
+          type="button"
+          onClick={() => setActiveHubTab("setup")}
+          className={cn(
+            "inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer",
+            activeHubTab === "setup"
+              ? "bg-orange-600 text-white shadow-md shadow-orange-600/20"
+              : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+          )}
+        >
+          <KeyRound className="w-4 h-4" />
+          Brevo Credentials &amp; Quick Tests
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveHubTab("blueprint")}
+          className={cn(
+            "inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer",
+            activeHubTab === "blueprint"
+              ? "bg-orange-600 text-white shadow-md shadow-orange-600/20"
+              : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+          )}
+        >
+          <Layers className="w-4 h-4" />
+          101-Template Blueprint &amp; Tester
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveHubTab("logs")}
+          className={cn(
+            "inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer",
+            activeHubTab === "logs"
+              ? "bg-orange-600 text-white shadow-md shadow-orange-600/20"
+              : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+          )}
+        >
+          <History className="w-4 h-4" />
+          Outgoing Logs &amp; QA Checklist
+        </button>
+      </div>
+
+      {activeHubTab === "blueprint" && (
+        <AdminEmailTemplateHub mode="blueprint" defaultTestRecipient={testRecipient} />
+      )}
+
+      {activeHubTab === "logs" && (
+        <AdminEmailTemplateHub mode="logs" defaultTestRecipient={testRecipient} />
+      )}
+
+      {activeHubTab === "setup" && (
+        <>
+          {/* Services Powered by Brevo Info Box */}
+          <div className="bg-gradient-to-r from-orange-50 via-amber-50 to-orange-50 dark:from-zinc-900 dark:to-zinc-800/80 p-5 rounded-2xl border border-orange-200/80 dark:border-zinc-700 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div className="flex items-start gap-3.5">
           <div className="w-10 h-10 rounded-xl bg-orange-500 text-white flex items-center justify-center shrink-0 shadow-md">
             <Sparkles className="w-5 h-5" />
@@ -384,6 +445,63 @@ export default function AdminEmailBrevoSettings() {
           <p className="text-xs text-slate-500 mt-1">
             Display name for Brevo phone verification OTP text messages.
           </p>
+        </div>
+      </div>
+
+      {/* SMTP Relay vs REST API Delivery Advisory */}
+      {(statusData?.isSmtpKeyOnly || statusData?.keyType === "Brevo SMTP Key") && (
+        <div className="p-4 sm:p-5 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 flex items-start gap-3 text-left">
+          <ShieldAlert className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <div className="space-y-1.5 text-xs text-amber-950 dark:text-amber-200 leading-relaxed">
+            <p className="font-extrabold">
+              Using Brevo SMTP Relay Key (xsmtpsib-) — Why Codes Can Show &quot;Sent&quot; Without Arriving
+            </p>
+            <p>
+              Brevo SMTP always replies <code className="font-mono font-bold">250 OK (queued)</code> first, then silently drops or blocks the email in <strong>Brevo &rarr; Transactional &rarr; Logs</strong> if <strong>{statusData?.senderEmail || senderEmail}</strong> is not verified under <strong>Brevo &rarr; Senders, Domains &amp; IPs &rarr; Senders</strong>, or if your Brevo Transactional SMTP account is still pending activation.
+              {statusData?.isConsumerGmailSender && " Also, sending from an @gmail.com address via third-party SMTP fails Gmail DMARC checks and goes straight to Spam."}
+            </p>
+            <p className="font-semibold">
+              Fix: Open <strong>Brevo &rarr; Transactional &rarr; Logs</strong> to inspect blocked/deferred entries, ensure <strong>{statusData?.senderEmail || senderEmail}</strong> is verified in Senders (or update Sender Email below to a verified custom domain email), and ideally connect a <strong>Brevo REST API v3 Key (<code className="font-mono">xkeysib-...</code>)</strong> from <strong>Brevo &rarr; SMTP &amp; API &rarr; API Keys</strong>.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Spam Prevention & Inbox Placement Guide */}
+      <div className={cn(
+        "p-4 sm:p-5 rounded-2xl border flex items-start gap-3 text-left",
+        statusData?.isConsumerGmailSender
+          ? "bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800"
+          : "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800"
+      )}>
+        {statusData?.isConsumerGmailSender ? (
+          <ShieldAlert className="w-5 h-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+        ) : (
+          <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+        )}
+        <div className={cn(
+          "space-y-1.5 text-xs leading-relaxed",
+          statusData?.isConsumerGmailSender
+            ? "text-red-950 dark:text-red-200"
+            : "text-emerald-950 dark:text-emerald-200"
+        )}>
+          <p className="font-extrabold">
+            {statusData?.isConsumerGmailSender
+              ? `Spam Alert: Current sender (${statusData?.senderEmail || senderEmail}) ends in @gmail.com`
+              : "Custom Domain Sender Active — High Inbox Deliverability"}
+          </p>
+          {statusData?.isConsumerGmailSender ? (
+            <ul className="list-disc list-inside space-y-1">
+              <li><strong>Why it goes to Spam:</strong> Gmail&apos;s strict DMARC policy sees an email claiming <code className="font-mono">@gmail.com</code> sent from Brevo servers instead of Google Mail, so Gmail places it in Spam.</li>
+              <li><strong>Permanent Fix (Recommended):</strong> Buy/use a domain (e.g. <code className="font-mono">shopiversity.com</code>), open <strong>Brevo &rarr; Senders, Domains &amp; IPs &rarr; Domains &rarr; Add a domain</strong>, add Brevo&apos;s <strong>DKIM &amp; DMARC TXT records</strong> in your DNS, then set Sender Email below to <code className="font-mono">no-reply@yourdomain.com</code>.</li>
+              <li><strong>Switch to REST API Key:</strong> Use a Brevo <strong>xkeysib-</strong> REST API v3 key instead of <code className="font-mono">xsmtpsib-</code> for stronger authentication and instant delivery diagnostics.</li>
+              <li><strong>Short-term Test Fix:</strong> Open the message in Gmail Spam and tap <strong>Report not spam</strong> (plus add the sender to contacts) to train your personal inbox while migrating to a custom domain.</li>
+            </ul>
+          ) : (
+            <p>
+              Ensure your domain <strong>{String(statusData?.senderEmail || senderEmail).split("@")[1] || "domain"}</strong> shows <strong>Authenticated (DKIM + DMARC)</strong> inside <strong>Brevo &rarr; Senders, Domains &amp; IPs &rarr; Domains</strong> so OTP codes, order receipts, and logistics updates land in Primary Inbox.
+            </p>
+          )}
         </div>
       </div>
 
@@ -704,6 +822,8 @@ export default function AdminEmailBrevoSettings() {
           </div>
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 }

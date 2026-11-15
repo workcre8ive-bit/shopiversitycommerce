@@ -1,0 +1,13 @@
+{
+  "qa-test@shopiversity.app": {
+    "email": "qa-test@shopiversity.app",
+    "marketingOptIn": true,
+    "abandonedCartReminders": true,
+    "wishlistAlerts": true,
+    "promotionsAndDiscounts": true,
+    "weeklyReports": true,
+    "monthlyReports": true,
+    "unsubscribedAllMarketing": false,
+    "updatedAt": "2026-11-15T09:10:35.796Z"
+  }
+}

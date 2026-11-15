@@ -23,6 +23,7 @@ import SalesAnalytics from "./SalesAnalytics";
 import DashboardSlideshow from "./DashboardSlideshow";
 import { deduplicateLogisticsCompanies, filterActiveLogisticsCompanies } from "../utils/logisticsDeduplication";
 import { calculateVendorProfileProgress } from "../utils/vendorVerification";
+import { notifySellerOrderUpdate, notifyLogisticsBooked, triggerTemplatedEmail } from "../utils/orderEmailNotifications";
 import { 
   LayoutDashboard, 
   LayoutGrid,
@@ -483,55 +484,17 @@ export default function SellerDashboard({
         createdAt: new Date().toISOString()
       });
 
-      // Brevo Automated Transactional Email to Buyer
-      try {
-        let buyerTargetEmail = (order as any).buyerEmail;
-        if (!buyerTargetEmail && order.buyerId) {
-          const bSnap = await getDoc(doc(db, "users", order.buyerId));
-          if (bSnap.exists()) {
-            buyerTargetEmail = bSnap.data().email;
-          }
-        }
-
-        if (buyerTargetEmail) {
-          let emailTitle = "Order Status Updated";
-          let emailMessage = `Your order for ${order.productName} has been updated to ${status}.`;
-
-          if (status === "accepted") {
-            emailTitle = "🎉 Seller Accepted Your Order & is Preparing Package";
-            emailMessage = `Great news! Merchant ${order.sellerName || "Seller"} accepted your order for "${order.productName}" (x${order.quantity || 1}) and is preparing the package.`;
-          } else if (status === "paid" || updateData.status === "completed") {
-            emailTitle = "✅ Payment Confirmed & Order Completed!";
-            emailMessage = `Payment confirmed for "${order.productName}". Your order is officially completed and protected by SHOPIVERSITY Escrow.`;
-          } else if (status === "start_dispatch" || status === "Out To Pickup Station") {
-            emailTitle = "📦 Product On Its Way to Pickup Point";
-            emailMessage = `Your product "${order.productName}" has been packed and is on its way to the designated campus pickup point.`;
-          }
-
-          fetch("/api/send-order-status", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              orderId,
-              recipientEmail: buyerTargetEmail,
-              recipientName: order.buyerName || "Customer",
-              buyerName: order.buyerName || "Customer",
-              sellerName: order.sellerName || "Seller",
-              productName: order.productName,
-              quantity: order.quantity || 1,
-              totalPrice: order.totalPrice,
-              deliveryType: order.deliveryType,
-              status,
-              statusTitle: emailTitle,
-              statusMessage: emailMessage,
-              deliveryOtp: order.deliveryOtp || order.deliveryPin,
-              idempotencyKey: `seller_update_${orderId}_${status}`
-            })
-          }).catch(e => console.warn("[BREVO NOTICE] Order status email dispatch:", e));
-        }
-      } catch (emErr) {
-        console.warn("[BREVO NOTICE] Failed fetching buyer email for status dispatch:", emErr);
-      }
+      // Brevo Automated Transactional Emails to Buyer, Seller, and Logistics Company (if applicable)
+      void notifySellerOrderUpdate({
+        orderId,
+        order: {
+          ...order,
+          status: updateData.status || status
+        },
+        targetStatus: updateData.status || status,
+        sellerDisplayName: currentUser?.displayName || order.sellerName,
+        sellerEmail: currentUser?.email || auth.currentUser?.email
+      });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `orders/${orderId}`);
     }
@@ -567,6 +530,21 @@ export default function SellerDashboard({
         type: "payout",
         isRead: false,
         createdAt: new Date().toISOString()
+      });
+
+      void triggerTemplatedEmail({
+        templateId: "seller_payout_requested",
+        recipientEmail: currentUser?.email || auth.currentUser?.email,
+        recipientUserId: auth.currentUser?.uid,
+        recipientRole: "seller",
+        variables: {
+          seller_name: currentUser?.displayName || "Campus Merchant",
+          store_name: currentUser?.businessName || currentUser?.displayName || "Your Store",
+          payout_id: `PAY-${Date.now().toString().slice(-6)}`,
+          payout_amount: `NGN ${stats.availablePayout.toLocaleString()}`,
+          bank_account: `${currentUser?.bankDetails?.bankName || "Bank"} (${currentUser?.bankDetails?.accountNumber ? `••••${String(currentUser.bankDetails.accountNumber).slice(-4)}` : "On File"})`
+        },
+        idempotencyKey: `payout_req_${auth.currentUser?.uid}_${Math.floor(Date.now() / 60000)}`
       });
 
       alert("Payout request submitted successfully!");
@@ -2126,6 +2104,21 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
         createdAt: new Date().toISOString()
       });
 
+      // Brevo Emails to Logistics Company, Buyer, and Seller
+      void notifyLogisticsBooked({
+        orderId: order.id,
+        order,
+        partner: {
+          id: partner.id,
+          companyName: partner.companyName,
+          email: partner.email,
+          phoneNumber: partner.phoneNumber
+        },
+        logisticsPrice,
+        timeline: logisticsTimeline,
+        sellerName: currentUser?.displayName || order.sellerName
+      });
+
       setShowCampusLogisticsModal(false);
       alert(`Local Campus Dispatch successfully booked with ${partner.companyName}!\nDelivery Timeline: ${logisticsTimeline}\nThey have been notified to pickup and deliver this order.`);
     } catch (err: any) {
@@ -2296,6 +2289,18 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
         deliveryPrice: Number(outsourceDeliveryFee) || 0,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
+      });
+
+      void notifyLogisticsBooked({
+        orderId: order.id,
+        order,
+        partner: {
+          id: "outsourced",
+          companyName: outsourceCourierName.trim(),
+          phoneNumber: outsourceRiderPhone?.trim()
+        },
+        logisticsPrice: feeNum,
+        sellerName: currentUser?.displayName || order.sellerName
       });
 
       setShowCampusLogisticsModal(false);
@@ -4707,6 +4712,22 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
       }
 
       await setDoc(productRef, productData, { merge: true });
+      if (!editingProduct) {
+        void triggerTemplatedEmail({
+          templateId: "seller_product_published",
+          recipientEmail: currentUser?.email || auth.currentUser?.email,
+          recipientUserId: auth.currentUser?.uid,
+          recipientRole: "seller",
+          variables: {
+            seller_name: currentUser?.displayName || "Campus Merchant",
+            store_name: productData.businessName || currentUser?.businessName || "Your Store",
+            product_name: productData.name,
+            product_price: `NGN ${Number(productData.price || 0).toLocaleString()}`,
+            stock_remaining: `${productData.stock} units`
+          },
+          idempotencyKey: `product_published_${productId}`
+        });
+      }
       setLastCreatedProduct(productData);
       setNewProductId(productId);
       setSuccessMessage("🎉 Congratulations! I have listed my product successfully.");

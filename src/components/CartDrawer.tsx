@@ -8,6 +8,7 @@ import { cn, generateSixDigitPin } from "../lib/utils";
 import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
 import { usePaystackPayment } from "../hooks/usePaystackPayment";
 import { getPaystackPublicKey, getSyncPaystackPublicKey } from "../utils/paystackConfig";
+import { notifyOrderPlaced, triggerTemplatedEmail } from "../utils/orderEmailNotifications";
 
 interface CartDrawerProps {
   isOpen: boolean;
@@ -264,6 +265,7 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
         }
 
         // If the product uses a registered logistics company, notify that company and create logistics delivery record automatically!
+        let bookedLogisticsPartner: { id?: string; name?: string; deliveryPrice?: number } | null = null;
         if (productSnap.exists()) {
           const prodData = productSnap.data();
           if (prodData.logisticsType === "registered" && prodData.logisticsCompanyId) {
@@ -312,6 +314,12 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
                 kwikTrackingUrl: "local_logistics",
                 deliveredWorkNotes: `Automated Registered Logistics: ${prodData.logisticsCompanyName || "Logistics Partner"}`
               });
+
+              bookedLogisticsPartner = {
+                id: prodData.logisticsCompanyId,
+                name: prodData.logisticsCompanyName || "Shopiversity Logistics",
+                deliveryPrice: Number(prodData.deliveryPrice) || 500
+              };
             } catch (logErr) {
               console.error("Error setting up automated logistics:", logErr);
             }
@@ -332,82 +340,20 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
           handleFirestoreError(error, OperationType.CREATE, "notifications/order");
         }
 
-        // Brevo Automated Email A: Order Confirmation to Buyer
+        // Dispatch Brevo transactional emails to Buyer (+ Escrow Receipt if paid), Seller, and booked Logistics Partner
         const buyerEmail = currentUser?.email || auth.currentUser?.email;
-        if (buyerEmail) {
-          fetch("/api/send-order-status", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              orderId,
-              recipientEmail: buyerEmail,
-              recipientName: currentUser?.displayName || "Student",
-              buyerName: currentUser?.displayName || "Student",
-              sellerName: dbSellerName,
-              productName: item.name,
-              quantity: item.quantity,
-              totalPrice: itemTotal,
-              paymentMethod,
-              deliveryType,
-              status: isPaid ? "Payment Secured & Placed" : "Order Placed",
-              statusTitle: isPaid ? "Order Placed & Payment Secured in Escrow" : "Order Placed Successfully",
-              statusMessage: isPaid
-                ? `Thank you for your order! Your payment of ₦${itemTotal.toLocaleString()} has been safely vaulted in SHOPIVERSITY Escrow. Merchant ${dbSellerName} has been notified to prepare your item.`
-                : `Thank you for your order! Your request for "${item.name}" (x${item.quantity}) has been sent to merchant ${dbSellerName}. Payment is due on delivery.`,
-              deliveryOtp,
-              idempotencyKey: `order_placed_${orderId}_buyer`
-            })
-          }).catch(e => console.warn("[BREVO NOTICE] Buyer order placement email dispatch:", e));
-        }
+        void notifyOrderPlaced({
+          orderId,
+          order: {
+            ...orderData,
+            campus: currentUser?.campus || "Campus"
+          },
+          buyerEmail,
+          sellerEmail: dbSellerEmail,
+          logisticsPartner: bookedLogisticsPartner
+        });
 
-        // Brevo Automated Email B: Official Escrow Receipt to Buyer (if paid online)
-        if (isPaid && buyerEmail) {
-          fetch("/api/send-receipt", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              orderId,
-              recipientEmail: buyerEmail,
-              recipientName: currentUser?.displayName || "Student",
-              order: {
-                uniqueOrderId,
-                productName: item.name,
-                quantity: item.quantity,
-                totalPrice: itemTotal,
-                deliveryType,
-                campus: currentUser?.campus || "Campus",
-                sellerName: dbSellerName,
-                createdAt: new Date().toISOString()
-              }
-            })
-          }).catch(e => console.warn("[BREVO NOTICE] Buyer payment receipt email dispatch:", e));
-        }
-
-        // Brevo Automated Email C: Notification to Seller
-        if (dbSellerEmail) {
-          fetch("/api/send-order-status", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              orderId,
-              recipientEmail: dbSellerEmail,
-              recipientName: dbSellerName,
-              buyerName: currentUser?.displayName || "Student Buyer",
-              sellerName: dbSellerName,
-              productName: item.name,
-              quantity: item.quantity,
-              totalPrice: itemTotal,
-              paymentMethod,
-              deliveryType,
-              status: "New Order Received",
-              statusTitle: `🎉 New Order Received for "${item.name}"`,
-              statusMessage: `Congratulations! A student (${currentUser?.displayName || "Customer"}) placed an order for ${item.name} (x${item.quantity}) totaling ₦${itemTotal.toLocaleString()}. Please open your Seller Dashboard to accept and fulfill this order.`,
-              idempotencyKey: `order_received_${orderId}_seller`
-            })
-          }).catch(e => console.warn("[BREVO NOTICE] Seller new order email dispatch:", e));
-        }
-
-        // 4. Notify seller if stock is low or finished
+        // 4. Notify seller if stock is low or finished (in-app + S-36/S-37 Brevo emails)
         if (newStock <= 0) {
           try {
             await addDoc(collection(db, "notifications"), {
@@ -421,6 +367,18 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
           } catch (error) {
             handleFirestoreError(error, OperationType.CREATE, "notifications/stock_out");
           }
+          void triggerTemplatedEmail({
+            templateId: "seller_product_out_of_stock",
+            recipientEmail: dbSellerEmail,
+            recipientUserId: item.sellerId,
+            recipientRole: "seller",
+            variables: {
+              seller_name: dbSellerName || "Campus Merchant",
+              product_name: item.name,
+              stock_remaining: "0 units"
+            },
+            idempotencyKey: `out_of_stock_${item.productId}_${orderId}`
+          });
         } else {
           // If the stock level drops to 20% or less of the initial stock, alert the seller to refill!
           const isLowStock20Percent = initialStock > 0 && newStock <= 0.2 * initialStock;
@@ -450,6 +408,20 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
             } catch (error) {
               handleFirestoreError(error, OperationType.CREATE, "notifications/stock_low");
             }
+          }
+          if (isLowStock20Percent || newStock <= 5) {
+            void triggerTemplatedEmail({
+              templateId: "seller_product_low_stock",
+              recipientEmail: dbSellerEmail,
+              recipientUserId: item.sellerId,
+              recipientRole: "seller",
+              variables: {
+                seller_name: dbSellerName || "Campus Merchant",
+                product_name: item.name,
+                stock_remaining: `${newStock} unit${newStock === 1 ? "" : "s"}`
+              },
+              idempotencyKey: `low_stock_${item.productId}_${newStock}_${orderId}`
+            });
           }
         }
       });
