@@ -42,7 +42,7 @@ import RefundPolicy from "./components/RefundPolicy";
 import CookieConsentBanner from "./components/CookieConsentBanner";
 import ReturnPolicyModal from "./components/ReturnPolicyModal";
 import Carousel from "./components/HeroCarousel";
-import { generateSmartUsername } from "./utils/accountCleanup";
+import { generateSmartUsername, cascadeDeleteUserAccount, verifyFirebaseAuthUserExists } from "./utils/accountCleanup";
 import Logo from "./components/Logo";
 import StickmanLoader from "./components/StickmanLoader";
 import ShopiversityLoader from "./components/ShopiversityLoader";
@@ -200,6 +200,8 @@ export default function App() {
   const [products, setProducts] = React.useState<Product[]>([]);
   const [sellers, setSellers] = React.useState<UserProfile[]>([]);
   const [existingUserIds, setExistingUserIds] = React.useState<Set<string>>(new Set());
+  const [usersLoaded, setUsersLoaded] = React.useState(false);
+  const purgingDeletedAuthUidRef = React.useRef<string | null>(null);
 
   const sellersMap = React.useMemo(() => {
     const map: Record<string, UserProfile> = {};
@@ -215,7 +217,7 @@ export default function App() {
 
   // Automatically detect and delete from Firebase any orphaned products created by deleted accounts
   React.useEffect(() => {
-    if (loading || existingUserIds.size === 0 || products.length === 0) return;
+    if (loading || !usersLoaded || products.length === 0) return;
 
     // Detect products whose seller does not exist in Firebase users collection
     const orphaned = products.filter(p => p.sellerId && !existingUserIds.has(p.sellerId));
@@ -237,7 +239,7 @@ export default function App() {
         body: JSON.stringify({ productIds: orphaned.map(p => p.id) })
       }).catch(() => {});
     }
-  }, [products, existingUserIds, loading]);
+  }, [products, existingUserIds, usersLoaded, loading]);
 
   // Smooth Branded Splash Preloader State
   const [isInitialSplashActive, setIsInitialSplashActive] = React.useState(true);
@@ -800,10 +802,42 @@ export default function App() {
     let unsubscribeProfile: (() => void) | null = null;
     let unsubscribeNotifs: (() => void) | null = null;
 
+    const checkAndCascadeIfAuthDeleted = async (user: any): Promise<boolean> => {
+      if (!user || !user.uid) return false;
+      const stillExistsInAuth = await verifyFirebaseAuthUserExists(user);
+      if (stillExistsInAuth) return false;
+
+      if (purgingDeletedAuthUidRef.current === user.uid) return true;
+      purgingDeletedAuthUidRef.current = user.uid;
+      console.warn(`[FIREBASE AUTH SYNC] User ${user.uid} (${user.email || "unknown"}) was deleted from Firebase Authentication. Running full website cascade delete...`);
+      try {
+        await cascadeDeleteUserAccount(user.uid, user, {
+          skipAuthDelete: true,
+          skipOrderGuards: true
+        });
+      } catch (purgeErr) {
+        console.warn("[FIREBASE AUTH SYNC] Cascade delete warning:", purgeErr);
+      } finally {
+        setCurrentUser(null);
+        setNeedsProfile(false);
+        setPendingVerificationEmail("");
+        isVerifyingNewSignupRef.current = false;
+        setIsVerifyingNewSignup(false);
+        setAuthLoading(false);
+        await signOut(auth).catch(() => {});
+        purgingDeletedAuthUidRef.current = null;
+      }
+      return true;
+    };
+
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       if (user) {
         if (!currentUserRef.current && !needsProfileRef.current && isInitialSplashActiveRef.current) {
           setAuthLoading(true);
+        }
+        const wasDeletedInAuth = await checkAndCascadeIfAuthDeleted(user);
+        if (wasDeletedInAuth) {
+          return;
         }
         unsubscribeProfile = onSnapshot(doc(db, "users", user.uid), async (docSnap) => {
           if (docSnap.exists()) {
@@ -1125,6 +1159,7 @@ export default function App() {
       const usersData = snapshot.docs.map(docSnap => ({ uid: docSnap.id, ...docSnap.data() } as UserProfile));
       const uIds = new Set(snapshot.docs.map(docSnap => docSnap.id));
       setExistingUserIds(uIds);
+      setUsersLoaded(true);
       const sellersList = usersData.filter(u => 
         (u.role === "seller" || u.businessName || u.storefrontSettings?.businessName) && 
         u.state !== "Logistics Partner"
@@ -1137,6 +1172,22 @@ export default function App() {
       console.error("Error subscribing to users for storefront search:", error);
     });
 
+    // Live Watchdog: Detect immediately when the currently signed-in account is deleted in Firebase Console -> Authentication -> Users
+    const runActiveAuthCheck = () => {
+      const activeAuthUser = auth.currentUser;
+      if (activeAuthUser) {
+        void checkAndCascadeIfAuthDeleted(activeAuthUser);
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        runActiveAuthCheck();
+      }
+    };
+    window.addEventListener("focus", runActiveAuthCheck);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    const authSyncInterval = window.setInterval(runActiveAuthCheck, 20000);
+
     const handleAccountDeleted = (e: any) => {
       const deletedUid = e.detail?.uid;
       if (!deletedUid) return;
@@ -1148,7 +1199,7 @@ export default function App() {
         next.delete(deletedUid);
         return next;
       });
-      if (currentUser?.uid === deletedUid) {
+      if (currentUserRef.current?.uid === deletedUid || auth.currentUser?.uid === deletedUid) {
         setCurrentUser(null);
         setActiveRole("buyer");
         setActiveTab("market");
@@ -1168,6 +1219,9 @@ export default function App() {
       window.removeEventListener('edit-seller-product', handleEditSellerProduct);
       window.removeEventListener('switch-tab', handleSwitchTabEvent);
       window.removeEventListener('account-deleted', handleAccountDeleted);
+      window.removeEventListener("focus", runActiveAuthCheck);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.clearInterval(authSyncInterval);
       unsubscribeAuth();
       if (unsubscribeProfile) unsubscribeProfile();
       if (unsubscribeNotifs) unsubscribeNotifs();
@@ -1388,7 +1442,14 @@ export default function App() {
     signOut(auth);
     if (typeof window !== "undefined") {
       sessionStorage.removeItem("shopiversity_chosen_role");
+      sessionStorage.removeItem("shopiversity_verifying_email");
+      sessionStorage.removeItem("shopiversity_in_signup");
+      sessionStorage.removeItem("shopiversity_google_pending");
+      sessionStorage.removeItem("shopiversity_auth_mode");
     }
+    isVerifyingNewSignupRef.current = false;
+    setIsVerifyingNewSignup(false);
+    setPendingVerificationEmail("");
     setCart([]);
     setAuthRole("buyer");
     setActiveTab("market");
@@ -1623,14 +1684,14 @@ export default function App() {
           initial={{ y: -15, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           transition={{ duration: 0.4, ease: "easeOut" }}
-          className="bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md text-zinc-800 dark:text-zinc-100 border-b border-slate-100 dark:border-zinc-800/80 sticky top-0 z-[120] shrink-0 select-none font-sans px-3 sm:px-6 h-14 flex items-center justify-between shadow-sm"
+          className="bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md text-zinc-800 dark:text-zinc-100 border-b border-slate-100 dark:border-zinc-800/80 sticky top-0 z-[120] shrink-0 select-none font-sans px-2 sm:px-6 h-14 flex items-center justify-between gap-1.5 shadow-sm"
         >
           {/* Left: App title or dynamic back button */}
-          <div className="flex items-center gap-1 sm:gap-2 min-w-0 shrink">
+          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             {viewingSellerId || viewingProduct || (activeTab !== "market" && activeTab !== "search" && activeTab !== "messages" && activeTab !== "orders" && activeTab !== "settings" && activeTab !== "dashboard") ? (
               <button 
                 onClick={handleGoBack} 
-                className="p-1.5 hover:bg-slate-100 dark:hover:bg-zinc-800/80 rounded-xl text-[#ff6b00] active:scale-90 transition-all cursor-pointer border-none shrink-0 touch-manipulation"
+                className="p-1 sm:p-1.5 hover:bg-slate-100 dark:hover:bg-zinc-800/80 rounded-xl text-[#ff6b00] active:scale-90 transition-all cursor-pointer border-none shrink-0 touch-manipulation"
                 title="Go Back"
               >
                 <ArrowLeft className="w-5 h-5" />
@@ -1645,8 +1706,9 @@ export default function App() {
               </button>
             )}
             <Logo 
+              showText={true}
               onClick={handleLogoHomeClick} 
-              className="ml-0.5 sm:ml-1 min-w-0 cursor-pointer" 
+              className="ml-0.5 sm:ml-1 shrink-0 cursor-pointer" 
             />
           </div>
 
@@ -1673,20 +1735,32 @@ export default function App() {
         )}
 
         {/* Right actions: Theme toggle, Cart / Sign Up, and Sign Out */}
-        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+        <div className="flex items-center gap-1 sm:gap-2.5 shrink-0">
           {(!currentUser || !auth.currentUser) ? (
-            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            <div className="flex items-center gap-1 sm:gap-2 shrink-0">
               <button 
                 id="header-signin-btn"
                 type="button"
                 onClick={() => {
+                  if (typeof window !== "undefined") {
+                    sessionStorage.removeItem("shopiversity_verifying_email");
+                    sessionStorage.removeItem("shopiversity_in_signup");
+                    sessionStorage.removeItem("shopiversity_google_pending");
+                    sessionStorage.setItem("shopiversity_auth_mode", "login");
+                  }
+                  if (auth.currentUser && !currentUser?.isVerified) {
+                    signOut(auth).catch(() => {});
+                  }
+                  isVerifyingNewSignupRef.current = false;
+                  setIsVerifyingNewSignup(false);
+                  setPendingVerificationEmail("");
                   setViewingProduct(null);
                   setViewingSellerId(null);
                   setAuthMode("login");
                   setActiveTab("auth");
                 }}
                 className={cn(
-                  "min-h-[34px] sm:min-h-[38px] px-2.5 sm:px-3.5 py-1.5 rounded-xl text-[11px] sm:text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 touch-manipulation select-none active:scale-95 flex items-center justify-center border",
+                  "min-h-[32px] sm:min-h-[38px] px-2 sm:px-3.5 py-1 sm:py-1.5 rounded-xl text-[11px] sm:text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 touch-manipulation select-none active:scale-95 flex items-center justify-center border",
                   (activeTab === "auth" || (isTabRestricted && authMode === "login"))
                     ? "bg-slate-900 dark:bg-white text-white dark:text-zinc-900 border-slate-900 dark:border-white shadow-sm"
                     : "bg-slate-100/90 hover:bg-slate-200/80 dark:bg-zinc-800/90 dark:hover:bg-zinc-700 text-slate-800 dark:text-zinc-100 border-slate-200/80 dark:border-zinc-700/80"
@@ -1705,12 +1779,12 @@ export default function App() {
                   setActiveTab("signup");
                 }}
                 className={cn(
-                  "min-h-[34px] sm:min-h-[38px] flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 bg-[#ff6b00] hover:bg-[#ea6200] active:scale-95 text-white rounded-xl text-[11px] sm:text-xs font-bold shadow-sm shadow-orange-500/20 transition-all cursor-pointer border-none whitespace-nowrap shrink-0 touch-manipulation select-none",
+                  "min-h-[32px] sm:min-h-[38px] flex items-center justify-center gap-1 sm:gap-1.5 px-2 sm:px-3.5 py-1 sm:py-1.5 bg-[#ff6b00] hover:bg-[#ea6200] active:scale-95 text-white rounded-xl text-[11px] sm:text-xs font-bold shadow-sm shadow-orange-500/20 transition-all cursor-pointer border-none whitespace-nowrap shrink-0 touch-manipulation select-none",
                   (activeTab === "signup" || (isTabRestricted && authMode === "signup")) && "ring-2 ring-orange-300 dark:ring-orange-500/50"
                 )}
                 title="Sign Up / Create Account"
               >
-                <UserPlus className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+                <UserPlus className="hidden min-[420px]:inline w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
                 <span>Sign Up</span>
               </button>
             </div>

@@ -12,13 +12,13 @@ export default function Logo({ className, showText = true, onClick, variant = "d
   const isWhite = variant === "white";
 
   const content = (
-    <div className={cn("flex items-center gap-1.5 sm:gap-2 select-none min-w-0", className)}>
+    <div className={cn("flex items-center gap-1.5 sm:gap-2 select-none shrink-0", className)}>
       {/* Official Shopiversity Brand Emblem */}
       <img
         src="/shopiversity-logo.png"
         alt="Shopiversity Official Logo"
         className={cn(
-          "h-[28px] w-[28px] sm:h-[38px] sm:w-[38px] object-contain shrink-0 transition-all",
+          "h-[24px] w-[24px] min-[375px]:h-[28px] min-[375px]:w-[28px] sm:h-[38px] sm:w-[38px] object-contain shrink-0 transition-all",
           isWhite && "brightness-0 invert"
         )}
         draggable={false}
@@ -26,10 +26,10 @@ export default function Logo({ className, showText = true, onClick, variant = "d
 
       {/* Text block: Shopiversity + the marketplace at your fingertips */}
       {showText && (
-        <div className="flex flex-col text-left justify-center min-w-0">
+        <div className="flex flex-col text-left justify-center shrink-0">
           <span
             className={cn(
-              "text-[15px] sm:text-2xl font-black tracking-tight font-sans transition-colors leading-none truncate",
+              "text-[14px] min-[375px]:text-[15.5px] sm:text-2xl font-black tracking-tight font-sans transition-colors leading-none whitespace-nowrap",
               isWhite ? "text-white drop-shadow-sm" : "text-[#ff6b00] dark:text-[#ff7f1a]"
             )}
           >
@@ -37,7 +37,7 @@ export default function Logo({ className, showText = true, onClick, variant = "d
           </span>
           <span
             className={cn(
-              "hidden min-[400px]:block text-[7.5px] sm:text-[10px] font-bold tracking-tight mt-0.5 font-sans lowercase leading-none truncate",
+              "hidden min-[480px]:block text-[8px] sm:text-[10px] font-bold tracking-tight mt-0.5 font-sans lowercase leading-none whitespace-nowrap",
               isWhite ? "text-white/80" : "text-[#ff6b00] dark:text-[#ff7f1a]"
             )}
           >
@@ -52,7 +52,7 @@ export default function Logo({ className, showText = true, onClick, variant = "d
     return (
       <button
         onClick={onClick}
-        className="focus:outline-none border-none bg-transparent p-0 m-0 flex items-center text-left cursor-pointer hover:opacity-90 active:scale-[0.98] transition-all"
+        className="focus:outline-none border-none bg-transparent p-0 m-0 flex items-center text-left cursor-pointer hover:opacity-90 active:scale-[0.98] transition-all shrink-0"
         type="button"
       >
         {content}

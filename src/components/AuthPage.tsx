@@ -54,7 +54,7 @@ import {
 } from "lucide-react";
 import Logo from "./Logo";
 import { cn } from "../lib/utils";
-import { generateSmartUsername } from "../utils/accountCleanup";
+import { generateSmartUsername, cascadeDeleteUserAccount, verifyFirebaseAuthUserExists } from "../utils/accountCleanup";
 import { triggerTemplatedEmail } from "../utils/orderEmailNotifications";
 import { UserProfile, Notification } from "../types";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
@@ -139,8 +139,27 @@ export default function AuthPage({
     setStep(1);
     setError("");
     setFieldErrors({});
-    if (typeof window !== "undefined") {
-      sessionStorage.setItem("shopiversity_auth_mode", loginMode ? "login" : "signup");
+    if (loginMode) {
+      setIsVerifyingEmail(false);
+      setIsVerifyingPhone(false);
+      setIsVerificationChoice(false);
+      setIsVerificationSuccess(false);
+      setEnteredOtpCode("");
+      setBrevoNotice("");
+      if (typeof window !== "undefined") {
+        sessionStorage.removeItem("shopiversity_verifying_email");
+        sessionStorage.removeItem("shopiversity_in_signup");
+        sessionStorage.removeItem("shopiversity_google_pending");
+        sessionStorage.setItem("shopiversity_auth_mode", "login");
+      }
+      if (onVerificationScreenChange) {
+        onVerificationScreenChange(false);
+      }
+      if (auth.currentUser && !currentUser?.isVerified) {
+        signOut(auth).catch(() => {});
+      }
+    } else if (typeof window !== "undefined") {
+      sessionStorage.setItem("shopiversity_auth_mode", "signup");
     }
     if (!loginMode) {
       setAgreedToTerms(true);
@@ -175,18 +194,31 @@ export default function AuthPage({
     onSecondaryAction?: () => void;
   } | null>(null);
 
-  // Synchronize mode if prop changes (never wipe verification notices/errors while verifying)
+  // Synchronize mode if prop changes (and ensure switching to login leaves verification mode cleanly)
   React.useEffect(() => {
     if (!initialNeedsProfile && initialMode) {
-      setIsLogin(initialMode === "login");
-      const currentlyVerifying =
-        isVerifyingEmail ||
-        isVerifyingPhone ||
-        (typeof window !== "undefined" && Boolean(sessionStorage.getItem("shopiversity_verifying_email")));
-      if (!currentlyVerifying) {
+      const targetIsLogin = initialMode === "login";
+      setIsLogin(targetIsLogin);
+      if (targetIsLogin && !pendingVerificationEmail && !currentUser) {
+        setIsVerifyingEmail(false);
+        setIsVerifyingPhone(false);
+        setIsVerificationChoice(false);
         setStep(1);
         setError("");
         setFieldErrors({});
+        if (onVerificationScreenChange) {
+          onVerificationScreenChange(false);
+        }
+      } else {
+        const currentlyVerifying =
+          isVerifyingEmail ||
+          isVerifyingPhone ||
+          (typeof window !== "undefined" && Boolean(sessionStorage.getItem("shopiversity_verifying_email")));
+        if (!currentlyVerifying) {
+          setStep(1);
+          setError("");
+          setFieldErrors({});
+        }
       }
     }
   }, [initialMode, initialNeedsProfile]);
@@ -486,12 +518,12 @@ export default function AuthPage({
   
   // Verification & Brevo Engine states
   const [isVerifyingEmail, setIsVerifyingEmail] = React.useState<boolean>(() => {
-    if (typeof window !== "undefined") {
+    if (pendingVerificationEmail) return true;
+    if (currentUser && (currentUser.isVerified === false || (!currentUser.isVerified && currentUser.role !== "admin"))) return true;
+    if (typeof window !== "undefined" && initialMode !== "login" && sessionStorage.getItem("shopiversity_auth_mode") !== "login") {
       if (sessionStorage.getItem("shopiversity_verifying_email")) return true;
       if (auth.currentUser && !currentUser?.isVerified && sessionStorage.getItem("shopiversity_in_signup") === "true") return true;
     }
-    if (pendingVerificationEmail) return true;
-    if (currentUser && (currentUser.isVerified === false || (!currentUser.isVerified && currentUser.role !== "admin"))) return true;
     return false;
   });
   const [isVerifyingPhone, setIsVerifyingPhone] = React.useState(false);
@@ -524,8 +556,11 @@ export default function AuthPage({
 
   // Automatically activate 6-digit verification screen and dispatch Brevo code if user is authenticated but unverified
   React.useEffect(() => {
+    if (isLogin && !pendingVerificationEmail && !currentUser) {
+      return;
+    }
     const unverifiedEmail = (pendingVerificationEmail ? pendingVerificationEmail.trim() : null) ||
-      (typeof window !== "undefined" ? sessionStorage.getItem("shopiversity_verifying_email") : null) ||
+      (typeof window !== "undefined" && sessionStorage.getItem("shopiversity_auth_mode") !== "login" ? sessionStorage.getItem("shopiversity_verifying_email") : null) ||
       (currentUser && (currentUser.isVerified === false || (!currentUser.isVerified && currentUser.role !== "admin")) ? currentUser.email : null) ||
       (!currentUser && auth.currentUser && typeof window !== "undefined" && sessionStorage.getItem("shopiversity_in_signup") === "true" ? auth.currentUser.email : null);
 
@@ -671,8 +706,10 @@ export default function AuthPage({
     try {
       if (isLogin) {
         const cleanEmail = email.trim().toLowerCase();
-        
         const rawTrimmedEmail = email.trim();
+        let matchedUserDocData: any = null;
+        let preCheckConfirmedNotFound = false;
+
         // Pre-check: Block unregistered emails and logistics accounts before sign-in
         if (cleanEmail) {
           try {
@@ -680,7 +717,7 @@ export default function AuthPage({
               getDocs(query(collection(db, "logistics_companies"), where("email", "==", cleanEmail))),
               getDocs(query(collection(db, "users"), where("email", "==", cleanEmail), where("role", "==", "logistics"))),
               getDocs(query(collection(db, "users"), where("email", "==", cleanEmail))),
-              rawTrimmedEmail !== cleanEmail ? getDocs(query(collection(db, "users"), where("email", "==", rawTrimmedEmail))) : Promise.resolve({ empty: true } as any)
+              rawTrimmedEmail !== cleanEmail ? getDocs(query(collection(db, "users"), where("email", "==", rawTrimmedEmail))) : Promise.resolve({ empty: true, docs: [] } as any)
             ]);
 
             if (!logCompanySnap.empty || !logUserSnap.empty) {
@@ -704,11 +741,28 @@ export default function AuthPage({
             }
 
             if (usersLowerSnap.empty && usersRawSnap.empty) {
-              setError(`No account is registered with "${cleanEmail}". Unregistered emails cannot sign in. Please sign up first.`);
+              preCheckConfirmedNotFound = true;
+              const notFoundMsg = `No account is registered with "${cleanEmail}". Please sign up first to create your SHOPIVERSITY account before signing in.`;
+              setError(notFoundMsg);
               setFieldErrors({ email: "This email is not registered on SHOPIVERSITY." });
+              setErrorPopup({
+                isOpen: true,
+                type: "unregistered_email",
+                title: "Email Not Registered",
+                message: notFoundMsg,
+                email: cleanEmail,
+                primaryActionLabel: "Create Account with This Email",
+                onPrimaryAction: () => {
+                  switchAuthMode(false);
+                  setEmail(cleanEmail);
+                },
+                secondaryActionLabel: "Try Another Email"
+              });
               setLoading(false);
               return;
             }
+
+            matchedUserDocData = (!usersLowerSnap.empty ? usersLowerSnap.docs[0] : usersRawSnap.docs[0]).data();
           } catch (preCheckErr) {
             console.warn("Sign-in email pre-check notice:", preCheckErr);
           }
@@ -767,6 +821,8 @@ export default function AuthPage({
               const accountRole = userData.role === "seller" ? "seller" : "buyer";
               setRole(accountRole);
               if (typeof window !== "undefined") {
+                sessionStorage.setItem("shopiversity_auth_mode", "signup");
+                sessionStorage.setItem("shopiversity_in_signup", "true");
                 sessionStorage.setItem("shopiversity_chosen_role", accountRole);
                 sessionStorage.setItem("shopiversity_verifying_email", targetEmail);
                 sessionStorage.setItem(`shopiversity_otp_sent_${targetEmail}`, String(Date.now()));
@@ -783,9 +839,13 @@ export default function AuthPage({
               return;
             }
 
-            // Successful authentication: navigate strictly to the user's role destination
+            // Successful authentication: clear any leftover verification flags and navigate strictly to the user's role destination
             const signedInRole = userData.role === "seller" ? "seller" : "buyer";
             if (typeof window !== "undefined") {
+              sessionStorage.removeItem("shopiversity_verifying_email");
+              sessionStorage.removeItem("shopiversity_in_signup");
+              sessionStorage.removeItem("shopiversity_google_pending");
+              sessionStorage.removeItem("shopiversity_auth_mode");
               sessionStorage.setItem("shopiversity_chosen_role", signedInRole);
               const deviceKey = `shopiversity_known_device_${user.uid}`;
               if (!localStorage.getItem(deviceKey)) {
@@ -805,24 +865,101 @@ export default function AuthPage({
                 });
               }
             }
+            if (onVerificationScreenChange) {
+              onVerificationScreenChange(false);
+            }
             handleGoToMarket(signedInRole);
             return;
           } else {
             // Unregistered / deleted account: do NOT allow sign-in
             await signOut(auth).catch(() => {});
-            setError(`No active account is registered with "${cleanEmail}". Unregistered emails cannot sign in. Please sign up first.`);
+            const missingProfileMsg = `No active account is registered with "${cleanEmail}". Please sign up first before signing in.`;
+            setError(missingProfileMsg);
             setFieldErrors({ email: "This email is not registered on SHOPIVERSITY." });
+            setErrorPopup({
+              isOpen: true,
+              type: "unregistered_email",
+              title: "Email Not Registered",
+              message: missingProfileMsg,
+              email: cleanEmail,
+              primaryActionLabel: "Create Account with This Email",
+              onPrimaryAction: () => {
+                switchAuthMode(false);
+                setEmail(cleanEmail);
+              },
+              secondaryActionLabel: "Try Another Email"
+            });
             setLoading(false);
             return;
           }
         } catch (err: any) {
-          if (err.code === "auth/invalid-credential" || err.code === "auth/user-not-found" || err.code === "auth/wrong-password") {
-            setFieldErrors({ auth: "Invalid email or password. Please try again." });
-          } else if (err.code === "auth/invalid-email") {
+          const authCode = String(err?.code || "");
+          if (authCode === "auth/invalid-credential" || authCode === "auth/user-not-found" || authCode === "auth/wrong-password") {
+            if (authCode === "auth/user-not-found" && cleanEmail) {
+              // Explicitly deleted from Firebase Authentication: clean up any lingering stale Firestore records
+              try {
+                const staleUsers = await getDocs(query(collection(db, "users"), where("email", "==", cleanEmail)));
+                for (const sDoc of staleUsers.docs) {
+                  await cascadeDeleteUserAccount(sDoc.id, undefined, { skipAuthDelete: true, skipOrderGuards: true });
+                }
+              } catch {}
+            }
+            if (preCheckConfirmedNotFound || authCode === "auth/user-not-found" || !matchedUserDocData) {
+              const notFoundMsg = `No account is registered with "${cleanEmail}". Please sign up first to create your SHOPIVERSITY account before signing in.`;
+              setError(notFoundMsg);
+              setFieldErrors({ email: "This email is not registered on SHOPIVERSITY." });
+              setErrorPopup({
+                isOpen: true,
+                type: "unregistered_email",
+                title: "Email Not Registered",
+                message: notFoundMsg,
+                email: cleanEmail,
+                primaryActionLabel: "Create Account with This Email",
+                onPrimaryAction: () => {
+                  switchAuthMode(false);
+                  setEmail(cleanEmail);
+                },
+                secondaryActionLabel: "Try Another Email"
+              });
+            } else if (
+              matchedUserDocData.authProvider === "google" ||
+              (matchedUserDocData.isGoogleAccount && !matchedUserDocData.hasPassword)
+            ) {
+              setErrorPopup({
+                isOpen: true,
+                type: "google_account_no_password",
+                title: "Google Sign-In Account",
+                message: `The account for "${cleanEmail}" was created with Google and does not have a password yet. Click "Continue with Google" below to sign in, or reset/set a password via Brevo.`,
+                email: cleanEmail,
+                primaryActionLabel: "Continue with Google",
+                onPrimaryAction: () => {
+                  void handleGoogleSignIn();
+                },
+                secondaryActionLabel: "Set / Reset Password via Brevo",
+                onSecondaryAction: () => {
+                  setResetEmail(cleanEmail);
+                  setResetStep("email");
+                  setResetEmailSent(false);
+                  setResetError("");
+                  setResetNotice("");
+                  setShowForgotPassword(true);
+                }
+              });
+            } else {
+              setError("Invalid email or password. Please double-check your password or tap 'Forgot your password?'.");
+              setFieldErrors({ auth: "Incorrect password. Please try again." });
+            }
+          } else if (authCode === "auth/invalid-email") {
+            setError("Please enter a valid email address.");
             setFieldErrors({ email: "Invalid email format." });
+          } else if (authCode === "auth/too-many-requests") {
+            setError("Too many sign-in attempts. Please wait a few minutes or reset your password via Brevo.");
+          } else if (authCode === "auth/user-disabled") {
+            setError("This account has been disabled. Please contact Shopiversity support.");
+          } else if (authCode === "auth/network-request-failed") {
+            setError("Network error while connecting to authentication service. Please check your internet connection.");
           } else {
-            setError(getFirestoreErrorMessage(err));
-            handleFirestoreError(err, OperationType.GET, "users/login");
+            setError(err?.message || getFirestoreErrorMessage(err) || "Failed to sign in. Please try again.");
           }
         }
       } else {
@@ -832,8 +969,9 @@ export default function AuthPage({
           sessionStorage.setItem("shopiversity_in_signup", "true");
           sessionStorage.setItem("shopiversity_chosen_role", role);
         }
-        let firebaseUser = auth.currentUser;
+        let firebaseUser = initialNeedsProfile ? auth.currentUser : null;
         const cleanEmail = email.trim().toLowerCase();
+        const rawTrimmedEmail = email.trim();
         
         if (!firebaseUser) {
           // Validate fields
@@ -871,42 +1009,44 @@ export default function AuthPage({
             errors.terms = "Please read and accept the Conditions of Use & Terms and Privacy Policy to continue.";
           }
 
-                    if (Object.keys(errors).length > 0) {
+          if (Object.keys(errors).length > 0) {
             setFieldErrors(errors);
             setLoading(false);
             return;
           }
 
-          // Check 1: Is this email already registered as a Logistics Partner?
-          try {
-            const logCompanyQ = query(collection(db, "logistics_companies"), where("email", "==", cleanEmail));
-            const logCompanySnap = await getDocs(logCompanyQ);
-            const logUserQ = query(collection(db, "users"), where("email", "==", cleanEmail), where("role", "==", "logistics"));
-            const logUserSnap = await getDocs(logUserQ);
-
-            if (!logCompanySnap.empty || !logUserSnap.empty) {
-              setErrorPopup({
-                isOpen: true,
-                type: "logistics_mismatch",
-                title: "Email Reserved for Logistics",
-                message: `The email address "${cleanEmail}" is already registered as an active Campus Logistics Partner. It cannot be used to register a Buyer or Seller account. Please access the Logistics Hub or register with a different personal email address.`,
-                email: cleanEmail,
-                primaryActionLabel: "Go to Campus Logistics Hub",
-                onPrimaryAction: () => {
-                  if (onNavigateToLogistics) {
-                    onNavigateToLogistics();
-                  } else {
-                    handleGoToMarket();
+          if (auth.currentUser) {
+            const activeAuthEmail = (auth.currentUser.email || "").trim().toLowerCase();
+            if (activeAuthEmail && activeAuthEmail === cleanEmail) {
+              const stillActive = await verifyFirebaseAuthUserExists(auth.currentUser);
+              if (stillActive) {
+                const signedInMsg = `You are already signed in with "${cleanEmail}". Please go to your dashboard or use a different email to create a new account.`;
+                setError(signedInMsg);
+                setFieldErrors({ email: "This email is already signed in." });
+                setErrorPopup({
+                  isOpen: true,
+                  type: "email_in_use",
+                  title: "Email Already Signed In",
+                  message: signedInMsg,
+                  email: cleanEmail,
+                  primaryActionLabel: "Switch to Sign In",
+                  onPrimaryAction: () => {
+                    switchAuthMode(true);
+                    setEmail(cleanEmail);
                   }
-                }
+                });
+                setLoading(false);
+                return;
+              }
+              // Previously signed-in account was deleted from Firebase Console -> Authentication -> Users: purge stale website data before re-registering
+              await cascadeDeleteUserAccount(auth.currentUser.uid, auth.currentUser, {
+                skipAuthDelete: true,
+                skipOrderGuards: true,
+                skipEmail: true
               });
-              setLoading(false);
-              return;
             }
-
-            // Check 2: Pre-check logistics conflict only (do not block user signup prematurely)
-          } catch (preCheckErr) {
-            console.warn("Signup email pre-check notice:", preCheckErr);
+            // Clear any previous unrelated auth session before creating the new user
+            await signOut(auth).catch(() => {});
           }
         }
 
@@ -919,19 +1059,43 @@ export default function AuthPage({
 
           } catch (createErr: any) {
             if (createErr.code === "auth/email-already-in-use" || createErr.message?.includes("email-already-in-use")) {
-              // Check if account was deleted from Firebase Firestore and lingering in Auth
-              const existingUserQ = query(collection(db, "users"), where("email", "==", cleanEmail));
-              const existingUserSnap = await getDocs(existingUserQ);
+              // Active Firebase Auth record exists for this email — inspect Firestore for Logistics or Buyer/Seller profile
+              const [logCompanySnap, logUserSnap, existingUsersLower, existingUsersRaw] = await Promise.all([
+                getDocs(query(collection(db, "logistics_companies"), where("email", "==", cleanEmail))).catch(() => ({ empty: true, docs: [] } as any)),
+                getDocs(query(collection(db, "users"), where("email", "==", cleanEmail), where("role", "==", "logistics"))).catch(() => ({ empty: true, docs: [] } as any)),
+                getDocs(query(collection(db, "users"), where("email", "==", cleanEmail))).catch(() => ({ empty: true, docs: [] } as any)),
+                rawTrimmedEmail !== cleanEmail ? getDocs(query(collection(db, "users"), where("email", "==", rawTrimmedEmail))).catch(() => ({ empty: true, docs: [] } as any)) : Promise.resolve({ empty: true, docs: [] } as any)
+              ]);
 
-              if (existingUserSnap.empty) {
-                // The profile document is MISSING in Firestore, meaning this account was deleted from Firebase or website!
-                // The email can now be registered again for ANY role chosen for signup (buyer or seller)!
+              if (!logCompanySnap.empty || !logUserSnap.empty) {
+                setError("This email address is registered as a Campus Logistics Partner.");
+                setFieldErrors({ email: "This email is reserved for Logistics." });
+                setErrorPopup({
+                  isOpen: true,
+                  type: "logistics_mismatch",
+                  title: "Email Reserved for Logistics",
+                  message: `The email address "${cleanEmail}" is already registered as an active Campus Logistics Partner. It cannot be used to register a Buyer or Seller account. Please access the Logistics Hub or register with a different personal email address.`,
+                  email: cleanEmail,
+                  primaryActionLabel: "Go to Campus Logistics Hub",
+                  onPrimaryAction: () => {
+                    if (onNavigateToLogistics) {
+                      onNavigateToLogistics();
+                    } else {
+                      handleGoToMarket();
+                    }
+                  }
+                });
+                setLoading(false);
+                return;
+              }
+
+              if (existingUsersLower.empty && existingUsersRaw.empty) {
+                // The profile document is MISSING in Firestore, meaning this account was deleted from Firestore while lingering in Auth.
                 let authenticatedUser: any = null;
                 try {
                   const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
                   authenticatedUser = cred.user;
                 } catch (pwErr) {
-                  // Password didn't match the old auth record, attempt to purge lingering auth record via server
                   try {
                     const purgeRes = await fetch("/api/account/purge-orphaned-auth", {
                       method: "POST",
@@ -954,7 +1118,6 @@ export default function AuthPage({
                   await updateProfile(firebaseUser, { displayName: initialDisplayName });
                   console.log(`[AUTH RE-REGISTRATION] Successfully re-registered deleted account ${cleanEmail} for role: ${role}`);
                 } else {
-                  // If password didn't match and server-side delete didn't run, prompt user to enter their account password to complete registration with their new role, or send a reset code via Brevo
                   setErrorPopup({
                     isOpen: true,
                     type: "profile_missing",
@@ -980,7 +1143,7 @@ export default function AuthPage({
                   return;
                 }
               } else {
-                // Active profile document exists in Firestore as well. Genuine existing account.
+                // Genuine active profile exists in both Firebase Auth and Firestore
                 setError("This email address is already in use on SHOPIVERSITY. Please switch to Sign In or reset your password.");
                 setFieldErrors({ email: "This email address is already registered." });
                 setErrorPopup({
@@ -992,6 +1155,7 @@ export default function AuthPage({
                   primaryActionLabel: "Switch to Sign In",
                   onPrimaryAction: () => {
                     switchAuthMode(true);
+                    setEmail(cleanEmail);
                   },
                   secondaryActionLabel: "Reset Password via Brevo",
                   onSecondaryAction: () => {
@@ -1013,13 +1177,25 @@ export default function AuthPage({
           }
         }
 
-        // Clean up any stale or orphaned documents matching this email with a different UID
+        // Clean up any stale or orphaned documents (plus their products/listings/logistics) matching this email with a different UID (from an account deleted in Firebase Console -> Auth)
         try {
-          const staleDocs = await getDocs(query(collection(db, "users"), where("email", "==", cleanEmail)));
-          for (const sDoc of staleDocs.docs) {
-            if (sDoc.id !== firebaseUser.uid) {
-              await deleteDoc(sDoc.ref).catch(() => {});
+          const [staleUsersLower, staleUsersRaw, staleLogistics] = await Promise.all([
+            getDocs(query(collection(db, "users"), where("email", "==", cleanEmail))).catch(() => ({ docs: [] } as any)),
+            rawTrimmedEmail !== cleanEmail ? getDocs(query(collection(db, "users"), where("email", "==", rawTrimmedEmail))).catch(() => ({ docs: [] } as any)) : Promise.resolve({ docs: [] } as any),
+            getDocs(query(collection(db, "logistics_companies"), where("email", "==", cleanEmail))).catch(() => ({ docs: [] } as any))
+          ]);
+          const staleUidSet = new Set<string>();
+          for (const d of [...staleUsersLower.docs, ...staleUsersRaw.docs, ...staleLogistics.docs]) {
+            if (d.id && d.id !== firebaseUser.uid) {
+              staleUidSet.add(d.id);
             }
+          }
+          for (const staleUid of staleUidSet) {
+            await cascadeDeleteUserAccount(staleUid, undefined, {
+              skipAuthDelete: true,
+              skipOrderGuards: true,
+              skipEmail: true
+            });
           }
         } catch (cleanupErr) {
           console.warn("Stale docs cleanup notice:", cleanupErr);
@@ -1137,8 +1313,24 @@ export default function AuthPage({
         return;
       }
     } catch (err: any) {
-      setError(getFirestoreErrorMessage(err));
-      handleFirestoreError(err, isLogin ? OperationType.GET : OperationType.WRITE, `users/${auth.currentUser?.uid || 'new-user'}`);
+      const code = String(err?.code || "");
+      const msg = String(err?.message || "");
+      if (code === "permission-denied" || msg.includes("Missing or insufficient permissions")) {
+        setError(getFirestoreErrorMessage(err));
+        handleFirestoreError(err, isLogin ? OperationType.GET : OperationType.WRITE, `users/${auth.currentUser?.uid || 'new-user'}`);
+      } else if (code === "auth/weak-password") {
+        setError("Password is too weak. Please include uppercase, lowercase, a number, and a special character.");
+        setFieldErrors(prev => ({ ...prev, password: "Password is too weak." }));
+      } else if (code === "auth/invalid-email") {
+        setError("Please enter a valid email address.");
+        setFieldErrors(prev => ({ ...prev, email: "Invalid email format." }));
+      } else if (code === "auth/network-request-failed") {
+        setError("Network error connecting to authentication service. Please check your internet connection and try again.");
+      } else if (code === "auth/too-many-requests") {
+        setError("Too many requests. Please wait a few minutes and try again.");
+      } else {
+        setError(msg || getFirestoreErrorMessage(err) || "Authentication failed. Please try again.");
+      }
     } finally {
       setLoading(false);
     }
@@ -1725,10 +1917,23 @@ export default function AuthPage({
         userDocExists = true;
         userDocData = userDoc.data();
       } else if (cleanGoogleEmail) {
-        const emailSnap = await getDocs(query(collection(db, "users"), where("email", "==", cleanGoogleEmail)));
-        if (!emailSnap.empty) {
-          userDocExists = true;
-          userDocData = emailSnap.docs[0].data();
+        // Any docs matching this email with a different UID came from an account deleted in Firebase Authentication: purge them cleanly
+        const [emailSnap, staleLogSnap] = await Promise.all([
+          getDocs(query(collection(db, "users"), where("email", "==", cleanGoogleEmail))).catch(() => ({ docs: [] } as any)),
+          getDocs(query(collection(db, "logistics_companies"), where("email", "==", cleanGoogleEmail))).catch(() => ({ docs: [] } as any))
+        ]);
+        const staleGoogleUids = new Set<string>();
+        for (const d of [...emailSnap.docs, ...staleLogSnap.docs]) {
+          if (d.id && d.id !== user.uid) {
+            staleGoogleUids.add(d.id);
+          }
+        }
+        for (const staleUid of staleGoogleUids) {
+          await cascadeDeleteUserAccount(staleUid, undefined, {
+            skipAuthDelete: true,
+            skipOrderGuards: true,
+            skipEmail: true
+          });
         }
       }
     } catch (e) {
@@ -1737,15 +1942,7 @@ export default function AuthPage({
 
     try {
       const logisticsCompanyDoc = await getDoc(doc(db, "logistics_companies", user.uid));
-      if (!logisticsCompanyDoc.exists() && cleanGoogleEmail) {
-        const logCompanyQ = query(collection(db, "logistics_companies"), where("email", "==", cleanGoogleEmail));
-        const logCompanySnap = await getDocs(logCompanyQ);
-        const logUserQ = query(collection(db, "users"), where("email", "==", cleanGoogleEmail), where("role", "==", "logistics"));
-        const logUserSnap = await getDocs(logUserQ);
-        if (!logCompanySnap.empty || !logUserSnap.empty) {
-          isLogisticsEmail = true;
-        }
-      } else if (logisticsCompanyDoc.exists()) {
+      if (logisticsCompanyDoc.exists()) {
         isLogisticsEmail = true;
       }
     } catch (e) {
@@ -1994,7 +2191,38 @@ export default function AuthPage({
         return;
       }
 
-      // Existing verified user logged in via Google: proceed directly to role dashboard
+      // Existing verified user logged in via Google: if explicitly in Sign Up mode, warn via popup
+      if (!isInLoginMode && cleanGoogleEmail) {
+        const targetRole = profile.role === "seller" ? "seller" : "buyer";
+        setErrorPopup({
+          isOpen: true,
+          type: "email_in_use",
+          title: "Email Already Registered",
+          message: `The Google email "${cleanGoogleEmail}" is already registered on SHOPIVERSITY. You cannot create a duplicate account with this email. Would you like to sign in to your existing account?`,
+          email: cleanGoogleEmail,
+          primaryActionLabel: "Sign In to Existing Account",
+          onPrimaryAction: () => {
+            sessionStorage.removeItem("shopiversity_in_signup");
+            sessionStorage.removeItem("shopiversity_google_pending");
+            sessionStorage.removeItem("shopiversity_auth_mode");
+            sessionStorage.setItem("shopiversity_chosen_role", targetRole);
+            if (setActiveTab) {
+              setActiveTab(targetRole === "seller" ? "dashboard" : "market");
+            }
+            handleGoToMarket(targetRole);
+          },
+          secondaryActionLabel: "Use Different Email",
+          onSecondaryAction: async () => {
+            sessionStorage.removeItem("shopiversity_in_signup");
+            sessionStorage.removeItem("shopiversity_google_pending");
+            await signOut(auth).catch(() => {});
+          }
+        });
+        setError(`The email "${cleanGoogleEmail}" is already registered. Please sign in or use another email.`);
+        setLoading(false);
+        return;
+      }
+
       sessionStorage.removeItem("shopiversity_in_signup");
       sessionStorage.removeItem("shopiversity_google_pending");
       sessionStorage.removeItem("shopiversity_auth_mode");
@@ -2765,13 +2993,13 @@ export default function AuthPage({
                     "p-3.5 border rounded-xl text-xs leading-relaxed font-semibold text-left transition-all",
                     error.toLowerCase().includes("verified") || error.toLowerCase().includes("resent") || error.toLowerCase().includes("dispatched")
                       ? "bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-300" 
-                      : "bg-amber-50 border-amber-200 text-amber-900 dark:bg-amber-950/40 dark:border-amber-800 dark:text-amber-300"
+                      : "bg-red-50 border-red-200 text-red-700 dark:bg-red-950/40 dark:border-red-800 dark:text-red-300"
                   )}>
                     <p className="flex items-start gap-2">
                       {error.toLowerCase().includes("verified") ? (
                         <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
                       ) : (
-                        <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <XCircle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
                       )}
                       <span>{error}</span>
                     </p>

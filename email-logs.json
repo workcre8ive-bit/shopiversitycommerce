@@ -1,5 +1,37 @@
 [
   {
+    "id": "ELG_1794821082350_c3d7b2",
+    "templateId": "buyer_email_verification",
+    "templateCode": "B-02",
+    "templateName": "Buyer Email Verification",
+    "recipientCategory": "buyer",
+    "classification": "transactional",
+    "recipientEmail": "tommzypolaris@gmail.com",
+    "subject": "665619 is your SHOPIVERSITY Verification Code",
+    "triggerEvent": "auth.email_verification_requested",
+    "status": "failed",
+    "provider": "brevo",
+    "retryCount": 0,
+    "error": "Brevo blocked this server's IP address (525 Unauthorized IP). In your Brevo dashboard, go to Profile > Security > Authorized IPs and turn OFF / disable Authorized IPs (or add a Brevo REST API v3 key xkeysib-... in BREVO_API_KEY with IP restrictions disabled).",
+    "createdAt": "2026-11-16T09:24:42.350Z"
+  },
+  {
+    "id": "ELG_1794821076925_6db597",
+    "templateId": "buyer_email_verification",
+    "templateCode": "B-02",
+    "templateName": "Buyer Email Verification",
+    "recipientCategory": "buyer",
+    "classification": "transactional",
+    "recipientEmail": "tommzypolaris@gmail.com",
+    "subject": "577419 is your SHOPIVERSITY Verification Code",
+    "triggerEvent": "auth.email_verification_requested",
+    "status": "failed",
+    "provider": "brevo",
+    "retryCount": 0,
+    "error": "Brevo blocked this server's IP address (525 Unauthorized IP). In your Brevo dashboard, go to Profile > Security > Authorized IPs and turn OFF / disable Authorized IPs (or add a Brevo REST API v3 key xkeysib-... in BREVO_API_KEY with IP restrictions disabled).",
+    "createdAt": "2026-11-16T09:24:36.925Z"
+  },
+  {
     "id": "ELG_1794733835779_f9db4a",
     "templateId": "buyer_special_promotions",
     "templateCode": "B-26",

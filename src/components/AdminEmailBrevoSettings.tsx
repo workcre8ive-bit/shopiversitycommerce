@@ -52,6 +52,8 @@ export default function AdminEmailBrevoSettings() {
     needsSmtpUser?: boolean;
     isSmtpKeyOnly?: boolean;
     isConsumerGmailSender?: boolean;
+    lastError?: string | null;
+    lastErrorAt?: string | null;
     provider: string;
     activeFallback: boolean;
   } | null>(null);
@@ -447,6 +449,25 @@ export default function AdminEmailBrevoSettings() {
           </p>
         </div>
       </div>
+
+      {/* Live Brevo Delivery Error Diagnostic Alert */}
+      {statusData?.lastError && (
+        <div className="p-4 sm:p-5 rounded-2xl bg-red-50 dark:bg-red-950/40 border-2 border-red-300 dark:border-red-800 flex items-start gap-3 text-left">
+          <AlertCircle className="w-5 h-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+          <div className="space-y-1.5 text-xs text-red-900 dark:text-red-200 leading-relaxed flex-1">
+            <p className="font-extrabold">
+              Recent Brevo Delivery Failure Detected
+              {statusData.lastErrorAt ? ` (${new Date(statusData.lastErrorAt).toLocaleString()})` : ""}
+            </p>
+            <p className="font-semibold">{statusData.lastError}</p>
+            {statusData.lastError.includes("525") && (
+              <p>
+                Cloud servers rotate IP addresses when restarted. Turn OFF <strong>Brevo &rarr; Profile &rarr; Security &rarr; Authorized IPs</strong> so new server IPs are not rejected, then send a Test Email below.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* SMTP Relay vs REST API Delivery Advisory */}
       {(statusData?.isSmtpKeyOnly || statusData?.keyType === "Brevo SMTP Key") && (

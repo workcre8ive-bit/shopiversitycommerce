@@ -77,7 +77,7 @@ import {
   Trash2,
   AlertTriangle
 } from "lucide-react";
-import { cascadeDeleteUserAccount } from "../utils/accountCleanup";
+import { cascadeDeleteUserAccount, verifyFirebaseAuthUserExists } from "../utils/accountCleanup";
 import { motion, AnimatePresence } from "motion/react";
 import { NIGERIAN_CAMPUSES } from "../constants/campuses";
 import DashboardSlideshow from "./DashboardSlideshow";
@@ -1192,7 +1192,21 @@ export default function LogisticsHub({
           rawTrimmed !== cleanEmail ? getDocs(query(collection(db, "logistics_companies"), where("email", "==", rawTrimmed))) : Promise.resolve({ empty: true } as any)
         ]);
         if (lLower.empty && lRaw.empty) {
-          setError(`No logistics account is registered with "${cleanEmail}". Unregistered emails cannot sign in. Please register your company first.`);
+          const msg = `No logistics account is registered with "${cleanEmail}". Unregistered emails cannot sign in. Please register your company first.`;
+          setError(msg);
+          setErrorPopup({
+            isOpen: true,
+            type: "unregistered_email",
+            title: "Logistics Email Not Registered",
+            message: msg,
+            email: cleanEmail,
+            primaryActionLabel: "Register Logistics Company",
+            onPrimaryAction: () => {
+              setView("signup");
+              setEmail(cleanEmail);
+            },
+            secondaryActionLabel: "Try Another Email"
+          });
           setLoading(false);
           return;
         }
@@ -1281,6 +1295,33 @@ export default function LogisticsHub({
     } catch (err: any) {
       console.error("Logistics login error:", err);
       if (err.code === "auth/invalid-credential" || err.code === "auth/user-not-found" || err.code === "auth/wrong-password") {
+        if (err.code === "auth/user-not-found") {
+          const cleanLoginEmail = loginEmail.trim().toLowerCase();
+          try {
+            const [staleComp, staleUser] = await Promise.all([
+              getDocs(query(collection(db, "logistics_companies"), where("email", "==", cleanLoginEmail))).catch(() => ({ docs: [] } as any)),
+              getDocs(query(collection(db, "users"), where("email", "==", cleanLoginEmail))).catch(() => ({ docs: [] } as any))
+            ]);
+            const staleIds = new Set<string>([...staleComp.docs, ...staleUser.docs].map((d: any) => d.id).filter(Boolean));
+            for (const sid of staleIds) {
+              await cascadeDeleteUserAccount(sid, undefined, { skipAuthDelete: true, skipOrderGuards: true });
+            }
+          } catch {}
+          setErrorPopup({
+            isOpen: true,
+            type: "unregistered_email",
+            title: "Logistics Email Not Registered",
+            message: `No logistics company account exists for "${cleanLoginEmail}". Please register your logistics fleet first before logging in.`,
+            email: cleanLoginEmail,
+            primaryActionLabel: "Register Logistics Company",
+            onPrimaryAction: () => {
+              setErrorPopup(null);
+              setView("signup");
+              setEmail(cleanLoginEmail);
+            },
+            secondaryActionLabel: "Try Another Email"
+          });
+        }
         setError("Invalid company email or password. Please verify your credentials or reset your password.");
       } else if (err.code === "auth/invalid-email") {
         setError("Please enter a valid email address format.");
@@ -1317,25 +1358,31 @@ export default function LogisticsHub({
     const cleanEmail = email.trim().toLowerCase();
     setLoading(true);
     try {
-      const logCompRef = collection(db, "logistics_companies");
-      const logCompQ = query(logCompRef, where("email", "==", cleanEmail));
-      const logCompSnap = await getDocs(logCompQ);
-      if (!logCompSnap.empty) {
-        setErrorPopup({
-          isOpen: true,
-          type: "email_in_use",
-          title: "Logistics Company Already Exists",
-          message: `A logistics fleet account with the email "${cleanEmail}" is already registered. Please log in using your company credentials.`,
-          email: cleanEmail,
-          primaryActionLabel: "Switch to Logistics Login",
-          onPrimaryAction: () => {
-            setErrorPopup(null);
-            setView("login");
-            setLoginEmail(cleanEmail);
-          }
+      if (auth.currentUser && (auth.currentUser.email || "").trim().toLowerCase() === cleanEmail) {
+        const stillActive = await verifyFirebaseAuthUserExists(auth.currentUser);
+        if (stillActive) {
+          setErrorPopup({
+            isOpen: true,
+            type: "email_in_use",
+            title: "Logistics Company Already Exists",
+            message: `You are already signed in with "${cleanEmail}". Please access your Logistics Dashboard or use a different email address.`,
+            email: cleanEmail,
+            primaryActionLabel: "Switch to Logistics Login",
+            onPrimaryAction: () => {
+              setErrorPopup(null);
+              setView("login");
+              setLoginEmail(cleanEmail);
+            }
+          });
+          setLoading(false);
+          return;
+        }
+        await cascadeDeleteUserAccount(auth.currentUser.uid, auth.currentUser, {
+          skipAuthDelete: true,
+          skipOrderGuards: true,
+          skipEmail: true
         });
-        setLoading(false);
-        return;
+        await signOut(auth).catch(() => {});
       }
 
       // Dispatch 6-digit verification code strictly via Brevo (generated on server, never revealed in UI)
@@ -1519,6 +1566,29 @@ export default function LogisticsHub({
       if (!user) {
         const userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
         user = userCredential.user;
+      }
+
+      // Purge any stale Firestore records left behind from a previously deleted Firebase Auth user with this email
+      try {
+        const [staleComp, staleUser] = await Promise.all([
+          getDocs(query(collection(db, "logistics_companies"), where("email", "==", cleanEmail))).catch(() => ({ docs: [] } as any)),
+          getDocs(query(collection(db, "users"), where("email", "==", cleanEmail))).catch(() => ({ docs: [] } as any))
+        ]);
+        const staleUidSet = new Set<string>();
+        for (const d of [...staleComp.docs, ...staleUser.docs]) {
+          if (d.id && d.id !== user.uid) {
+            staleUidSet.add(d.id);
+          }
+        }
+        for (const staleUid of staleUidSet) {
+          await cascadeDeleteUserAccount(staleUid, undefined, {
+            skipAuthDelete: true,
+            skipOrderGuards: true,
+            skipEmail: true
+          });
+        }
+      } catch (staleCleanErr) {
+        console.warn("Logistics stale cleanup notice:", staleCleanErr);
       }
 
       let existingStoredProfile: Partial<LogisticsCompany> | null = null;

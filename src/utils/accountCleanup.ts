@@ -8,8 +8,9 @@ import {
   doc,
   setDoc 
 } from "firebase/firestore";
-import { deleteUser, signOut } from "firebase/auth";
+import { deleteUser, signOut, User as FirebaseUser } from "firebase/auth";
 import { auth, db } from "../firebase";
+import firebaseConfig from "../../firebase-applet-config.json";
 import { Product } from "../types";
 import {
   checkCanDeleteSellerAccount,
@@ -18,6 +19,94 @@ import {
   releasePendingLogisticsJobsBeforeDelete
 } from "./deletionGuards";
 import { triggerTemplatedEmail } from "./orderEmailNotifications";
+
+export interface CascadeDeleteOptions {
+  skipOrderGuards?: boolean;
+  skipAuthDelete?: boolean;
+  skipEmail?: boolean;
+  skipWindowEvent?: boolean;
+}
+
+/**
+ * Verifies against Google Identity Toolkit whether a signed-in Firebase Auth user
+ * still exists in Firebase Authentication (detects accounts deleted directly in
+ * Firebase Console -> Authentication -> Users even when a cached JWT is still active).
+ * Returns false ONLY when Firebase confirms the Auth user no longer exists or is disabled.
+ */
+export async function verifyFirebaseAuthUserExists(user: FirebaseUser | null | undefined): Promise<boolean> {
+  if (!user || !user.uid) return false;
+  try {
+    let idToken: string | null = null;
+    try {
+      idToken = await user.getIdToken(false);
+    } catch (tokErr: any) {
+      const code = String(tokErr?.code || "");
+      if (
+        code === "auth/user-not-found" ||
+        code === "auth/user-disabled" ||
+        code === "auth/invalid-user-token" ||
+        code === "auth/user-token-expired"
+      ) {
+        return false;
+      }
+      return true;
+    }
+
+    if (!idToken) return true;
+
+    const apiKey = firebaseConfig.apiKey;
+    if (!apiKey) return true;
+
+    const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(apiKey)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idToken })
+    });
+
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      if (data && Array.isArray(data.users)) {
+        if (data.users.length === 0) return false;
+        const found = data.users.find((u: any) => u?.localId === user.uid);
+        if (found?.disabled) return false;
+        return Boolean(found);
+      }
+      return true;
+    }
+
+    const errData = await res.json().catch(() => null);
+    const errMsg = String(errData?.error?.message || "").toUpperCase();
+    if (
+      errMsg.includes("USER_NOT_FOUND") ||
+      errMsg.includes("USER_DISABLED") ||
+      errMsg.includes("INVALID_ID_TOKEN")
+    ) {
+      return false;
+    }
+
+    if (errMsg.includes("TOKEN_EXPIRED")) {
+      try {
+        await user.getIdToken(true);
+        return true;
+      } catch (refreshErr: any) {
+        const code = String(refreshErr?.code || "");
+        if (
+          code === "auth/user-not-found" ||
+          code === "auth/user-disabled" ||
+          code === "auth/invalid-user-token" ||
+          code === "auth/user-token-expired"
+        ) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  } catch {
+    // Never falsely purge an account on transient offline/network failures
+    return true;
+  }
+}
 
 /**
  * Generates a clean 6-character username using part of the person's name
@@ -66,7 +155,8 @@ export function generateSmartUsername(name?: string): string {
  */
 export async function cascadeDeleteUserAccount(
   uid: string,
-  authUser?: any
+  authUser?: any,
+  options: CascadeDeleteOptions = {}
 ): Promise<{ success: boolean; error?: string }> {
   if (!uid) {
     return { success: false, error: "Invalid user ID" };
@@ -75,19 +165,29 @@ export async function cascadeDeleteUserAccount(
   console.log(`[CASCADE DELETE] Checking deletion eligibility for account ${uid}...`);
 
   try {
-    // 0A. Strictly enforce order & delivery guards BEFORE deleting any data:
+    // 0A. Strictly enforce order & delivery guards BEFORE deleting any data (unless syncing an already-deleted Firebase Auth account):
     // Sellers cannot delete accounts while accepted or in-process orders (or logistics-accepted deliveries) exist.
     // Logistics companies cannot delete accounts while accepted or in-process deliveries exist.
-    const [sellerGuard, logisticsGuard] = await Promise.all([
-      checkCanDeleteSellerAccount(uid),
-      checkCanDeleteLogisticsAccount(uid)
-    ]);
+    let sellerGuard: { allowed: boolean; reason?: string; pendingUnacceptedOrders: any[] } = {
+      allowed: true,
+      pendingUnacceptedOrders: []
+    };
+    let logisticsGuard: { allowed: boolean; reason?: string; pendingDeliveries: any[] } = {
+      allowed: true,
+      pendingDeliveries: []
+    };
+    if (!options.skipOrderGuards) {
+      [sellerGuard, logisticsGuard] = await Promise.all([
+        checkCanDeleteSellerAccount(uid),
+        checkCanDeleteLogisticsAccount(uid)
+      ]);
 
-    if (!sellerGuard.allowed) {
-      return { success: false, error: sellerGuard.reason };
-    }
-    if (!logisticsGuard.allowed) {
-      return { success: false, error: logisticsGuard.reason };
+      if (!sellerGuard.allowed) {
+        return { success: false, error: sellerGuard.reason };
+      }
+      if (!logisticsGuard.allowed) {
+        return { success: false, error: logisticsGuard.reason };
+      }
     }
 
     // 0B. Snapshot profile & logistics info BEFORE deletion so confirmation email always knows recipient details
@@ -282,9 +382,9 @@ export async function cascadeDeleteUserAccount(
       await setDoc(logCompanyDoc, { isActive: false, isDeleted: true, status: "deleted" }, { merge: true }).catch(() => {});
       await deleteDoc(logCompanyDoc).catch(() => {});
 
-      if (authUser?.email) {
-        const cleanEmail = authUser.email.toLowerCase().trim();
-        const emailSnap = await getDocs(query(collection(db, "logistics_companies"), where("email", "==", cleanEmail))).catch(() => ({ docs: [] }));
+      const targetLogisticsEmail = (authUser?.email || capturedEmail || "").toLowerCase().trim();
+      if (targetLogisticsEmail) {
+        const emailSnap = await getDocs(query(collection(db, "logistics_companies"), where("email", "==", targetLogisticsEmail))).catch(() => ({ docs: [] }));
         for (const cDoc of emailSnap.docs) {
           await setDoc(cDoc.ref, { isActive: false, isDeleted: true, status: "deleted" }, { merge: true }).catch(() => {});
           await deleteDoc(cDoc.ref).catch(() => {});
@@ -363,7 +463,7 @@ export async function cascadeDeleteUserAccount(
     }
 
     // 15B. Dispatch Account Deletion Confirmation Email(s) via Brevo BEFORE clearing auth/session
-    if (capturedEmail) {
+    if (capturedEmail && !options.skipEmail) {
       const deletedTimestamp = new Date().toUTCString();
       const emailTasks: Promise<any>[] = [];
 
@@ -421,14 +521,18 @@ export async function cascadeDeleteUserAccount(
       await Promise.allSettled(emailTasks);
     }
 
-    // 16. Clear Local Storage and Session Storage artifacts
-    try {
-      localStorage.removeItem("shopiversity_cart");
-      localStorage.removeItem(`shopiversity_bank_details_${uid}`);
-      localStorage.removeItem("shopiversity_recent_searches");
-      sessionStorage.clear();
-    } catch (storageErr) {
-      console.warn("[CASCADE DELETE] Storage cleanup notice:", storageErr);
+    const isDeletingCurrentBrowserUser = Boolean(auth.currentUser?.uid === uid || authUser?.uid === uid);
+
+    // 16. Clear Local Storage and Session Storage artifacts when deleting the active browser user
+    if (isDeletingCurrentBrowserUser) {
+      try {
+        localStorage.removeItem("shopiversity_cart");
+        localStorage.removeItem(`shopiversity_bank_details_${uid}`);
+        localStorage.removeItem("shopiversity_recent_searches");
+        sessionStorage.clear();
+      } catch (storageErr) {
+        console.warn("[CASCADE DELETE] Storage cleanup notice:", storageErr);
+      }
     }
 
     // 17. Call Server-Side Cascade Purge Endpoint (background safety net)
@@ -443,16 +547,18 @@ export async function cascadeDeleteUserAccount(
           storeName: capturedStoreName,
           companyName: capturedCompanyName,
           role: capturedRole,
-          deletedProductsCount
+          deletedProductsCount,
+          skipOrderGuards: Boolean(options.skipOrderGuards),
+          skipEmail: Boolean(options.skipEmail)
         })
       }).catch(() => {});
     } catch (apiErr) {
       console.warn("[CASCADE DELETE] Server-side cascade notice:", apiErr);
     }
 
-    // 18. Delete from Firebase Authentication (or sign out)
+    // 18. Delete from Firebase Authentication (unless already deleted from Firebase Console) & sign out if active
     const targetAuthUser = authUser || (auth.currentUser?.uid === uid ? auth.currentUser : null);
-    if (targetAuthUser) {
+    if (!options.skipAuthDelete && targetAuthUser) {
       try {
         await deleteUser(targetAuthUser);
         console.log(`[CASCADE DELETE] Firebase Auth user deleted successfully: ${uid}`);
@@ -467,7 +573,7 @@ export async function cascadeDeleteUserAccount(
     }
 
     // 19. Dispatch global event to instantly update website UI (remove products, sellers, user state)
-    if (typeof window !== "undefined") {
+    if (typeof window !== "undefined" && !options.skipWindowEvent) {
       window.dispatchEvent(new CustomEvent("account-deleted", { detail: { uid } }));
     }
 
@@ -486,9 +592,10 @@ export async function cascadeDeleteUserAccount(
  */
 export async function cleanupOrphanedProducts(
   allProducts: Product[],
-  existingUserIds: Set<string>
+  existingUserIds: Set<string>,
+  forceCheck = false
 ): Promise<string[]> {
-  if (!allProducts || allProducts.length === 0 || existingUserIds.size === 0) {
+  if (!allProducts || allProducts.length === 0 || (!forceCheck && existingUserIds.size === 0)) {
     return [];
   }
 

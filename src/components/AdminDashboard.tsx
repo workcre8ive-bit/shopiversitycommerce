@@ -54,6 +54,7 @@ import AdminAnalyticsCharts from "./AdminAnalyticsCharts";
 import AdminSecurityRenewalModal from "./AdminSecurityRenewalModal";
 import AdminEmailBrevoSettings from "./AdminEmailBrevoSettings";
 import { triggerTemplatedEmail } from "../utils/orderEmailNotifications";
+import { cascadeDeleteUserAccount } from "../utils/accountCleanup";
 
 interface AdminDashboardProps {
   currentUser: any;
@@ -86,6 +87,8 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [actionSuccessMessage, setActionSuccessMessage] = useState<string | null>(null);
   const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
+  const [isSyncingAuth, setIsSyncingAuth] = useState(false);
+  const [authSyncNotice, setAuthSyncNotice] = useState<{ type: "info" | "success" | "warning"; message: string } | null>(null);
 
   // Real-time Firestore Listeners
   useEffect(() => {
@@ -393,6 +396,69 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
     }
   };
 
+  // Sync accounts deleted directly in Firebase Console -> Authentication -> Users
+  const handleSyncDeletedFirebaseAuthUsers = async () => {
+    setIsSyncingAuth(true);
+    setAuthSyncNotice(null);
+    try {
+      const candidateUids = users.map(u => u.uid || u.id).filter(Boolean);
+      const res = await fetch("/api/account/sync-firebase-auth-deletions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ candidateUids })
+      });
+      const data = await res.json();
+
+      if (data?.adminAuthUnavailable) {
+        setAuthSyncNotice({
+          type: "warning",
+          message:
+            "Active browser sessions and re-registrations already purge deleted Firebase Auth accounts automatically. To bulk-sync offline users deleted in Firebase Console, add your FIREBASE_SERVICE_ACCOUNT JSON key (Firebase Console → Project Settings → Service Accounts) to environment variables."
+        });
+        return;
+      }
+
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to sync Firebase Auth users");
+      }
+
+      const deletedAuthUids: string[] = Array.isArray(data?.deletedAuthUids) ? data.deletedAuthUids : [];
+      if (deletedAuthUids.length === 0) {
+        setAuthSyncNotice({
+          type: "success",
+          message: "All website user profiles are already in sync with Firebase Authentication."
+        });
+        return;
+      }
+
+      let clientPurged = 0;
+      for (const uid of deletedAuthUids) {
+        const result = await cascadeDeleteUserAccount(uid, undefined, {
+          skipAuthDelete: true,
+          skipOrderGuards: true
+        });
+        if (result.success) {
+          clientPurged++;
+        }
+      }
+
+      const totalPurged = Math.max(Number(data?.serverPurgedCount || 0), clientPurged);
+      setActionSuccessMessage(`Purged ${totalPurged} account(s) deleted from Firebase Authentication.`);
+      setAuthSyncNotice({
+        type: "success",
+        message: `Synced Firebase Authentication: cascade-deleted ${totalPurged} stale account(s) and their listings from the website.`
+      });
+      setTimeout(() => setActionSuccessMessage(null), 4000);
+    } catch (err: any) {
+      setAuthSyncNotice({
+        type: "warning",
+        message: err?.message || "Could not complete Firebase Auth sync."
+      });
+    } finally {
+      setIsSyncingAuth(false);
+    }
+  };
+
   // Metrics summary
   const totalGrossVolume = orders.reduce((sum, o) => sum + (o.totalPrice || 0), 0);
   const pendingPayoutsTotal = payouts.filter(p => p.status === "pending").reduce((sum, p) => sum + (p.amount || 0), 0);
@@ -646,43 +712,81 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
                 </button>
               </div>
 
-              {/* Alphabetical / Recent Sorting Toggle */}
-              <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
+              {/* Alphabetical / Recent Sorting Toggle + Firebase Auth Sync */}
+              <div className="flex flex-wrap items-center gap-2">
                 <button
-                  onClick={() => setUserSortOrder("asc")}
-                  title="Alphabetical A to Z"
-                  className={cn(
-                    "px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition-all cursor-pointer",
-                    userSortOrder === "asc" ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm" : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
-                  )}
+                  onClick={handleSyncDeletedFirebaseAuthUsers}
+                  disabled={isSyncingAuth}
+                  title="Check for accounts deleted directly in Firebase Console → Authentication → Users and purge their website data"
+                  className="px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider bg-slate-900 hover:bg-slate-800 dark:bg-indigo-600 dark:hover:bg-indigo-500 text-white flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
                 >
-                  <SortAsc className="w-3.5 h-3.5" />
-                  <span>A-Z</span>
+                  <RefreshCw className={cn("w-3.5 h-3.5", isSyncingAuth && "animate-spin")} />
+                  <span>{isSyncingAuth ? "Syncing Auth..." : "Sync Firebase Auth"}</span>
                 </button>
-                <button
-                  onClick={() => setUserSortOrder("desc")}
-                  title="Alphabetical Z to A"
-                  className={cn(
-                    "px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition-all cursor-pointer",
-                    userSortOrder === "desc" ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm" : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
-                  )}
-                >
-                  <SortDesc className="w-3.5 h-3.5" />
-                  <span>Z-A</span>
-                </button>
-                <button
-                  onClick={() => setUserSortOrder("recent")}
-                  title="Recently Registered"
-                  className={cn(
-                    "px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition-all cursor-pointer",
-                    userSortOrder === "recent" ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm" : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
-                  )}
-                >
-                  <Clock className="w-3.5 h-3.5" />
-                  <span>Recent</span>
-                </button>
+
+                <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
+                  <button
+                    onClick={() => setUserSortOrder("asc")}
+                    title="Alphabetical A to Z"
+                    className={cn(
+                      "px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition-all cursor-pointer",
+                      userSortOrder === "asc" ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm" : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
+                    )}
+                  >
+                    <SortAsc className="w-3.5 h-3.5" />
+                    <span>A-Z</span>
+                  </button>
+                  <button
+                    onClick={() => setUserSortOrder("desc")}
+                    title="Alphabetical Z to A"
+                    className={cn(
+                      "px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition-all cursor-pointer",
+                      userSortOrder === "desc" ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm" : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
+                    )}
+                  >
+                    <SortDesc className="w-3.5 h-3.5" />
+                    <span>Z-A</span>
+                  </button>
+                  <button
+                    onClick={() => setUserSortOrder("recent")}
+                    title="Recently Registered"
+                    className={cn(
+                      "px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition-all cursor-pointer",
+                      userSortOrder === "recent" ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm" : "text-slate-500 hover:text-slate-900 dark:hover:text-white"
+                    )}
+                  >
+                    <Clock className="w-3.5 h-3.5" />
+                    <span>Recent</span>
+                  </button>
+                </div>
               </div>
             </div>
+
+            {authSyncNotice && (
+              <div
+                className={cn(
+                  "p-3.5 rounded-2xl text-xs font-medium flex items-start justify-between gap-3 border",
+                  authSyncNotice.type === "success"
+                    ? "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-200 border-emerald-200 dark:border-emerald-800"
+                    : "bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 border-amber-200 dark:border-amber-800"
+                )}
+              >
+                <div className="flex items-start gap-2">
+                  {authSyncNotice.type === "success" ? (
+                    <CheckCircle className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
+                  ) : (
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                  )}
+                  <span>{authSyncNotice.message}</span>
+                </div>
+                <button
+                  onClick={() => setAuthSyncNotice(null)}
+                  className="p-0.5 rounded hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer shrink-0"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
 
             {/* Instant Search Bar */}
             <div className="relative">

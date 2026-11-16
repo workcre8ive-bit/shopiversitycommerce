@@ -6,7 +6,7 @@ import { AlertCircle, Truck, ShoppingBag, UserX, UserCheck, X, ArrowRight } from
 export interface AuthErrorModalProps {
   isOpen: boolean;
   onClose: () => void;
-  type: "logistics_mismatch" | "buyer_seller_mismatch" | "email_in_use" | "profile_missing" | "google_account_no_password" | "generic";
+  type: "logistics_mismatch" | "buyer_seller_mismatch" | "email_in_use" | "profile_missing" | "unregistered_email" | "google_account_no_password" | "generic";
   title: string;
   message: string;
   email?: string;
@@ -28,13 +28,7 @@ export default function AuthErrorModal({
   secondaryActionLabel = "Dismiss",
   onSecondaryAction,
 }: AuthErrorModalProps) {
-  const [mounted, setMounted] = React.useState(false);
-
-  React.useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  if (!isOpen || !mounted) return null;
+  if (!isOpen || typeof document === "undefined") return null;
 
   const getIcon = () => {
     switch (type) {
@@ -64,6 +58,7 @@ export default function AuthErrorModal({
       case "buyer_seller_mismatch":
         return <ShoppingBag className="w-7 h-7 sm:w-8 sm:h-8 text-amber-600 dark:text-amber-400" />;
       case "email_in_use":
+      case "unregistered_email":
         return <UserX className="w-7 h-7 sm:w-8 sm:h-8 text-red-600 dark:text-red-400" />;
       case "profile_missing":
         return <UserCheck className="w-7 h-7 sm:w-8 sm:h-8 text-blue-600 dark:text-blue-400" />;
@@ -81,6 +76,7 @@ export default function AuthErrorModal({
       case "buyer_seller_mismatch":
         return "bg-amber-100 dark:bg-amber-950/60 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300";
       case "email_in_use":
+      case "unregistered_email":
         return "bg-red-100 dark:bg-red-950/60 border-red-200 dark:border-red-800 text-red-700 dark:text-red-300";
       case "profile_missing":
         return "bg-blue-100 dark:bg-blue-950/60 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300";
@@ -99,6 +95,8 @@ export default function AuthErrorModal({
         return "BUYER / SELLER CONFLICT";
       case "email_in_use":
         return "DUPLICATE ACCOUNT DETECTED";
+      case "unregistered_email":
+        return "UNREGISTERED EMAIL ADDRESS";
       case "profile_missing":
         return "ACCOUNT EXISTS • PROFILE MISSING";
       default:

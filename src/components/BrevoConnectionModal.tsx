@@ -57,6 +57,8 @@ export default function BrevoConnectionModal({
     smsSender?: string;
     smtpUser?: string;
     needsSmtpUser?: boolean;
+    lastError?: string | null;
+    lastErrorAt?: string | null;
     provider: string;
   } | null>(null);
 
@@ -267,6 +269,17 @@ export default function BrevoConnectionModal({
               >
                 Dismiss
               </button>
+            </div>
+          )}
+
+          {/* Live Delivery Failure Banner */}
+          {statusData?.lastError && (
+            <div className="p-4 rounded-2xl bg-red-50 dark:bg-red-950/40 border border-red-300 dark:border-red-800 flex items-start gap-3 text-xs text-red-900 dark:text-red-200 leading-relaxed">
+              <AlertCircle className="w-5 h-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <p className="font-black">Recent Brevo Delivery Failure</p>
+                <p className="font-semibold">{statusData.lastError}</p>
+              </div>
             </div>
           )}
 

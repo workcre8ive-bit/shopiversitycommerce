@@ -249,6 +249,9 @@ app.use((req, res, next) => {
     }
   }
 
+  // Track latest Brevo delivery failure so status UI never hides active blocks like 525 Unauthorized IP
+  let lastBrevoError: { message: string; timestamp: string } | null = null;
+
   // Cached Brevo verified senders resolver (ensures Brevo always uses a verified sender email from the connected Brevo account)
   let cachedBrevoSenders: { keyPrefix: string; senders: { email: string; name: string; active: boolean }[]; fetchedAt: number } | null = null;
   async function resolveBrevoVerifiedSenders(apiKey: string): Promise<{ email: string; name: string; active: boolean }[]> {
@@ -458,6 +461,7 @@ app.use((req, res, next) => {
               if (senderCandidate.email !== runtimeBrevoConfig.senderEmail) {
                 runtimeBrevoConfig.senderEmail = senderCandidate.email;
               }
+              lastBrevoError = null;
               return {
                 success: true,
                 provider: "brevo",
@@ -529,6 +533,7 @@ app.use((req, res, next) => {
             }
 
             console.log(`[BREVO SMTP QUEUED] Accepted: ${JSON.stringify(info.accepted)} | Response: ${info.response} | MessageId: ${info.messageId}`);
+            lastBrevoError = null;
             return {
               success: true,
               provider: "brevo-smtp",
@@ -552,10 +557,12 @@ app.use((req, res, next) => {
     }
 
     if (options.skipFallback) {
+      const errText = lastError || "Brevo email delivery failed. Please ensure BREVO_API_KEY is configured and a verified sender exists in Brevo.";
+      lastBrevoError = { message: errText, timestamp: new Date().toISOString() };
       return {
         success: false,
         provider: "brevo",
-        error: lastError || "Brevo email delivery failed. Please ensure BREVO_API_KEY is configured and a verified sender exists in Brevo."
+        error: errText
       };
     }
 
@@ -612,10 +619,12 @@ app.use((req, res, next) => {
       }
     }
 
+    const errText = lastError || "Brevo is not configured yet. Please configure BREVO_API_KEY in Vercel/environment, or connect it in your Dashboard Settings.";
+    lastBrevoError = { message: errText, timestamp: new Date().toISOString() };
     return {
       success: false,
       provider: "none",
-      error: lastError || "Brevo is not configured yet. Please configure BREVO_API_KEY in Vercel/environment, or connect it in your Dashboard Settings."
+      error: errText
     };
   }
 
@@ -641,6 +650,8 @@ app.use((req, res, next) => {
       needsSmtpUser: Boolean(isSmtp && !activeSmtpUser),
       isSmtpKeyOnly: Boolean(isSmtp),
       isConsumerGmailSender: runtimeBrevoConfig.senderEmail.toLowerCase().endsWith("@gmail.com"),
+      lastError: lastBrevoError?.message || null,
+      lastErrorAt: lastBrevoError?.timestamp || null,
       provider: "brevo",
       activeFallback: Boolean(process.env.RESEND_FROM_EMAIL || (process.env.SMTP_HOST && process.env.SMTP_USER))
     });
@@ -724,6 +735,7 @@ app.use((req, res, next) => {
       console.warn(`[BREVO PERSISTENCE NOTICE] Fallback /tmp persistence used:`, saveErr);
     }
     cachedBrevoSenders = null;
+    lastBrevoError = null;
 
     console.log(`[BREVO CONFIG UPDATED] Sender: ${runtimeBrevoConfig.senderName} <${runtimeBrevoConfig.senderEmail}>, SMS: ${runtimeBrevoConfig.smsSender}, Key Set: ${Boolean(runtimeBrevoConfig.apiKey)}`);
 
@@ -3851,11 +3863,58 @@ const FALLBACK_BANKS = [
   // ESCROW PAYOUT RELEASE SYSTEM (FIREBASE ADMIN)
   // =========================================================================
   let firebaseAdminDb: Firestore | null = null;
-  let isAdminDbAuthorized = Boolean(
-    process.env.GOOGLE_APPLICATION_CREDENTIALS || 
-    process.env.FIREBASE_SERVICE_ACCOUNT || 
-    process.env.FIREBASE_SERVICE_ACCOUNT_KEY
-  );
+  let isAdminDbAuthorized = Boolean(process.env.GOOGLE_APPLICATION_CREDENTIALS);
+
+  function parseFirebaseServiceAccount(rawValue?: string): Record<string, any> | null {
+    if (!rawValue || !rawValue.trim()) return null;
+    let cleaned = rawValue.trim();
+
+    // Strip wrapping quotes if pasted as '...json...' or "...json..."
+    if (
+      (cleaned.startsWith("'") && cleaned.endsWith("'")) ||
+      (cleaned.startsWith('"') && cleaned.endsWith('"'))
+    ) {
+      cleaned = cleaned.slice(1, -1).trim();
+    }
+
+    // Support base64-encoded service account JSON if provided
+    if (!cleaned.startsWith("{")) {
+      try {
+        const decoded = Buffer.from(cleaned, "base64").toString("utf8").trim();
+        if (decoded.startsWith("{")) {
+          cleaned = decoded;
+        }
+      } catch {
+        // Not valid base64
+      }
+    }
+
+    const normalizePrivateKey = (obj: Record<string, any>) => {
+      if (typeof obj.private_key === "string") {
+        obj.private_key = obj.private_key.replace(/\\n/g, "\n");
+      }
+      return obj;
+    };
+
+    try {
+      const parsed = JSON.parse(cleaned);
+      if (parsed && typeof parsed === "object" && parsed.private_key && parsed.client_email) {
+        return normalizePrivateKey(parsed);
+      }
+    } catch {
+      // Fallback: if pasted into env UI with literal unescaped newlines inside strings, escape control newlines cleanly
+      try {
+        const sanitized = cleaned.replace(/\r\n/g, "\n").replace(/\n/g, "\\n");
+        const parsed = JSON.parse(sanitized);
+        if (parsed && typeof parsed === "object" && parsed.private_key && parsed.client_email) {
+          return normalizePrivateKey(parsed);
+        }
+      } catch (e) {
+        console.warn("[FIREBASE ADMIN] Could not parse FIREBASE_SERVICE_ACCOUNT JSON:", (e as Error).message);
+      }
+    }
+    return null;
+  }
 
   try {
     const configPath = path.join(process.cwd(), "firebase-applet-config.json");
@@ -3863,16 +3922,13 @@ const FALLBACK_BANKS = [
       const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
       if (admin.apps.length === 0) {
         const saRaw = process.env.FIREBASE_SERVICE_ACCOUNT || process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
-        if (saRaw && saRaw.trim().startsWith("{")) {
-          try {
-            const saJson = JSON.parse(saRaw);
-            admin.initializeApp({
-              credential: admin.credential.cert(saJson),
-              projectId: saJson.project_id || config.projectId,
-            });
-          } catch {
-            admin.initializeApp({ projectId: config.projectId });
-          }
+        const saJson = parseFirebaseServiceAccount(saRaw);
+        if (saJson) {
+          admin.initializeApp({
+            credential: admin.credential.cert(saJson),
+            projectId: saJson.project_id || config.projectId,
+          });
+          isAdminDbAuthorized = true;
         } else {
           admin.initializeApp({ projectId: config.projectId });
         }
@@ -4386,11 +4442,16 @@ const FALLBACK_BANKS = [
         storeName: bodyStoreName,
         companyName: bodyCompanyName,
         role: bodyRole,
-        deletedProductsCount: bodyDeletedProductsCount
+        deletedProductsCount: bodyDeletedProductsCount,
+        skipOrderGuards: bodySkipOrderGuards,
+        skipEmail: bodySkipEmail
       } = req.body || {};
       if (!uid) {
         return res.status(400).json({ error: "Missing uid parameter" });
       }
+
+      const skipOrderGuards = Boolean(bodySkipOrderGuards);
+      const skipEmail = Boolean(bodySkipEmail);
 
       console.log(`[ACCOUNT PURGE] Initiating complete cascade deletion for user: ${uid}`);
 
@@ -4432,7 +4493,8 @@ const FALLBACK_BANKS = [
             capturedDeletedProducts = prodSnap.size;
           }
 
-          // 2. Enforce server-side order & delivery deletion guards
+          // 2. Enforce server-side order & delivery deletion guards (unless already deleted in Firebase Auth)
+          if (!skipOrderGuards) {
           const ACTIVE_DELIVERY_STATUSES = new Set(["accepted", "picked_up", "in_transit", "out_for_delivery"]);
           const TERMINAL_ORDER_STATUSES = new Set(["completed", "cancelled", "acquired"]);
           const DELIVERED_ORDER_STATUSES = new Set(["delivered", "order delivered"]);
@@ -4503,11 +4565,12 @@ const FALLBACK_BANKS = [
               }
             }
           }
-          if (blockingLogisticsRefs.length > 0) {
-            return res.status(409).json({
-              success: false,
-              error: `Cannot delete logistics company account: active accepted/in-process deliveries (${blockingLogisticsRefs.slice(0, 3).join(", ")}) are not yet completed.`
-            });
+            if (blockingLogisticsRefs.length > 0) {
+              return res.status(409).json({
+                success: false,
+                error: `Cannot delete logistics company account: active accepted/in-process deliveries (${blockingLogisticsRefs.slice(0, 3).join(", ")}) are not yet completed.`
+              });
+            }
           }
         } catch (guardErr: any) {
           if (guardErr?.code === 7 || guardErr?.message?.includes("PERMISSION_DENIED")) {
@@ -4525,7 +4588,7 @@ const FALLBACK_BANKS = [
         } catch (e) {}
 
         // Ensure deletion confirmation email is still queued if recipient was supplied and not already sent
-        if (capturedEmail) {
+        if (capturedEmail && !skipEmail) {
           const ts = new Date().toUTCString();
           if (isLogisticsAccount) {
             dispatchTemplatedEmail({
@@ -4640,7 +4703,7 @@ const FALLBACK_BANKS = [
       }
 
       // Dispatch account deletion email (idempotent with client-triggered email)
-      if (capturedEmail) {
+      if (capturedEmail && !skipEmail) {
         const ts = new Date().toUTCString();
         if (isLogisticsAccount) {
           dispatchTemplatedEmail({
@@ -4863,6 +4926,113 @@ const FALLBACK_BANKS = [
     } catch (err: any) {
       console.error("[ORPHAN CLEANUP] Failed:", err);
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Sync accounts deleted directly in Firebase Console -> Authentication -> Users with website Firestore collections
+  app.post("/api/account/sync-firebase-auth-deletions", async (req, res) => {
+    try {
+      const candidateUids: string[] = Array.isArray(req.body?.candidateUids)
+        ? req.body.candidateUids.map((v: any) => String(v || "").trim()).filter(Boolean)
+        : [];
+
+      // 1. Enumerate active Firebase Authentication UIDs via Admin SDK
+      const activeAuthUids = new Set<string>();
+      try {
+        let nextPageToken: string | undefined = undefined;
+        do {
+          const listResult: any = await admin.auth().listUsers(1000, nextPageToken);
+          for (const u of listResult.users || []) {
+            if (u?.uid) activeAuthUids.add(u.uid);
+          }
+          nextPageToken = listResult.pageToken;
+        } while (nextPageToken);
+      } catch (authListErr: any) {
+        const msg = String(authListErr?.message || authListErr?.code || "Firebase Admin Auth unavailable");
+        console.warn("[AUTH SYNC] Cannot list Firebase Auth users from server:", msg);
+        return res.status(200).json({
+          success: false,
+          adminAuthUnavailable: true,
+          deletedAuthUids: [],
+          serverPurgedCount: 0,
+          error: "Server-side Firebase Admin lacks FIREBASE_SERVICE_ACCOUNT credentials for listing Firebase Auth users. Active signed-in users and re-registrations still auto-sync automatically."
+        });
+      }
+
+      // 2. Collect all Firestore user & logistics UIDs
+      const firestoreUids = new Set<string>(candidateUids);
+      if (firebaseAdminDb && isAdminDbAuthorized) {
+        try {
+          const [uSnap, lSnap] = await Promise.all([
+            firebaseAdminDb.collection("users").get(),
+            firebaseAdminDb.collection("logistics_companies").get()
+          ]);
+          uSnap.docs.forEach(d => firestoreUids.add(d.id));
+          lSnap.docs.forEach(d => firestoreUids.add(d.id));
+        } catch (dbErr: any) {
+          if (dbErr?.code === 7 || dbErr?.message?.includes("PERMISSION_DENIED")) {
+            isAdminDbAuthorized = false;
+          }
+        }
+      }
+
+      const deletedAuthUids = Array.from(firestoreUids).filter(uid => !activeAuthUids.has(uid));
+      let serverPurgedCount = 0;
+
+      // 3. If server-side Admin Firestore is authorized, cascade-purge every deleted Auth account immediately
+      if (deletedAuthUids.length > 0 && firebaseAdminDb && isAdminDbAuthorized) {
+        const collectionsToPurge = [
+          { name: "products", field: "sellerId" },
+          { name: "products", field: "userId" },
+          { name: "event_plans", field: "userId" },
+          { name: "orders", field: "buyerId" },
+          { name: "orders", field: "sellerId" },
+          { name: "reviews", field: "buyerId" },
+          { name: "reports", field: "reporterId" },
+          { name: "reports", field: "vendorId" },
+          { name: "payoutRequests", field: "sellerId" },
+          { name: "notifications", field: "userId" },
+          { name: "logistics_deliveries", field: "senderId" },
+          { name: "logistics_deliveries", field: "logisticsId" },
+          { name: "product_history", field: "userId" },
+          { name: "disputes", field: "userId" },
+          { name: "disputes", field: "buyerId" },
+          { name: "disputes", field: "sellerId" },
+          { name: "supportTickets", field: "userId" },
+          { name: "wishlists", field: "userId" },
+          { name: "analytics", field: "sellerId" }
+        ];
+
+        for (const uid of deletedAuthUids) {
+          try {
+            for (const item of collectionsToPurge) {
+              const snap = await firebaseAdminDb.collection(item.name).where(item.field, "==", uid).get().catch(() => null);
+              if (snap && snap.size > 0) {
+                const batch = firebaseAdminDb.batch();
+                snap.docs.forEach(docSnap => batch.delete(docSnap.ref));
+                await batch.commit();
+              }
+            }
+            await firebaseAdminDb.collection("logistics_companies").doc(uid).delete().catch(() => {});
+            await firebaseAdminDb.collection("users").doc(uid).delete().catch(() => {});
+            serverPurgedCount++;
+          } catch (purgeErr) {
+            console.warn(`[AUTH SYNC] Error purging deleted Auth user ${uid}:`, purgeErr);
+          }
+        }
+      }
+
+      console.log(`[AUTH SYNC] Checked ${firestoreUids.size} accounts against ${activeAuthUids.size} Firebase Auth users. Missing/deleted: ${deletedAuthUids.length}`);
+      return res.status(200).json({
+        success: true,
+        adminAuthUnavailable: false,
+        deletedAuthUids,
+        serverPurgedCount,
+        adminDbAuthorized: Boolean(firebaseAdminDb && isAdminDbAuthorized)
+      });
+    } catch (err: any) {
+      console.error("[AUTH SYNC] Failed syncing deleted Firebase Auth users:", err);
+      res.status(500).json({ success: false, error: err.message });
     }
   });
 
