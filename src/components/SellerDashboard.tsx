@@ -4144,6 +4144,9 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
   const [schoolAddress, setSchoolAddress] = React.useState(
     editingProduct?.schoolAddress || editingProduct?.businessAddress || ""
   );
+  const schoolAddressInputRef = React.useRef<HTMLInputElement | null>(null);
+  const lastAutoCompiledAddressRef = React.useRef<string | null>(null);
+  const [filledCompiledFeedback, setFilledCompiledFeedback] = React.useState(false);
 
   const stateSchools = React.useMemo(() => getSchoolsByState(addrState), [addrState]);
   const matchedSchoolObj = React.useMemo(() => findSchoolByName(addrSchool), [addrSchool]);
@@ -4277,23 +4280,70 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
     }
   }, [editingProduct, currentUser]);
 
+  const buildCompiledPickupAddress = React.useCallback(
+    (locName: string, rawSchoolAddr: string, pickupSchoolName: string, lgaName: string, stateName: string) => {
+      const cleanAddr = rawSchoolAddr.trim();
+      const lowerAddr = cleanAddr.toLowerCase();
+      const hasSchool = !pickupSchoolName || lowerAddr.includes(pickupSchoolName.toLowerCase());
+      const hasState = !stateName || lowerAddr.includes(`${stateName.toLowerCase()} state`);
+      const alreadyCompiled =
+        Boolean(cleanAddr) &&
+        lowerAddr.endsWith("nigeria") &&
+        hasSchool &&
+        hasState;
+
+      if (alreadyCompiled) {
+        return cleanAddr;
+      }
+
+      return [
+        locName,
+        cleanAddr,
+        pickupSchoolName,
+        lgaName ? `${lgaName} LGA` : "",
+        stateName ? `${stateName} State` : "",
+        "Nigeria"
+      ]
+        .filter(Boolean)
+        .join(", ");
+    },
+    []
+  );
+
   // Compile pickup location automatically from structured inputs
   React.useEffect(() => {
     const locName = schoolLocationPreset === "✍️ Other / Custom School Location..."
       ? (schoolLocationCustom || "Campus Area")
       : schoolLocationPreset;
-    const parts = [
+    const baseCompiled = buildCompiledPickupAddress(
+      locName,
+      "",
+      resolvedPickupSchool,
+      addrLga,
+      addrState
+    );
+    if (
+      lastAutoCompiledAddressRef.current &&
+      schoolAddress.trim() === lastAutoCompiledAddressRef.current &&
+      baseCompiled &&
+      baseCompiled !== lastAutoCompiledAddressRef.current
+    ) {
+      lastAutoCompiledAddressRef.current = baseCompiled;
+      setSchoolAddress(baseCompiled);
+      setLocation(baseCompiled);
+      return;
+    }
+    const compiled = buildCompiledPickupAddress(
       locName,
       schoolAddress,
       resolvedPickupSchool,
-      addrLga ? `${addrLga} LGA` : "",
-      addrState ? `${addrState} State` : "",
-      "Nigeria"
-    ].filter(Boolean);
-    if (parts.length > 0) {
-      setLocation(parts.join(", "));
+      addrLga,
+      addrState
+    );
+    if (compiled) {
+      setLocation(compiled);
     }
-  }, [addrState, addrLga, resolvedPickupSchool, schoolAddress, schoolLocationPreset, schoolLocationCustom]);
+  }, [addrState, addrLga, resolvedPickupSchool, schoolAddress, schoolLocationPreset, schoolLocationCustom, buildCompiledPickupAddress]);
 
   const [images, setImages] = React.useState<string[]>(editingProduct?.imageUrls || (editingProduct?.imageUrl ? [editingProduct.imageUrl] : []));
   
@@ -4713,14 +4763,13 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
       ? schoolLocationCustom.trim() 
       : schoolLocationPreset;
 
-    const computedPickupAddress = [
+    const computedPickupAddress = buildCompiledPickupAddress(
       finalSchoolLocation,
-      schoolAddress.trim(),
+      schoolAddress,
       resolvedPickupSchool,
-      addrLga ? `${addrLga} LGA` : "",
-      addrState ? `${addrState} State` : "",
-      "Nigeria"
-    ].filter(Boolean).join(", ");
+      addrLga,
+      addrState
+    );
 
     let finalLocation = computedPickupAddress || location.trim() || currentUser?.campus || "";
     
@@ -6015,27 +6064,53 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                       Address in the School (Hall, Department, Room, or Block) *
                     </label>
                     <input 
+                      ref={schoolAddressInputRef}
                       type="text"
                       value={schoolAddress}
-                      onChange={(e) => setSchoolAddress(e.target.value)}
+                      onChange={(e) => {
+                        setSchoolAddress(e.target.value);
+                        if (filledCompiledFeedback) setFilledCompiledFeedback(false);
+                      }}
                       placeholder="e.g. Hall 3 Room 12, Department of Chemistry Block B, or Campus Staff Quarter 4"
                       className="w-full h-11 px-4 bg-white dark:bg-slate-900 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white font-semibold shadow-sm"
                     />
                   </div>
 
-                  {/* Compiled Address Summary Preview (No Map Needed) */}
+                  {/* Compiled Address Summary Preview (Tap/Click to fill Address in the School) */}
                   {location && (
-                    <div className="p-3.5 bg-emerald-50/60 dark:bg-emerald-950/20 rounded-xl text-xs font-medium border border-emerald-200/80 dark:border-emerald-800/40 flex items-start gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const compiledText = location.trim();
+                        if (!compiledText) return;
+                        lastAutoCompiledAddressRef.current = compiledText;
+                        setSchoolAddress(compiledText);
+                        setFilledCompiledFeedback(true);
+                        setTimeout(() => {
+                          setFilledCompiledFeedback(false);
+                        }, 2500);
+                        schoolAddressInputRef.current?.focus();
+                      }}
+                      title="Tap or click to fill this compiled address into Address in the School"
+                      className="w-full text-left p-3.5 bg-emerald-50/60 hover:bg-emerald-100/70 dark:bg-emerald-950/20 dark:hover:bg-emerald-950/40 rounded-xl text-xs font-medium border border-emerald-200/80 hover:border-emerald-400 dark:border-emerald-800/40 dark:hover:border-emerald-600/70 flex items-start gap-2.5 transition-all cursor-pointer active:scale-[0.99] shadow-sm"
+                    >
                       <span className="text-[#ff6b00] text-base leading-none mt-0.5">📍</span>
                       <div className="min-w-0 flex-1">
-                        <span className="text-[10px] font-black text-emerald-800 dark:text-emerald-300 uppercase tracking-widest block">
-                          Compiled Campus Pickup Location
-                        </span>
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <span className="text-[10px] font-black text-emerald-800 dark:text-emerald-300 uppercase tracking-widest">
+                            Compiled Campus Pickup Location
+                          </span>
+                          <span className="text-[10px] font-bold text-[#ff6b00] dark:text-orange-400">
+                            {filledCompiledFeedback || schoolAddress.trim() === location.trim()
+                              ? "Filled into Address in the School ✓"
+                              : "Tap to fill Address in the School"}
+                          </span>
+                        </div>
                         <p className="font-bold text-slate-800 dark:text-slate-200 mt-0.5 break-words">
                           {location}
                         </p>
                       </div>
-                    </div>
+                    </button>
                   )}
                 </div>
               </div>
