@@ -1,9 +1,9 @@
-import { BUYER_EMAIL_TEMPLATES } from "./emailCatalogBuyer.ts";
-import { SELLER_EMAIL_TEMPLATES } from "./emailCatalogSeller.ts";
-import { LOGISTICS_EMAIL_TEMPLATES } from "./emailCatalogLogistics.ts";
-import { EmailRecipientCategory, EmailTemplateDefinition, EmailVariableMap } from "./emailTypes.ts";
+import { BUYER_EMAIL_TEMPLATES } from "./emailCatalogBuyer.js";
+import { SELLER_EMAIL_TEMPLATES } from "./emailCatalogSeller.js";
+import { LOGISTICS_EMAIL_TEMPLATES } from "./emailCatalogLogistics.js";
+import { EmailRecipientCategory, EmailTemplateDefinition, EmailVariableMap } from "./emailTypes.js";
 
-export * from "./emailTypes.ts";
+export * from "./emailTypes.js";
 export { BUYER_EMAIL_TEMPLATES, SELLER_EMAIL_TEMPLATES, LOGISTICS_EMAIL_TEMPLATES };
 
 export const SHOPIVERSITY_EMAIL_TEMPLATES: EmailTemplateDefinition[] = [

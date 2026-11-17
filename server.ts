@@ -1,7 +1,5 @@
 import express from "express";
-import { createServer as createViteServer } from "vite";
 import path from "path";
-import { fileURLToPath } from "url";
 import crypto from "crypto";
 import { Resend } from "resend";
 import nodemailer from "nodemailer";
@@ -18,13 +16,9 @@ import {
   renderShopiversityEmail,
   getSampleEmailVariables,
   EmailVariableMap
-} from "./shared/emailTemplates.ts";
+} from "./shared/emailTemplates.js";
 
 dotenv.config();
-
-const hasImportMetaUrl = typeof import.meta !== "undefined" && !!import.meta.url;
-const _filename = hasImportMetaUrl ? fileURLToPath(import.meta.url) : (typeof __filename !== "undefined" ? __filename : "");
-const _dirname = hasImportMetaUrl ? path.dirname(_filename) : (typeof __dirname !== "undefined" ? __dirname : ".");
 
 export const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -506,7 +500,9 @@ app.use((req, res, next) => {
               tls: {
                 rejectUnauthorized: false
               },
-              connectionTimeout: 7000
+              connectionTimeout: 7000,
+              greetingTimeout: 7000,
+              socketTimeout: 10000
             });
 
             const cleanFromEmail = fromEmail.trim().toLowerCase();
@@ -1939,6 +1935,41 @@ app.use((req, res, next) => {
     };
   }
 
+  let firestoreQuotaBackoffUntil = 0;
+
+  async function runAdminDbWithTimeout<T>(op: () => Promise<T>, timeoutMs = 2500): Promise<T | null> {
+    if (!firebaseAdminDb || !isAdminDbAuthorized) return null;
+    if (Date.now() < firestoreQuotaBackoffUntil) return null;
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      const result = await Promise.race<T>([
+        op(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("ADMIN_DB_TIMEOUT")), timeoutMs);
+        })
+      ]);
+      return result;
+    } catch (err: any) {
+      const msg = String(err?.message || "");
+      const code = err?.code;
+      if (code === 7 || msg.includes("PERMISSION_DENIED")) {
+        isAdminDbAuthorized = false;
+      } else if (
+        code === 8 ||
+        msg.includes("RESOURCE_EXHAUSTED") ||
+        msg.toLowerCase().includes("quota") ||
+        msg === "ADMIN_DB_TIMEOUT"
+      ) {
+        firestoreQuotaBackoffUntil = Date.now() + 3 * 60 * 1000;
+        console.warn("[FIRESTORE ADMIN] Backing off optional Admin DB calls for 3m:", msg);
+      }
+      return null;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   async function resolveUserPreferences(email?: string, userId?: string): Promise<UserEmailPreferences> {
     const cleanEmail = (email || "").trim().toLowerCase();
     if (cleanEmail && emailPreferencesStore.has(cleanEmail)) {
@@ -1948,16 +1979,15 @@ app.use((req, res, next) => {
       return emailPreferencesStore.get(`uid:${userId}`)!;
     }
     if (firebaseAdminDb && isAdminDbAuthorized && (cleanEmail || userId)) {
-      try {
-        const docId = cleanEmail || `uid_${userId}`;
-        const snap = await firebaseAdminDb.collection("email_preferences").doc(docId).get();
-        if (snap.exists) {
-          const data = snap.data() as UserEmailPreferences;
-          if (cleanEmail) emailPreferencesStore.set(cleanEmail, data);
-          return data;
-        }
-      } catch {
-        // Non-fatal
+      const docId = cleanEmail || `uid_${userId}`;
+      const snap = await runAdminDbWithTimeout(
+        () => firebaseAdminDb!.collection("email_preferences").doc(docId).get(),
+        2000
+      );
+      if (snap && snap.exists) {
+        const data = snap.data() as UserEmailPreferences;
+        if (cleanEmail) emailPreferencesStore.set(cleanEmail, data);
+        return data;
       }
     }
     return getDefaultPreferences(cleanEmail, userId);
@@ -1983,12 +2013,12 @@ app.use((req, res, next) => {
       emailAuditLogs = emailAuditLogs.slice(0, 400);
     }
     persistEmailLogsToDisk();
-    if (firebaseAdminDb && isAdminDbAuthorized) {
-      try {
-        await firebaseAdminDb.collection("email_logs").doc(entry.id).set(entry);
-      } catch {
-        // Non-fatal
-      }
+    // Mirror email log to Firestore non-blocking so slow/quota-limited Firestore never stalls HTTP email responses
+    if (firebaseAdminDb && isAdminDbAuthorized && Date.now() >= firestoreQuotaBackoffUntil) {
+      void runAdminDbWithTimeout(
+        () => firebaseAdminDb!.collection("email_logs").doc(entry.id).set(entry),
+        2500
+      );
     }
   }
 
@@ -2019,21 +2049,23 @@ app.use((req, res, next) => {
 
     let resolvedEmail = (options.recipientEmail || "").trim().toLowerCase();
     if ((!resolvedEmail || !resolvedEmail.includes("@")) && options.recipientUserId && firebaseAdminDb && isAdminDbAuthorized) {
-      try {
-        if ((options.recipientRole || template.recipientCategory) === "logistics") {
-          const lSnap = await firebaseAdminDb.collection("logistics_companies").doc(String(options.recipientUserId)).get();
-          if (lSnap.exists && lSnap.data()?.email) {
-            resolvedEmail = String(lSnap.data()?.email).trim().toLowerCase();
-          }
+      if ((options.recipientRole || template.recipientCategory) === "logistics") {
+        const lSnap = await runAdminDbWithTimeout(
+          () => firebaseAdminDb!.collection("logistics_companies").doc(String(options.recipientUserId)).get(),
+          2000
+        );
+        if (lSnap && lSnap.exists && lSnap.data()?.email) {
+          resolvedEmail = String(lSnap.data()?.email).trim().toLowerCase();
         }
-        if (!resolvedEmail || !resolvedEmail.includes("@")) {
-          const uSnap = await firebaseAdminDb.collection("users").doc(String(options.recipientUserId)).get();
-          if (uSnap.exists && uSnap.data()?.email) {
-            resolvedEmail = String(uSnap.data()?.email).trim().toLowerCase();
-          }
+      }
+      if (!resolvedEmail || !resolvedEmail.includes("@")) {
+        const uSnap = await runAdminDbWithTimeout(
+          () => firebaseAdminDb!.collection("users").doc(String(options.recipientUserId)).get(),
+          2000
+        );
+        if (uSnap && uSnap.exists && uSnap.data()?.email) {
+          resolvedEmail = String(uSnap.data()?.email).trim().toLowerCase();
         }
-      } catch {
-        // Ignore lookup warnings
       }
     }
 
@@ -4179,9 +4211,11 @@ const FALLBACK_BANKS = [
     }
   }
 
-  setInterval(() => {
-    releaseEligiblePayouts().catch(err => console.error("Escrow background scan failure:", err));
-  }, 5 * 60 * 1000);
+  if (process.env.VERCEL !== "1" && !process.env.NOW_REGION) {
+    setInterval(() => {
+      releaseEligiblePayouts().catch(err => console.error("Escrow background scan failure:", err));
+    }, 5 * 60 * 1000);
+  }
 
   app.post("/api/paystack/connect-recipient", async (req, res) => {
     const { userId, bankName, accountNumber, accountName, businessName, email, percentageCharge, bankCode: providedBankCode } = req.body;
@@ -4959,20 +4993,22 @@ const FALLBACK_BANKS = [
         });
       }
 
-      // 2. Collect all Firestore user & logistics UIDs
+      // 2. Collect all Firestore user & logistics UIDs (guarded with short timeout so quota backoff never hangs)
       const firestoreUids = new Set<string>(candidateUids);
+      let dbReadSucceeded = false;
       if (firebaseAdminDb && isAdminDbAuthorized) {
-        try {
-          const [uSnap, lSnap] = await Promise.all([
-            firebaseAdminDb.collection("users").get(),
-            firebaseAdminDb.collection("logistics_companies").get()
-          ]);
+        const snaps = await runAdminDbWithTimeout(
+          () => Promise.all([
+            firebaseAdminDb!.collection("users").get(),
+            firebaseAdminDb!.collection("logistics_companies").get()
+          ]),
+          3500
+        );
+        if (snaps) {
+          const [uSnap, lSnap] = snaps;
           uSnap.docs.forEach(d => firestoreUids.add(d.id));
           lSnap.docs.forEach(d => firestoreUids.add(d.id));
-        } catch (dbErr: any) {
-          if (dbErr?.code === 7 || dbErr?.message?.includes("PERMISSION_DENIED")) {
-            isAdminDbAuthorized = false;
-          }
+          dbReadSucceeded = true;
         }
       }
 
@@ -4980,7 +5016,7 @@ const FALLBACK_BANKS = [
       let serverPurgedCount = 0;
 
       // 3. If server-side Admin Firestore is authorized, cascade-purge every deleted Auth account immediately
-      if (deletedAuthUids.length > 0 && firebaseAdminDb && isAdminDbAuthorized) {
+      if (deletedAuthUids.length > 0 && firebaseAdminDb && isAdminDbAuthorized && (dbReadSucceeded || Date.now() >= firestoreQuotaBackoffUntil)) {
         const collectionsToPurge = [
           { name: "products", field: "sellerId" },
           { name: "products", field: "userId" },
@@ -5005,6 +5041,28 @@ const FALLBACK_BANKS = [
 
         for (const uid of deletedAuthUids) {
           try {
+            // Delete reviews and wishlists attached to products owned by this user before deleting the products
+            const [sellerProdSnap, userProdSnap] = await Promise.all([
+              firebaseAdminDb.collection("products").where("sellerId", "==", uid).get().catch(() => null),
+              firebaseAdminDb.collection("products").where("userId", "==", uid).get().catch(() => null)
+            ]);
+            const prodIds = new Set<string>();
+            sellerProdSnap?.docs.forEach(d => prodIds.add(d.id));
+            userProdSnap?.docs.forEach(d => prodIds.add(d.id));
+            for (const prodId of prodIds) {
+              const [prodRevSnap, prodWishSnap] = await Promise.all([
+                firebaseAdminDb.collection("reviews").where("productId", "==", prodId).get().catch(() => null),
+                firebaseAdminDb.collection("wishlists").where("productId", "==", prodId).get().catch(() => null)
+              ]);
+              for (const snap of [prodRevSnap, prodWishSnap]) {
+                if (snap && snap.size > 0) {
+                  const batch = firebaseAdminDb.batch();
+                  snap.docs.forEach(docSnap => batch.delete(docSnap.ref));
+                  await batch.commit();
+                }
+              }
+            }
+
             for (const item of collectionsToPurge) {
               const snap = await firebaseAdminDb.collection(item.name).where(item.field, "==", uid).get().catch(() => null);
               if (snap && snap.size > 0) {
@@ -5013,7 +5071,28 @@ const FALLBACK_BANKS = [
                 await batch.commit();
               }
             }
+
+            // Delete chats & messages where user participated
+            const chatsSnap = await firebaseAdminDb.collection("chats").where("participants", "array-contains", uid).get().catch(() => null);
+            if (chatsSnap && chatsSnap.size > 0) {
+              for (const chatDoc of chatsSnap.docs) {
+                const msgSnap = await chatDoc.ref.collection("messages").get().catch(() => null);
+                if (msgSnap && msgSnap.size > 0) {
+                  const batch = firebaseAdminDb.batch();
+                  msgSnap.docs.forEach(m => batch.delete(m.ref));
+                  await batch.commit();
+                }
+                await chatDoc.ref.delete().catch(() => {});
+              }
+            }
+
             await firebaseAdminDb.collection("logistics_companies").doc(uid).delete().catch(() => {});
+            const compByUidSnap = await firebaseAdminDb.collection("logistics_companies").where("userId", "==", uid).get().catch(() => null);
+            if (compByUidSnap && compByUidSnap.size > 0) {
+              const batch = firebaseAdminDb.batch();
+              compByUidSnap.docs.forEach(cDoc => batch.delete(cDoc.ref));
+              await batch.commit();
+            }
             await firebaseAdminDb.collection("users").doc(uid).delete().catch(() => {});
             serverPurgedCount++;
           } catch (purgeErr) {
@@ -6292,12 +6371,28 @@ const FALLBACK_BANKS = [
   });
 
 
-  // Serve static assets from public directory
-  app.use(express.static(path.join(process.cwd(), "public")));
+  // Ensure any unhandled Express/middleware error returns clean JSON instead of crashing
+  app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error("[EXPRESS ERROR]", err);
+    if (!res.headersSent) {
+      res.status(err?.status || 500).json({
+        success: false,
+        sent: false,
+        error: err?.message || "Internal server error"
+      });
+    }
+  });
+
+  // Serve static assets from public directory when running standalone
+  if (process.env.VERCEL !== "1" && !process.env.NOW_REGION) {
+    app.use(express.static(path.join(process.cwd(), "public")));
+  }
 
   export async function startServer() {
-    // Vite middleware for development
-    if (process.env.NODE_ENV !== "production") {
+    // Vite middleware for development (loaded dynamically so Vercel production never loads Vite)
+    if (process.env.NODE_ENV !== "production" && process.env.VERCEL !== "1" && !process.env.NOW_REGION) {
+      const vitePkg = "vite";
+      const { createServer: createViteServer } = await import(/* @vite-ignore */ vitePkg);
       const vite = await createViteServer({
         server: { middlewareMode: true },
         appType: "spa",

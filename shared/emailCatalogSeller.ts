@@ -1,4 +1,4 @@
-import { EmailTemplateDefinition } from "./emailTypes.ts";
+import { EmailTemplateDefinition } from "./emailTypes.js";
 
 export const SELLER_EMAIL_TEMPLATES: EmailTemplateDefinition[] = [
   // ==================== ACCOUNT AND ONBOARDING (1-10) ====================

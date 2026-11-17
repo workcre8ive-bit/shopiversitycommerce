@@ -34,11 +34,16 @@ export default async function handler(req: any, res: any) {
   const candidateKeys = [
     req.body?.apiKey,
     req.query?.apiKey,
+    process.env.BREVO_REST_API_KEY,
+    process.env.BREVO_API_KEY_V3,
+    process.env.BREVO_V3_API_KEY,
     process.env.BREVO_API_KEY,
     process.env.brevo_api_key,
     process.env.BREVO_KEY,
     process.env.brevo_key,
     process.env.BREVO_SMTP_KEY,
+    process.env.brevo_smtp_key,
+    process.env.VITE_BREVO_REST_API_KEY,
     process.env.VITE_BREVO_API_KEY
   ]
     .map(k => (typeof k === "string" ? k.trim() : ""))
@@ -141,7 +146,16 @@ export default async function handler(req: any, res: any) {
       process.env.brevo_smtp_user ||
       process.env.BREVO_SMTP_LOGIN ||
       process.env.brevo_smtp_login ||
+      process.env.BREVO_SMTP_EMAIL ||
+      process.env.brevo_smtp_email ||
+      process.env.BREVO_USER ||
+      process.env.brevo_user ||
+      process.env.BREVO_LOGIN ||
+      process.env.brevo_login ||
+      process.env.SMTP_LOGIN ||
+      process.env.smtp_login ||
       process.env.SMTP_USER ||
+      process.env.VITE_BREVO_SMTP_USER ||
       ""
     ).trim();
 

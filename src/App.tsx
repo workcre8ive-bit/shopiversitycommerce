@@ -1173,6 +1173,7 @@ export default function App() {
     });
 
     // Live Watchdog: Detect immediately when the currently signed-in account is deleted in Firebase Console -> Authentication -> Users
+    // (Uses Identity Toolkit accounts:lookup — zero Firestore reads; full offline audit runs on-demand via Admin Sync Firebase Auth button)
     const runActiveAuthCheck = () => {
       const activeAuthUser = auth.currentUser;
       if (activeAuthUser) {
@@ -1919,12 +1920,19 @@ export default function App() {
                       setPendingVerificationEmail("");
                     }
                   }}
-                  onGoToMarket={(preferredRole?: "buyer" | "seller") => {
+                  onGoToMarket={(preferredRole?: "buyer" | "seller", verifiedProfile?: UserProfile) => {
                     isVerifyingNewSignupRef.current = false;
                     setIsVerifyingNewSignup(false);
                     setPendingVerificationEmail("");
+                    setNeedsProfile(false);
+                    if (verifiedProfile) {
+                      setCurrentUser(verifiedProfile);
+                    }
                     const savedRole = typeof window !== "undefined" ? sessionStorage.getItem("shopiversity_chosen_role") : null;
-                    const targetRole = preferredRole || (savedRole === "seller" ? "seller" : (currentUser?.role === "seller" ? "seller" : "buyer"));
+                    const explicitRole = preferredRole === "seller" || preferredRole === "buyer" ? preferredRole : undefined;
+                    const targetRole = explicitRole ||
+                      (verifiedProfile?.role === "seller" || verifiedProfile?.activeRole === "seller" ? "seller" : undefined) ||
+                      (savedRole === "seller" ? "seller" : (currentUser?.role === "seller" ? "seller" : "buyer"));
                     if (targetRole === "seller") {
                       setActiveRole("seller");
                       setActiveTab("dashboard");
@@ -1932,6 +1940,7 @@ export default function App() {
                       setActiveRole("buyer");
                       setActiveTab("market");
                     }
+                    initialTabSet.current = true;
                     setViewingProduct(null);
                     setViewingSellerId(null);
                     setFilterCategory("All");

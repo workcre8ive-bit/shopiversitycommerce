@@ -100,7 +100,7 @@ export default function AuthPage({
   initialRole?: "buyer" | "seller";
   onRoleChange?: (role: "buyer" | "seller") => void;
   onModeChange?: (mode: "login" | "signup") => void;
-  onGoToMarket?: (targetRole?: "buyer" | "seller") => void;
+  onGoToMarket?: (targetRole?: "buyer" | "seller", verifiedProfile?: UserProfile) => void;
   onNavigateToLogistics?: () => void;
   onVerificationScreenChange?: (isVerifying: boolean) => void;
   setActiveTab?: (tab: string) => void;
@@ -111,20 +111,21 @@ export default function AuthPage({
     return saved === "seller" ? "seller" : (initialRole || "buyer");
   });
 
-  const handleGoToMarket = (targetRole?: "buyer" | "seller") => {
+  const handleGoToMarket = (targetRole?: "buyer" | "seller" | unknown, verifiedProfile?: UserProfile) => {
+    const explicitRole = targetRole === "seller" || targetRole === "buyer" ? targetRole : undefined;
     const savedRole = typeof window !== "undefined" ? sessionStorage.getItem("shopiversity_chosen_role") : null;
-    const chosenRole = targetRole || (savedRole === "seller" ? "seller" : (role === "seller" ? "seller" : "buyer"));
-    
+    const chosenRole: "buyer" | "seller" =
+      explicitRole ||
+      (verifiedProfile?.role === "seller" || verifiedProfile?.activeRole === "seller" ? "seller" : undefined) ||
+      (savedRole === "seller" ? "seller" : (role === "seller" ? "seller" : "buyer"));
+
     if (onVerificationScreenChange) {
       onVerificationScreenChange(false);
     }
-    if (chosenRole === "seller" && setActiveTab) {
-      setActiveTab("dashboard");
-    } else if (setActiveTab) {
-      setActiveTab("market");
-    }
     if (onGoToMarket) {
-      onGoToMarket(chosenRole);
+      onGoToMarket(chosenRole, verifiedProfile);
+    } else if (setActiveTab) {
+      setActiveTab(chosenRole === "seller" ? "dashboard" : "market");
     } else {
       window.location.href = chosenRole === "seller" ? "/?tab=dashboard" : "/";
     }
@@ -553,6 +554,30 @@ export default function AuthPage({
   const [verifyingOtp, setVerifyingOtp] = React.useState<boolean>(false);
   const [resendCooldown, setResendCooldown] = React.useState<number>(0);
   const [brevoNotice, setBrevoNotice] = React.useState<string>("");
+  const [verifiedTargetRole, setVerifiedTargetRole] = React.useState<"buyer" | "seller" | null>(null);
+  const [verifiedUserProfile, setVerifiedUserProfile] = React.useState<UserProfile | null>(null);
+  const verifyRedirectTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  React.useEffect(() => {
+    return () => {
+      if (verifyRedirectTimerRef.current) {
+        clearTimeout(verifyRedirectTimerRef.current);
+      }
+    };
+  }, []);
+
+  const parseVerificationJson = async (res: Response): Promise<{ ok: boolean; status: number; data: any; errorMessage?: string }> => {
+    const raw = await res.text().catch(() => "");
+    let parsed: any = {};
+    try {
+      parsed = raw ? JSON.parse(raw) : {};
+    } catch {
+      parsed = {};
+    }
+    const cleanText = raw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    const errorMessage = parsed?.error || (!res.ok ? `Email service error (HTTP ${res.status})${cleanText ? `: ${cleanText.slice(0, 140)}` : ""}` : undefined);
+    return { ok: res.ok, status: res.status, data: parsed, errorMessage };
+  };
 
   // Automatically activate 6-digit verification screen and dispatch Brevo code if user is authenticated but unverified
   React.useEffect(() => {
@@ -602,9 +627,9 @@ export default function AuthPage({
             role: role === "seller" ? "seller" : "buyer"
           })
         }).then(async res => {
-          const data = await res.json().catch(() => ({}));
+          const { ok, data, errorMessage } = await parseVerificationJson(res);
           setEnteredOtpCode("");
-          if (res.ok && data.sent) {
+          if (ok && data.sent) {
             if (data.verificationToken) {
               setVerificationToken(data.verificationToken);
               if (typeof window !== "undefined") {
@@ -623,7 +648,7 @@ export default function AuthPage({
               sessionStorage.removeItem(`shopiversity_verify_notice_${cleanTarget}`);
             }
             setBrevoNotice("");
-            setError(data.error || `Could not send verification code to ${cleanTarget} via Brevo. Please tap Resend Code.`);
+            setError(errorMessage || `Could not send verification code to ${cleanTarget} via Brevo. Please tap Resend Code.`);
           }
         }).catch(err => {
           console.warn("Auto verification dispatch error:", err);
@@ -1270,8 +1295,8 @@ export default function AuthPage({
               userName: fullName || effectiveName || username
             })
           });
-          const vData = await vRes.json().catch(() => ({}));
-          if (vRes.ok && vData.sent) {
+          const { ok: vOk, data: vData, errorMessage } = await parseVerificationJson(vRes);
+          if (vOk && vData.sent) {
             nextToken = vData.verificationToken || "";
             noticeMessage = `A 6-digit verification code has been sent to ${cleanEmail} via Brevo. Check your Inbox, Spam/Junk, and Promotions folders and enter it below.`;
             if (typeof window !== "undefined") {
@@ -1285,7 +1310,7 @@ export default function AuthPage({
               sessionStorage.removeItem(`shopiversity_otp_sent_${cleanEmail}`);
               sessionStorage.removeItem(`shopiversity_verify_notice_${cleanEmail}`);
             }
-            dispatchError = vData.error || `Failed to send verification code to ${cleanEmail} via Brevo. Please click Resend Code.`;
+            dispatchError = errorMessage || `Failed to send verification code to ${cleanEmail} via Brevo. Please click Resend Code.`;
           }
         } catch (vErr: any) {
           console.warn("Email verification API dispatch notice:", vErr);
@@ -1389,15 +1414,15 @@ export default function AuthPage({
           userName: fullName || username || currentAuthUser?.displayName || "Student"
         })
       });
-      const vData = await vRes.json().catch(() => ({}));
+      const { ok: vOk, data: vData, errorMessage } = await parseVerificationJson(vRes);
       setEnteredOtpCode("");
-      if (!vRes.ok || !vData.sent) {
+      if (!vOk || !vData.sent) {
         if (typeof window !== "undefined") {
           sessionStorage.removeItem(`shopiversity_otp_sent_${targetEmail}`);
           sessionStorage.removeItem(`shopiversity_verify_notice_${targetEmail}`);
         }
         setBrevoNotice("");
-        setError(vData.error || `Failed to resend verification email to ${targetEmail} via Brevo. Please try again.`);
+        setError(errorMessage || `Failed to resend verification email to ${targetEmail} via Brevo. Please try again.`);
         return;
       }
       if (vData.verificationToken) {
@@ -1584,9 +1609,9 @@ export default function AuthPage({
           userName: activeUserDisplayName
         })
       });
-      const vData = await vRes.json().catch(() => ({}));
+      const { ok: vOk, data: vData, errorMessage } = await parseVerificationJson(vRes);
 
-      if (vRes.ok && vData.sent && vData.verificationToken) {
+      if (vOk && vData.sent && vData.verificationToken) {
         setVerificationToken(vData.verificationToken);
         const nextNotice = `Email updated to ${trimmed}! A new 6-digit verification code has been sent to ${trimmed} via Brevo. Check your Inbox, Spam/Junk, and Promotions folders.`;
         if (typeof window !== "undefined") {
@@ -1601,7 +1626,7 @@ export default function AuthPage({
           sessionStorage.removeItem(`shopiversity_verify_notice_${trimmed}`);
         }
         setBrevoNotice("");
-        setError(vData.error || `Email updated to ${trimmed}, but Brevo delivery failed. Please tap Resend Code.`);
+        setError(errorMessage || `Email updated to ${trimmed}, but Brevo delivery failed. Please tap Resend Code.`);
       }
 
       setResendCooldown(30);
@@ -1667,10 +1692,10 @@ export default function AuthPage({
           userName: fullName || username || currentAuthUser?.displayName || "Student"
         })
       });
-      const vData = await vRes.json().catch(() => ({}));
+      const { ok: vOk, data: vData, errorMessage } = await parseVerificationJson(vRes);
       setEnteredOtpCode("");
 
-      if (vRes.ok && vData.sent) {
+      if (vOk && vData.sent) {
         const token = vData.verificationToken || "";
         setVerificationToken(token);
         const nextNotice = `6-digit verification code sent to ${targetEmail} via Brevo! Please check your Inbox, Spam/Junk, and Promotions folders.`;
@@ -1689,7 +1714,7 @@ export default function AuthPage({
           sessionStorage.removeItem(`shopiversity_verify_notice_${targetEmail}`);
         }
         setBrevoNotice("");
-        setError(vData.error || `Failed to send verification code to ${targetEmail} via Brevo. Please try Resend Code.`);
+        setError(errorMessage || `Failed to send verification code to ${targetEmail} via Brevo. Please try Resend Code.`);
       }
 
       setEmail(targetEmail);
@@ -1812,31 +1837,135 @@ export default function AuthPage({
         return;
       }
 
-      // Success! Update Firestore profile
-      let confirmedRole = role;
-      const currentUid = auth.currentUser?.uid;
-      if (currentUid) {
+      // Ensure we have an active Firebase Auth user so Firestore update & dashboard sign-in can complete
+      if (!auth.currentUser && targetEmail && password) {
         try {
-          const uRef = doc(db, "users", currentUid);
-          const uSnap = await getDoc(uRef);
-          if (uSnap.exists() && uSnap.data()?.role === "seller") {
+          await signInWithEmailAndPassword(auth, targetEmail, password);
+        } catch (reAuthErr) {
+          console.warn("Re-auth during verification notice:", reAuthErr);
+        }
+      }
+
+      const activeAuthUser = auth.currentUser;
+      const currentUid = activeAuthUser?.uid;
+      if (!currentUid) {
+        if (typeof window !== "undefined") {
+          sessionStorage.removeItem("shopiversity_verifying_email");
+          sessionStorage.removeItem("shopiversity_in_signup");
+          sessionStorage.removeItem("shopiversity_google_pending");
+          sessionStorage.setItem("shopiversity_auth_mode", "login");
+          if (targetEmail) {
+            sessionStorage.removeItem(`shopiversity_verify_token_${targetEmail}`);
+            sessionStorage.removeItem(`shopiversity_otp_sent_${targetEmail}`);
+            sessionStorage.removeItem(`shopiversity_verify_notice_${targetEmail}`);
+          }
+        }
+        setIsVerifyingEmail(false);
+        setIsVerifyingPhone(false);
+        setIsVerificationChoice(false);
+        if (onVerificationScreenChange) {
+          onVerificationScreenChange(false);
+        }
+        switchAuthMode(true);
+        if (targetEmail) setEmail(targetEmail);
+        setError("Your 6-digit code was verified, but your session expired. Please sign in with your email and password to open your dashboard.");
+        setVerifyingOtp(false);
+        setLoading(false);
+        return;
+      }
+
+      // Success! Update Firestore profile and hydrate verified profile synchronously
+      let confirmedRole: "buyer" | "seller" =
+        role === "seller" || (typeof window !== "undefined" && sessionStorage.getItem("shopiversity_chosen_role") === "seller")
+          ? "seller"
+          : "buyer";
+      let existingProfileData: Partial<UserProfile> | null = null;
+
+      try {
+        const uRef = doc(db, "users", currentUid);
+        const uSnap = await getDoc(uRef);
+        if (uSnap.exists()) {
+          existingProfileData = uSnap.data() as Partial<UserProfile>;
+          if (existingProfileData.role === "seller" || existingProfileData.activeRole === "seller") {
             confirmedRole = "seller";
+          } else if (existingProfileData.role === "buyer") {
+            confirmedRole = "buyer";
           }
           await updateDoc(uRef, {
             isVerified: true,
             emailVerified: true,
             ...(targetEmail ? { email: targetEmail } : {})
           });
-        } catch (uErr) {
-          console.warn("User doc verification update notice:", uErr);
+        } else {
+          const fallbackName = fullName.trim() || businessName.trim() || activeAuthUser?.displayName || (targetEmail ? targetEmail.split("@")[0] : "Student");
+          const createdProfile: UserProfile = {
+            uid: currentUid,
+            displayName: fallbackName,
+            businessName: confirmedRole === "seller" ? (businessName.trim() || fallbackName) : "",
+            username: username || generateSmartUsername(fallbackName),
+            email: targetEmail || (activeAuthUser?.email || "").toLowerCase(),
+            phoneNumber: activeAuthUser?.phoneNumber || "",
+            gender: gender || "male",
+            role: confirmedRole,
+            activeRole: confirmedRole,
+            schoolType: "",
+            schoolName: "",
+            state: "",
+            city: "",
+            deliveryAddress: "",
+            isVerified: true,
+            isSuspended: false,
+            reportCount: 0,
+            createdAt: new Date().toISOString(),
+            verificationIdUrl: verificationIdUrl || "",
+            profileCompleted: false
+          };
+          await setDoc(uRef, createdProfile, { merge: true });
+          existingProfileData = createdProfile;
         }
+      } catch (uErr: any) {
+        const rawErrMsg = String(uErr?.message || uErr?.code || "");
+        const lowerErrMsg = rawErrMsg.toLowerCase();
+        if (lowerErrMsg.includes("quota") || lowerErrMsg.includes("resource-exhausted")) {
+          setError(
+            "Your 6-digit code was verified, but Firestore's free daily quota is currently exceeded, so your account profile cannot be loaded or updated to enter the dashboard. Upgrade your Firestore plan or wait for the daily quota reset."
+          );
+        } else if (lowerErrMsg.includes("permission-denied") || lowerErrMsg.includes("insufficient permissions")) {
+          setError("Your 6-digit code was verified, but Firestore denied permission to update your account profile. Please contact support.");
+        } else {
+          setError(`Your 6-digit code matched, but we could not complete signing you into your dashboard: ${getFirestoreErrorMessage(uErr)}`);
+        }
+        setVerifyingOtp(false);
+        setLoading(false);
+        return;
       }
+
+      const finalRole: "buyer" | "seller" =
+        existingProfileData?.role === "seller" || existingProfileData?.activeRole === "seller"
+          ? "seller"
+          : confirmedRole;
+
+      const hydratedVerifiedProfile: UserProfile = {
+        uid: currentUid,
+        displayName: existingProfileData?.displayName || fullName || businessName || activeAuthUser?.displayName || "Student",
+        username: existingProfileData?.username || username || generateSmartUsername(fullName || "User"),
+        email: targetEmail || existingProfileData?.email || (activeAuthUser?.email || "").toLowerCase(),
+        phoneNumber: existingProfileData?.phoneNumber || activeAuthUser?.phoneNumber || "",
+        role: (existingProfileData?.role as any) || finalRole,
+        activeRole: (existingProfileData?.activeRole as any) || finalRole,
+        isSuspended: Boolean(existingProfileData?.isSuspended),
+        reportCount: Number(existingProfileData?.reportCount || 0),
+        createdAt: existingProfileData?.createdAt || new Date().toISOString(),
+        ...existingProfileData,
+        isVerified: true
+      } as UserProfile;
 
       if (typeof window !== "undefined") {
         sessionStorage.removeItem("shopiversity_verifying_email");
         sessionStorage.removeItem("shopiversity_in_signup");
         sessionStorage.removeItem("shopiversity_google_pending");
         sessionStorage.removeItem("shopiversity_auth_mode");
+        sessionStorage.setItem("shopiversity_chosen_role", finalRole);
         if (targetEmail) {
           sessionStorage.removeItem(`shopiversity_verify_token_${targetEmail}`);
           sessionStorage.removeItem(`shopiversity_otp_sent_${targetEmail}`);
@@ -1844,12 +1973,15 @@ export default function AuthPage({
         }
       }
 
+      setRole(finalRole);
+      setVerifiedTargetRole(finalRole);
+      setVerifiedUserProfile(hydratedVerifiedProfile);
       setIsVerificationSuccess(true);
       setError("");
 
       // Dispatch B-03 Verification Success & B-01 / S-01 Welcome Email via Brevo
-      const finalIsSeller = confirmedRole === "seller" || (typeof window !== "undefined" && sessionStorage.getItem("shopiversity_chosen_role") === "seller");
-      const welcomeName = fullName || username || auth.currentUser?.displayName || "Student";
+      const finalIsSeller = finalRole === "seller";
+      const welcomeName = hydratedVerifiedProfile.displayName || fullName || username || "Student";
       void triggerTemplatedEmail({
         templateId: "buyer_email_verified",
         recipientEmail: targetEmail,
@@ -1875,17 +2007,16 @@ export default function AuthPage({
         idempotencyKey: `welcome_${finalIsSeller ? "seller" : "buyer"}_${currentUid || targetEmail}`
       });
 
-      setTimeout(() => {
+      if (verifyRedirectTimerRef.current) {
+        clearTimeout(verifyRedirectTimerRef.current);
+      }
+      verifyRedirectTimerRef.current = setTimeout(() => {
+        setIsVerificationSuccess(false);
         setIsVerifyingEmail(false);
         setIsVerifyingPhone(false);
         setIsVerificationChoice(false);
-        if (onVerificationScreenChange) {
-          onVerificationScreenChange(false);
-        }
-        const savedRole = typeof window !== "undefined" ? sessionStorage.getItem("shopiversity_chosen_role") : null;
-        const finalRole = savedRole === "seller" || confirmedRole === "seller" ? "seller" : "buyer";
-        handleGoToMarket(finalRole);
-      }, 1200);
+        handleGoToMarket(finalRole, hydratedVerifiedProfile);
+      }, 900);
     } catch (err: any) {
       console.error("Verification error:", err);
       setError("Failed to verify code. Please try again.");
@@ -2064,8 +2195,8 @@ export default function AuthPage({
             role: chosenRole
           })
         });
-        const vData = await vRes.json().catch(() => ({}));
-        if (vRes.ok && vData.sent) {
+        const { ok: vOk, data: vData, errorMessage } = await parseVerificationJson(vRes);
+        if (vOk && vData.sent) {
           nextToken = vData.verificationToken || "";
           noticeMessage = `A 6-digit verification code has been dispatched to ${cleanUserEmail} via Brevo! Check your Inbox, Spam/Junk, and Promotions folders.`;
           if (typeof window !== "undefined") {
@@ -2076,7 +2207,7 @@ export default function AuthPage({
             sessionStorage.removeItem(`shopiversity_otp_sent_${cleanUserEmail}`);
             sessionStorage.removeItem(`shopiversity_verify_notice_${cleanUserEmail}`);
           }
-          dispatchError = vData.error || `Failed to dispatch verification code to ${cleanUserEmail} via Brevo. Please click Resend Code.`;
+          dispatchError = errorMessage || `Failed to dispatch verification code to ${cleanUserEmail} via Brevo. Please click Resend Code.`;
         }
       } catch (vErr) {
         console.warn("Google email verification API dispatch notice:", vErr);
@@ -2147,8 +2278,8 @@ export default function AuthPage({
               role: accountRole
             })
           });
-          const vData = await vRes.json().catch(() => ({}));
-          if (vRes.ok && vData.sent) {
+          const { ok: vOk, data: vData, errorMessage } = await parseVerificationJson(vRes);
+          if (vOk && vData.sent) {
             nextToken = vData.verificationToken || "";
             noticeMessage = `A 6-digit verification code has been sent to ${cleanUserEmail} via Brevo! Check your Inbox, Spam/Junk, and Promotions folders.`;
             if (typeof window !== "undefined") {
@@ -2159,7 +2290,7 @@ export default function AuthPage({
               sessionStorage.removeItem(`shopiversity_otp_sent_${cleanUserEmail}`);
               sessionStorage.removeItem(`shopiversity_verify_notice_${cleanUserEmail}`);
             }
-            dispatchError = vData.error || `Failed to send verification code to ${cleanUserEmail} via Brevo. Please click Resend Code.`;
+            dispatchError = errorMessage || `Failed to send verification code to ${cleanUserEmail} via Brevo. Please click Resend Code.`;
           }
         } catch (vErr) {
           console.warn("Google verification dispatch notice:", vErr);
@@ -2669,15 +2800,18 @@ export default function AuthPage({
                 </div>
                 <button 
                   onClick={() => {
+                    if (verifyRedirectTimerRef.current) {
+                      clearTimeout(verifyRedirectTimerRef.current);
+                    }
                     setIsVerificationSuccess(false);
                     setIsVerificationChoice(false);
                     setIsVerifyingEmail(false);
                     setIsVerifyingPhone(false);
-                    handleGoToMarket();
+                    handleGoToMarket(verifiedTargetRole || role, verifiedUserProfile || undefined);
                   }}
                   className="w-full h-11 bg-brand-gradient text-white rounded-xl font-bold text-xs shadow-md transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-95 border-none"
                 >
-                  Continue to Marketplace →
+                  {(verifiedTargetRole || role) === "seller" ? "Continue to Vendor Dashboard →" : "Continue to Marketplace →"}
                 </button>
               </motion.div>
             ) : isGoogleSellerVerifying ? (
@@ -3332,7 +3466,7 @@ export default function AuthPage({
                   <div className="flex items-center gap-1.5 shrink-0">
                     <button
                       type="button"
-                      onClick={handleGoToMarket}
+                      onClick={() => handleGoToMarket()}
                       className="min-h-[34px] flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 transition-all bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-800 rounded-lg cursor-pointer touch-manipulation active:scale-95 whitespace-nowrap shrink-0"
                       title="Back to Home Page"
                       id="back-to-home-auth-header"
@@ -3622,7 +3756,7 @@ export default function AuthPage({
                     <div className="pt-2 flex flex-col items-center gap-1.5">
                       <button 
                         type="button"
-                        onClick={handleGoToMarket}
+                        onClick={() => handleGoToMarket()}
                         className="text-xs font-bold text-orange-600 dark:text-orange-400 hover:underline cursor-pointer"
                       >
                         You're signed in as {auth.currentUser.email || "current user"} — Enter Marketplace →

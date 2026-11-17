@@ -108,6 +108,7 @@ import { cn, getOrderSellerHandoverPin } from "../lib/utils";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
 import { compressImage } from "../lib/imageUtils";
 import { NIGERIAN_STATES, STATE_CITIES, NIGERIAN_LGAS, CITY_STREETS, POPULAR_SCHOOL_PICKUP_LOCATIONS, formatAvailability } from "../constants/locations";
+import { getSchoolsByState, findSchoolByName } from "../constants/schools";
 import ProfileSettings from "./ProfileSettings";
 import StorefrontSettingsTab from "./StorefrontSettingsTab";
 import ReceiptModal from "./ReceiptModal";
@@ -4134,11 +4135,21 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
   const [manualBusinessAddress, setManualBusinessAddress] = React.useState(editingProduct?.businessAddress || "");
   
   // Structured School Pickup Inputs
+  const OTHER_SCHOOL_OPTION = "✍️ Other / Unlisted School in this State...";
   const [addrCountry, setAddrCountry] = React.useState("Nigeria");
   const [addrState, setAddrState] = React.useState(editingProduct?.pickupState || "");
+  const [addrSchool, setAddrSchool] = React.useState(editingProduct?.pickupSchool || "");
+  const [addrSchoolCustom, setAddrSchoolCustom] = React.useState("");
   const [addrLga, setAddrLga] = React.useState(editingProduct?.pickupLga || "");
   const [schoolAddress, setSchoolAddress] = React.useState(
     editingProduct?.schoolAddress || editingProduct?.businessAddress || ""
+  );
+
+  const stateSchools = React.useMemo(() => getSchoolsByState(addrState), [addrState]);
+  const matchedSchoolObj = React.useMemo(() => findSchoolByName(addrSchool), [addrSchool]);
+  const resolvedPickupSchool = React.useMemo(
+    () => (addrSchool === OTHER_SCHOOL_OPTION ? addrSchoolCustom.trim() : addrSchool.trim()),
+    [addrSchool, addrSchoolCustom]
   );
   const [schoolLocationPreset, setSchoolLocationPreset] = React.useState<string>(
     editingProduct?.schoolLocation && POPULAR_SCHOOL_PICKUP_LOCATIONS.includes(editingProduct.schoolLocation)
@@ -4215,7 +4226,20 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
   React.useEffect(() => {
     if (editingProduct) {
       if (editingProduct.pickupState) setAddrState(editingProduct.pickupState);
-      if (editingProduct.pickupLga) setAddrLga(editingProduct.pickupLga);
+      if (editingProduct.pickupSchool) {
+        const matched = findSchoolByName(editingProduct.pickupSchool);
+        if (matched) {
+          setAddrSchool(matched.name);
+          setAddrSchoolCustom("");
+          setAddrLga(editingProduct.pickupLga || matched.lga);
+        } else {
+          setAddrSchool(OTHER_SCHOOL_OPTION);
+          setAddrSchoolCustom(editingProduct.pickupSchool);
+          if (editingProduct.pickupLga) setAddrLga(editingProduct.pickupLga);
+        }
+      } else if (editingProduct.pickupLga) {
+        setAddrLga(editingProduct.pickupLga);
+      }
       if (editingProduct.schoolAddress) setSchoolAddress(editingProduct.schoolAddress);
       if (editingProduct.schoolLocation) {
         if (POPULAR_SCHOOL_PICKUP_LOCATIONS.includes(editingProduct.schoolLocation)) {
@@ -4230,10 +4254,22 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
         setPickupPolicyAccepted(editingProduct.pickupPolicyAccepted);
       }
     } else if (currentUser) {
-      if (currentUser.state && NIGERIAN_STATES.includes(currentUser.state)) {
-        setAddrState(currentUser.state);
-        const lgas = NIGERIAN_LGAS[currentUser.state] || [];
-        if (lgas.length > 0) setAddrLga(lgas[0]);
+      const normalizedUserState =
+        currentUser.state && currentUser.state.toLowerCase() === "fct"
+          ? "FCT - Abuja"
+          : currentUser.state;
+      if (normalizedUserState && NIGERIAN_STATES.includes(normalizedUserState)) {
+        setAddrState(normalizedUserState);
+        const userSchoolMatch = findSchoolByName(currentUser.campus);
+        if (userSchoolMatch) {
+          setAddrSchool(userSchoolMatch.name);
+          setAddrSchoolCustom("");
+          setAddrLga(userSchoolMatch.lga);
+        } else {
+          setAddrSchool("");
+          setAddrSchoolCustom("");
+          setAddrLga("");
+        }
       }
       if (currentUser.deliveryAddress) {
         setSchoolAddress(currentUser.deliveryAddress);
@@ -4249,6 +4285,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
     const parts = [
       locName,
       schoolAddress,
+      resolvedPickupSchool,
       addrLga ? `${addrLga} LGA` : "",
       addrState ? `${addrState} State` : "",
       "Nigeria"
@@ -4256,7 +4293,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
     if (parts.length > 0) {
       setLocation(parts.join(", "));
     }
-  }, [addrState, addrLga, schoolAddress, schoolLocationPreset, schoolLocationCustom]);
+  }, [addrState, addrLga, resolvedPickupSchool, schoolAddress, schoolLocationPreset, schoolLocationCustom]);
 
   const [images, setImages] = React.useState<string[]>(editingProduct?.imageUrls || (editingProduct?.imageUrl ? [editingProduct.imageUrl] : []));
   
@@ -4634,8 +4671,16 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
         return;
       }
       if (deliveryOptions.pickup) {
-        if (!addrState || !addrLga) {
-          setError("Please select the State and Local Government Area (LGA) for campus pickup.");
+        if (!addrState) {
+          setError("Please select the State for campus pickup.");
+          return;
+        }
+        if (!resolvedPickupSchool) {
+          setError("Please select or enter the School / Campus for pickup.");
+          return;
+        }
+        if (!addrLga) {
+          setError("Please select the Local Government Area (LGA) for campus pickup.");
           return;
         }
         const finalSchoolLoc = schoolLocationPreset === "✍️ Other / Custom School Location..." 
@@ -4671,6 +4716,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
     const computedPickupAddress = [
       finalSchoolLocation,
       schoolAddress.trim(),
+      resolvedPickupSchool,
       addrLga ? `${addrLga} LGA` : "",
       addrState ? `${addrState} State` : "",
       "Nigeria"
@@ -4804,7 +4850,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
         priceBefore: parseFloat(priceBefore) || 0,
         collectionType: collectionType.trim(),
         businessAddress: manualBusinessAddress.trim(),
-        pickupSchool: currentUser?.campus || finalSchoolLocation || null,
+        pickupSchool: resolvedPickupSchool || currentUser?.campus || finalSchoolLocation || null,
         
         // Dynamic Specific Fields
         digitalFormat: computedServiceType === "digital" ? digitalFormat : null,
@@ -5821,8 +5867,9 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                         onChange={(e) => {
                           const stateVal = e.target.value;
                           setAddrState(stateVal);
-                          const stateLgas = NIGERIAN_LGAS[stateVal] || [];
-                          setAddrLga(stateLgas[0] || "");
+                          setAddrSchool("");
+                          setAddrSchoolCustom("");
+                          setAddrLga("");
                         }}
                         className="w-full h-11 px-4 bg-white dark:bg-slate-900 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white font-semibold shadow-sm"
                       >
@@ -5833,24 +5880,97 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                       </select>
                     </div>
 
-                    {/* LGA Option */}
+                    {/* School Option (filtered by chosen State) */}
                     <div className="space-y-1.5">
-                      <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider ml-1">Local Government Area (LGA) *</label>
+                      <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider ml-1">
+                        School / Campus *
+                      </label>
+                      <select
+                        value={addrSchool}
+                        disabled={!addrState}
+                        onChange={(e) => {
+                          const schoolVal = e.target.value;
+                          setAddrSchool(schoolVal);
+                          if (schoolVal === OTHER_SCHOOL_OPTION) {
+                            setAddrLga("");
+                            return;
+                          }
+                          setAddrSchoolCustom("");
+                          const matched = findSchoolByName(schoolVal);
+                          if (matched?.lga) {
+                            setAddrLga(matched.lga);
+                          } else {
+                            setAddrLga("");
+                          }
+                        }}
+                        className="w-full h-11 px-4 bg-white dark:bg-slate-900 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white font-semibold disabled:opacity-50 shadow-sm"
+                      >
+                        <option value="">
+                          {addrState ? `Select School in ${addrState}` : "Select State first"}
+                        </option>
+                        {stateSchools.map((sch, idx) => (
+                          <option key={`pickup-school-${sch.name}-${idx}`} value={sch.name}>
+                            {sch.name}
+                          </option>
+                        ))}
+                        {addrState && (
+                          <option value={OTHER_SCHOOL_OPTION}>{OTHER_SCHOOL_OPTION}</option>
+                        )}
+                      </select>
+                    </div>
+
+                    {/* Custom School Name if "Other / Unlisted School" is chosen */}
+                    {addrSchool === OTHER_SCHOOL_OPTION && (
+                      <div className="space-y-1.5 sm:col-span-2">
+                        <label className="text-[10px] font-black text-[#ff6b00] uppercase tracking-wider ml-1">
+                          Enter School / Institution Name *
+                        </label>
+                        <input
+                          type="text"
+                          value={addrSchoolCustom}
+                          onChange={(e) => setAddrSchoolCustom(e.target.value)}
+                          placeholder={`Type school name in ${addrState || "this state"}...`}
+                          className="w-full h-11 px-4 bg-white dark:bg-slate-900 border-2 border-[#ff6b00]/60 rounded-xl focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white font-semibold shadow-sm"
+                        />
+                      </div>
+                    )}
+
+                    {/* LGA Option (automatically selected when a listed school is picked) */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between gap-2 ml-1">
+                        <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider">
+                          Local Government Area (LGA) *
+                        </label>
+                        {matchedSchoolObj && addrLga === matchedSchoolObj.lga && (
+                          <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+                            Auto-selected
+                          </span>
+                        )}
+                      </div>
                       <select 
                         value={addrLga}
                         onChange={(e) => setAddrLga(e.target.value)}
                         disabled={!addrState}
                         className="w-full h-11 px-4 bg-white dark:bg-slate-900 border-2 border-slate-200 dark:border-slate-700 rounded-xl focus:border-[#ff6b00] outline-none transition-all text-xs text-slate-900 dark:text-white font-semibold disabled:opacity-50 shadow-sm"
                       >
-                        <option value="">Select LGA</option>
+                        <option value="">
+                          {addrState && addrSchool && addrSchool !== OTHER_SCHOOL_OPTION
+                            ? "Detecting LGA..."
+                            : "Select LGA"}
+                        </option>
                         {addrState && (NIGERIAN_LGAS[addrState] || []).map((l, idx) => (
                           <option key={`seller-lga-${l}-${idx}`} value={l}>{l}</option>
                         ))}
                       </select>
+                      {matchedSchoolObj && addrLga && (
+                        <p className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 ml-1">
+                          Located in {addrLga} LGA ({addrState})
+                        </p>
+                      )}
                     </div>
 
                     {/* Location in the school (Popular Presets + Custom Option) */}
-                    <div className="space-y-1.5">
+                    <div className="space-y-1.5 sm:col-span-2">
                       <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-wider ml-1">
                         Location in the School (Popular Spots) *
                       </label>

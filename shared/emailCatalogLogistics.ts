@@ -1,4 +1,4 @@
-import { EmailTemplateDefinition } from "./emailTypes.ts";
+import { EmailTemplateDefinition } from "./emailTypes.js";
 
 export const LOGISTICS_EMAIL_TEMPLATES: EmailTemplateDefinition[] = [
   // ==================== ACCOUNT AND REGISTRATION (1-8) ====================
