@@ -4814,38 +4814,55 @@ const FALLBACK_BANKS = [
         return res.status(200).json({ success: true, purged: false, message: "No auth record found" });
       }
 
-      // Check if Firestore users collection has an active document for this user
-      if (firebaseAdminDb && isAdminDbAuthorized) {
-        try {
-          const userDoc = await firebaseAdminDb.collection("users").doc(authUser.uid).get();
-          if (userDoc.exists) {
+      // Only purge when Firestore Admin DB is actively available AND confirms no profile exists in users or logistics_companies.
+      if (!firebaseAdminDb || !isAdminDbAuthorized) {
+        return res.status(200).json({
+          success: false,
+          purged: false,
+          message: "Firestore Admin verification unavailable; skipping auth purge for safety."
+        });
+      }
+
+      try {
+        const [userDoc, logDoc] = await Promise.all([
+          firebaseAdminDb.collection("users").doc(authUser.uid).get(),
+          firebaseAdminDb.collection("logistics_companies").doc(authUser.uid).get()
+        ]);
+        if (userDoc.exists || logDoc.exists) {
+          return res.status(200).json({ 
+            success: true, 
+            purged: false, 
+            message: "Active profile document exists in Firestore; not orphaned." 
+          });
+        }
+
+        if (authUser.email) {
+          const normalizedAuthEmail = authUser.email.trim().toLowerCase();
+          const [emailSnap, logEmailSnap] = await Promise.all([
+            firebaseAdminDb.collection("users").where("email", "==", normalizedAuthEmail).get(),
+            firebaseAdminDb.collection("logistics_companies").where("email", "==", normalizedAuthEmail).get()
+          ]);
+          if (!emailSnap.empty || !logEmailSnap.empty) {
             return res.status(200).json({ 
               success: true, 
               purged: false, 
-              message: "Active profile document exists in Firestore; not orphaned." 
+              message: "Active profile document found matching email; not orphaned." 
             });
           }
-
-          // Also check if any user has this email in Firestore
-          if (authUser.email) {
-            const emailSnap = await firebaseAdminDb.collection("users").where("email", "==", authUser.email.toLowerCase()).get();
-            if (!emailSnap.empty) {
-              return res.status(200).json({ 
-                success: true, 
-                purged: false, 
-                message: "Active profile document found matching email; not orphaned." 
-              });
-            }
-          }
-        } catch (dbErr: any) {
-          if (dbErr?.code === 7 || dbErr?.message?.includes("PERMISSION_DENIED")) {
-            isAdminDbAuthorized = false;
-          }
         }
+      } catch (dbErr: any) {
+        if (dbErr?.code === 7 || dbErr?.message?.includes("PERMISSION_DENIED")) {
+          isAdminDbAuthorized = false;
+        }
+        console.warn("[ORPHANED AUTH PURGE] Firestore check failed, aborting auth delete for safety:", dbErr?.message || dbErr);
+        return res.status(200).json({
+          success: false,
+          purged: false,
+          message: "Could not verify Firestore profile state (database unavailable or quota reached)."
+        });
       }
 
-      // No profile found in Firestore! The account was deleted from Firebase Firestore.
-      // Purge the lingering auth record so the user can re-register or is fully cleared.
+      // Confirmed: Firestore queries succeeded and no profile exists in users or logistics_companies.
       try {
         await admin.auth().deleteUser(authUser.uid);
         console.log(`[ORPHANED AUTH PURGE] Successfully purged lingering Firebase Auth user ${authUser.uid} (${authUser.email})`);

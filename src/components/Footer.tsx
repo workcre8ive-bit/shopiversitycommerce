@@ -34,7 +34,7 @@ export default function Footer({ setActiveTab, activeTab, onOpenCookieSettings, 
           {/* Column 1: Brand & Real Business Details */}
           <div className="space-y-4 col-span-1 sm:col-span-2 lg:col-span-1">
             <div className="flex items-center gap-2">
-              <Logo showText={true} onClick={handleLogoClick} />
+              <Logo showText={true} darkSurface={true} onClick={handleLogoClick} />
             </div>
             <p className="text-xs text-slate-400 leading-relaxed font-medium max-w-sm">
               Shopiversity is the trusted, verified student-to-student marketplace. We enable campus entrepreneurs to build businesses, trade safely, and settle payments through audited escrow protection.

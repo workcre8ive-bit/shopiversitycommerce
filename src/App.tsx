@@ -16,7 +16,7 @@ import {
   deleteDoc
 } from "firebase/firestore";
 import { Product, UserProfile, CartItem, Notification } from "./types";
-import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "./lib/firebase-errors";
+import { handleFirestoreError, OperationType, getFirestoreErrorMessage, isFirestoreQuotaError } from "./lib/firebase-errors";
 import SellerStorefront from "./components/SellerStorefront";
 import LogisticsHub from "./components/LogisticsHub";
 import Sidebar from "./components/Sidebar";
@@ -213,6 +213,7 @@ export default function App() {
   const [searchType, setSearchType] = React.useState<"products" | "storefronts">("products");
   const [loading, setLoading] = React.useState(true);
   const [authLoading, setAuthLoading] = React.useState(true);
+  const [firestoreQuotaExceeded, setFirestoreQuotaExceeded] = React.useState(false);
   const [currentUser, setCurrentUser] = React.useState<UserProfile | null>(null);
 
   // Automatically detect and delete from Firebase any orphaned products created by deleted accounts
@@ -1100,8 +1101,13 @@ export default function App() {
             }
           }
         }, (error) => {
-          handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
           setAuthLoading(false);
+          if (isFirestoreQuotaError(error)) {
+            setFirestoreQuotaExceeded(true);
+            console.warn("Firestore daily read quota exceeded while subscribing to user profile.");
+            return;
+          }
+          handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
         });
 
         const notifQ = query(
@@ -1117,6 +1123,11 @@ export default function App() {
           setNotifications(notifs);
         }, (error) => {
           if (!auth.currentUser) return;
+          if (isFirestoreQuotaError(error)) {
+            setFirestoreQuotaExceeded(true);
+            console.warn("Firestore daily read quota exceeded while subscribing to notifications.");
+            return;
+          }
           handleFirestoreError(error, OperationType.LIST, "notifications");
         });
       } else {
@@ -1151,6 +1162,12 @@ export default function App() {
       setProducts(productsData);
       setLoading(false);
     }, (error) => {
+      setLoading(false);
+      if (isFirestoreQuotaError(error)) {
+        setFirestoreQuotaExceeded(true);
+        console.warn("Firestore daily read quota exceeded while subscribing to products.");
+        return;
+      }
       handleFirestoreError(error, OperationType.LIST, "products");
     });
 
@@ -1169,6 +1186,12 @@ export default function App() {
       // Instantly remove products from website state if their seller account was deleted from Firebase
       setProducts(prev => prev.filter(p => !p.sellerId || uIds.has(p.sellerId)));
     }, (error) => {
+      setUsersLoaded(true);
+      if (isFirestoreQuotaError(error)) {
+        setFirestoreQuotaExceeded(true);
+        console.warn("Firestore daily read quota exceeded while subscribing to users for storefront search.");
+        return;
+      }
       console.error("Error subscribing to users for storefront search:", error);
     });
 
@@ -1842,6 +1865,29 @@ export default function App() {
 
         {/* Content Area */}
         <main ref={mainContentRef} id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto bg-white dark:bg-zinc-950 scroll-smooth outline-none">
+          {firestoreQuotaExceeded && (
+            <div className="bg-red-500/10 dark:bg-red-950/50 border-b border-red-500/30 px-4 py-3 text-xs text-red-900 dark:text-red-200 flex items-start sm:items-center justify-between gap-3 font-medium">
+              <div className="flex items-start sm:items-center gap-2.5">
+                <ShieldAlert className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0 mt-0.5 sm:mt-0" />
+                <div>
+                  <p className="font-bold">
+                    Daily Firebase Firestore Free-Tier Read Quota Exceeded
+                  </p>
+                  <p className="text-[11px] text-red-800/90 dark:text-red-300/90 font-normal mt-0.5">
+                    This database has reached its free daily read limit and will reset tomorrow. Site owners can upgrade the database in Firebase Console to lift the daily cap.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFirestoreQuotaExceeded(false)}
+                className="p-1 text-red-700 dark:text-red-300 hover:bg-red-500/15 rounded-lg transition-colors shrink-0"
+                aria-label="Dismiss notice"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
           {currentUser && !isVerifyingNewSignup && (currentUser.isVerified === false || (!currentUser.isVerified && currentUser.role !== "admin")) && (
             <div className="bg-amber-500/10 dark:bg-amber-950/40 border-b border-amber-500/30 px-4 py-3 text-xs text-amber-900 dark:text-amber-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 font-medium select-none animate-in fade-in slide-in-from-top-1 duration-300">
               <div className="flex items-start sm:items-center gap-2.5">

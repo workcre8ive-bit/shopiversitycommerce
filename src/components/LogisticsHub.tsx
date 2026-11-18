@@ -1177,7 +1177,6 @@ export default function LogisticsHub({
     setLoading(true);
 
     const cleanEmail = loginEmail.trim().toLowerCase();
-    const rawTrimmed = loginEmail.trim();
     if (!cleanEmail || !loginPassword) {
       setError("Please enter your company email address and password.");
       setLoading(false);
@@ -1185,35 +1184,6 @@ export default function LogisticsHub({
     }
 
     try {
-      // Pre-check: Block unregistered emails from signing in
-      try {
-        const [lLower, lRaw] = await Promise.all([
-          getDocs(query(collection(db, "logistics_companies"), where("email", "==", cleanEmail))),
-          rawTrimmed !== cleanEmail ? getDocs(query(collection(db, "logistics_companies"), where("email", "==", rawTrimmed))) : Promise.resolve({ empty: true } as any)
-        ]);
-        if (lLower.empty && lRaw.empty) {
-          const msg = `No logistics account is registered with "${cleanEmail}". Unregistered emails cannot sign in. Please register your company first.`;
-          setError(msg);
-          setErrorPopup({
-            isOpen: true,
-            type: "unregistered_email",
-            title: "Logistics Email Not Registered",
-            message: msg,
-            email: cleanEmail,
-            primaryActionLabel: "Register Logistics Company",
-            onPrimaryAction: () => {
-              setView("signup");
-              setEmail(cleanEmail);
-            },
-            secondaryActionLabel: "Try Another Email"
-          });
-          setLoading(false);
-          return;
-        }
-      } catch (preErr) {
-        console.warn("Logistics login pre-check notice:", preErr);
-      }
-
       const userCredential = await signInWithEmailAndPassword(auth, cleanEmail, loginPassword);
       const user = userCredential.user;
       
@@ -1328,7 +1298,7 @@ export default function LogisticsHub({
       } else if (err.code === "auth/too-many-requests") {
         setError("Too many login attempts. Please wait a moment before trying again.");
       } else {
-        setError(err.message || "Failed to log in. Please check your credentials.");
+        setError(getFirestoreErrorMessage(err) || err.message || "Failed to log in. Please check your credentials.");
       }
     } finally {
       setLoading(false);
@@ -1676,8 +1646,8 @@ export default function LogisticsHub({
       if (err.code === "auth/email-already-in-use" || err.message?.includes("email-already-in-use")) {
         try {
           const [compSnap, userSnap] = await Promise.all([
-            getDocs(query(collection(db, "logistics_companies"), where("email", "==", cleanEmail))).catch(() => ({ empty: true })),
-            getDocs(query(collection(db, "users"), where("email", "==", cleanEmail))).catch(() => ({ empty: true }))
+            getDocs(query(collection(db, "logistics_companies"), where("email", "==", cleanEmail))),
+            getDocs(query(collection(db, "users"), where("email", "==", cleanEmail)))
           ]);
 
           if (compSnap.empty && userSnap.empty) {

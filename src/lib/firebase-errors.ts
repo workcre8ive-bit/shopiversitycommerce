@@ -28,6 +28,24 @@ export interface FirestoreErrorInfo {
   }
 }
 
+export function isFirestoreQuotaError(error: unknown): boolean {
+  let raw = "";
+  if (error instanceof Error) {
+    raw = error.message;
+  } else if (typeof error === "object" && error !== null) {
+    raw = `${(error as any).code || ""} ${(error as any).message || ""} ${(error as any).error || ""}`;
+  } else {
+    raw = String(error);
+  }
+  const lower = raw.toLowerCase();
+  return (
+    lower.includes("quota limit exceeded") ||
+    lower.includes("quota exceeded") ||
+    lower.includes("free daily read units") ||
+    lower.includes("resource-exhausted")
+  );
+}
+
 export function getFirestoreErrorMessage(error: unknown): string {
   let message = "";
   
@@ -50,8 +68,8 @@ export function getFirestoreErrorMessage(error: unknown): string {
   if (message.includes("permission-denied") || message.includes("Missing or insufficient permissions")) {
     return "You don't have permission to perform this action.";
   }
-  if (message.includes("quota-exceeded")) {
-    return "Storage quota exceeded. Please try again later.";
+  if (isFirestoreQuotaError(message) || message.includes("quota-exceeded")) {
+    return "Daily database read quota reached. Quota resets tomorrow.";
   }
   if (message.includes("unavailable")) {
     return "Service is temporarily unavailable. Check your internet connection.";

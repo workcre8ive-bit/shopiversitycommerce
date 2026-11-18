@@ -33,6 +33,7 @@
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
         z-index: 99999;
         user-select: none;
+        padding: 16px;
       }
       @media (prefers-color-scheme: dark) {
         #initial-preloader {
@@ -40,58 +41,104 @@
           color: #ffffff;
         }
       }
-      @keyframes floatCart {
-        0%, 100% { transform: translateY(0); }
-        50% { transform: translateY(-7px); }
+      @keyframes floatEmblem {
+        0%, 100% { transform: translateY(0) scale(1); }
+        50% { transform: translateY(-5px) scale(1.03); }
+      }
+      @keyframes orbitSpinCW {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+      @keyframes orbitSpinCCW {
+        from { transform: rotate(360deg); }
+        to { transform: rotate(0deg); }
       }
       @keyframes sweepProgress {
         0% { transform: translateX(-100%); }
-        100% { transform: translateX(200%); }
+        100% { transform: translateX(210%); }
       }
       @keyframes pulseGlow {
-        0%, 100% { opacity: 0.35; transform: scale(0.95); }
+        0%, 100% { opacity: 0.32; transform: scale(0.94); }
         50% { opacity: 0.65; transform: scale(1.1); }
+      }
+      .preloader-stage {
+        position: relative;
+        width: 116px;
+        height: 116px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 18px;
+      }
+      .preloader-glow {
+        position: absolute;
+        inset: 10px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(255, 107, 0, 0.25) 0%, transparent 72%);
+        filter: blur(14px);
+        animation: pulseGlow 2.4s ease-in-out infinite;
+      }
+      .preloader-orbit-outer {
+        position: absolute;
+        inset: 0;
+        animation: orbitSpinCW 2.8s linear infinite;
+      }
+      .preloader-orbit-inner {
+        position: absolute;
+        inset: 8px;
+        animation: orbitSpinCCW 4.2s linear infinite;
       }
       .preloader-cart-wrap {
         position: relative;
         display: flex;
         align-items: center;
         justify-content: center;
-        animation: floatCart 2.2s ease-in-out infinite;
-      }
-      .preloader-glow {
-        position: absolute;
-        width: 80px;
-        height: 80px;
-        border-radius: 50%;
-        background: radial-gradient(circle, rgba(255, 107, 0, 0.25) 0%, transparent 70%);
-        filter: blur(12px);
-        animation: pulseGlow 2.5s ease-in-out infinite;
+        animation: floatEmblem 2.4s ease-in-out infinite;
       }
       .preloader-title {
-        margin-top: 14px;
-        font-size: 24px;
+        font-size: 27px;
         font-weight: 900;
-        letter-spacing: -0.025em;
-        color: #0f172a;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        background: linear-gradient(90deg, #ff8800 0%, #ff6b00 50%, #ff4d00 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        line-height: 1;
       }
-      @media (prefers-color-scheme: dark) {
-        .preloader-title {
-          color: #f8fafc;
-        }
+      .preloader-tagline-row {
+        margin-top: 8px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .preloader-rule-l, .preloader-rule-r {
+        width: 24px;
+        height: 2px;
+        border-radius: 9999px;
+      }
+      .preloader-rule-l {
+        background: linear-gradient(90deg, transparent, #ff6b00);
+      }
+      .preloader-rule-r {
+        background: linear-gradient(270deg, transparent, #ff6b00);
       }
       .preloader-tagline {
-        margin-top: 2px;
-        font-size: 10px;
-        font-weight: 700;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-        color: #ff6b00;
+        font-size: 11px;
+        font-style: italic;
+        font-weight: 600;
+        letter-spacing: 0.015em;
+        color: #1e293b;
+      }
+      @media (prefers-color-scheme: dark) {
+        .preloader-tagline {
+          color: #e2e8f0;
+        }
       }
       .preloader-bar-wrap {
         margin-top: 22px;
-        width: 180px;
-        height: 4px;
+        width: 196px;
+        height: 5px;
         border-radius: 9999px;
         background-color: rgba(148, 163, 184, 0.2);
         overflow: hidden;
@@ -103,27 +150,54 @@
         bottom: 0;
         width: 50%;
         border-radius: 9999px;
-        background: linear-gradient(90deg, transparent, #ff6b00, transparent);
-        box-shadow: 0 0 10px rgba(255, 107, 0, 0.8);
-        animation: sweepProgress 1.4s ease-in-out infinite;
+        background: linear-gradient(90deg, transparent, #ff7b00, transparent);
+        box-shadow: 0 0 12px rgba(255, 107, 0, 0.8);
+        animation: sweepProgress 1.35s ease-in-out infinite;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .preloader-glow, .preloader-orbit-outer, .preloader-orbit-inner, .preloader-cart-wrap, .preloader-bar-fill {
+          animation: none !important;
+        }
       }
     </style>
   </head>
   <body>
     <div id="root">
       <div id="initial-preloader">
-        <div class="preloader-cart-wrap">
+        <div class="preloader-stage">
           <div class="preloader-glow"></div>
-          <img
-            src="/shopiversity-logo.png"
-            alt="Shopiversity"
-            width="68"
-            height="68"
-            style="object-fit: contain; filter: drop-shadow(0 6px 16px rgba(255, 107, 0, 0.3));"
-          />
+          <svg class="preloader-orbit-outer" viewBox="0 0 120 120" aria-hidden="true">
+            <defs>
+              <linearGradient id="preOrbitGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#ff9500" stop-opacity="0.95" />
+                <stop offset="60%" stop-color="#ff6b00" stop-opacity="0.55" />
+                <stop offset="100%" stop-color="#ff6b00" stop-opacity="0" />
+              </linearGradient>
+            </defs>
+            <circle cx="60" cy="60" r="54" fill="none" stroke="url(#preOrbitGrad)" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="120 220" />
+          </svg>
+          <svg class="preloader-orbit-inner" viewBox="0 0 120 120" aria-hidden="true">
+            <circle cx="60" cy="60" r="48" fill="none" stroke="#ff6b00" stroke-opacity="0.24" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="48 110 24 120" />
+          </svg>
+          <div class="preloader-cart-wrap">
+            <img
+              src="/shopiversity-logo.png"
+              alt="Shopiversity"
+              width="70"
+              height="70"
+              style="object-fit: contain; filter: drop-shadow(0 10px 22px rgba(255, 107, 0, 0.34));"
+            />
+          </div>
         </div>
-        <div class="preloader-title">Shopiversity</div>
-        <div class="preloader-tagline">The marketplace at your fingertips</div>
+        <div class="preloader-title">SHOPIVERSITY</div>
+        <div class="preloader-tagline-row">
+          <span class="preloader-rule-l"></span>
+          <span class="preloader-tagline">The Marketplace at Your Finger Tips</span>
+          <span class="preloader-rule-r"></span>
+        </div>
+        <svg viewBox="0 0 180 12" width="164" height="10" style="margin-top: 4px; overflow: visible;" aria-hidden="true">
+          <path d="M 8 10 Q 90 1 172 10" fill="none" stroke="#ff6b00" stroke-width="2.6" stroke-linecap="round" />
+        </svg>
         <div class="preloader-bar-wrap">
           <div class="preloader-bar-fill"></div>
         </div>
