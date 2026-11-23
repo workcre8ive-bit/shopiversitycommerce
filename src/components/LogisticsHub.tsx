@@ -395,6 +395,54 @@ export default function LogisticsHub({
   const [isResending, setIsResending] = React.useState(false);
   const [showChangeEmail, setShowChangeEmail] = React.useState(false);
   const [newEmailInput, setNewEmailInput] = React.useState("");
+  const sendVerificationInFlightRef = React.useRef<Record<string, Promise<{ ok: boolean; status: number; data: any }> | null>>({});
+
+  const fetchSendVerificationWithRetry = async (payload: { email: string; userName?: string; role?: string }) => {
+    const cleanKey = (payload.email || "").trim().toLowerCase();
+    if (cleanKey && sendVerificationInFlightRef.current[cleanKey]) {
+      return sendVerificationInFlightRef.current[cleanKey]!;
+    }
+    const runner = (async () => {
+      let lastErr: any = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const res = await fetch("/api/send-verification", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              email: cleanKey || payload.email,
+              userName: payload.userName,
+              role: payload.role || "logistics"
+            })
+          });
+          if ((res.status === 502 || res.status === 503 || res.status === 504) && attempt === 0) {
+            await new Promise((r) => setTimeout(r, 700));
+            continue;
+          }
+          const data = await res.json().catch(() => ({}));
+          return { ok: res.ok, status: res.status, data };
+        } catch (err) {
+          lastErr = err;
+          if (attempt === 0) {
+            await new Promise((r) => setTimeout(r, 700));
+            continue;
+          }
+        }
+      }
+      throw lastErr || new Error("Network error sending verification code.");
+    })();
+
+    if (cleanKey) {
+      sendVerificationInFlightRef.current[cleanKey] = runner;
+    }
+    try {
+      return await runner;
+    } finally {
+      if (cleanKey && sendVerificationInFlightRef.current[cleanKey] === runner) {
+        sendVerificationInFlightRef.current[cleanKey] = null;
+      }
+    }
+  };
 
   React.useEffect(() => {
     if (resendCooldown <= 0) return;
@@ -564,23 +612,22 @@ export default function LogisticsHub({
               const sentFlag = `shopiversity_logistics_otp_sent_${targetEmail}`;
               if (targetEmail && typeof window !== "undefined" && !sessionStorage.getItem(sentFlag)) {
                 sessionStorage.setItem(sentFlag, "true");
-                fetch("/api/send-verification", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    email: targetEmail,
-                    userName: data.companyName || "Logistics Partner",
-                    role: "logistics"
-                  })
+                fetchSendVerificationWithRetry({
+                  email: targetEmail,
+                  userName: data.companyName || "Logistics Partner",
+                  role: "logistics"
                 })
-                  .then(r => r.json().catch(() => ({})).then(vData => ({ ok: r.ok, vData })))
-                  .then(({ ok, vData }) => {
+                  .then(({ ok, data: vData }) => {
                     if (ok && vData.sent) {
                       setVerificationToken(vData.verificationToken || "");
-                      setSuccessMsg(`Your account is not verified yet. A 6-digit verification code has been sent to ${targetEmail} via Brevo.`);
+                      setSuccessMsg(`Your account is not verified yet. A 6-digit verification code has been sent to ${targetEmail}.`);
+                    } else {
+                      sessionStorage.removeItem(sentFlag);
                     }
                   })
-                  .catch(() => {});
+                  .catch(() => {
+                    sessionStorage.removeItem(sentFlag);
+                  });
               }
             } else {
               setCompanyProfile(data);
@@ -1091,25 +1138,20 @@ export default function LogisticsHub({
     setResendCooldown(30);
 
     try {
-      const vRes = await fetch("/api/send-verification", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: cleanGoogleEmail,
-          userName: profile.companyName,
-          role: "logistics"
-        })
+      const { ok, data: vData } = await fetchSendVerificationWithRetry({
+        email: cleanGoogleEmail,
+        userName: profile.companyName,
+        role: "logistics"
       });
-      const vData = await vRes.json().catch(() => ({}));
-      if (vRes.ok && vData.sent) {
+      if (ok && vData.sent) {
         setVerificationToken(vData.verificationToken || "");
-        setSuccessMsg(`A 6-digit verification code has been dispatched to ${cleanGoogleEmail} via Brevo. Enter it from your email inbox below.`);
+        setSuccessMsg(`A 6-digit verification code has been dispatched to ${cleanGoogleEmail}. Enter it from your email inbox below.`);
       } else {
-        setError(vData.error || `Failed to dispatch verification code to ${cleanGoogleEmail} via Brevo. Please click Resend Code.`);
+        setError(vData.error || `Failed to dispatch verification code to ${cleanGoogleEmail}. Please click Resend Code.`);
       }
     } catch (vErr) {
-      console.warn("Brevo email dispatch notice for logistics:", vErr);
-      setError("Network error dispatching verification code via Brevo. Please click Resend Code.");
+      console.warn("Email verification dispatch notice for logistics:", vErr);
+      setError("Network error dispatching verification code. Please click Resend Code.");
     }
 
     setView("verify");
@@ -1228,24 +1270,25 @@ export default function LogisticsHub({
           sessionStorage.setItem(`shopiversity_logistics_otp_sent_${cleanEmail}`, "true");
         }
         try {
-          const vRes = await fetch("/api/send-verification", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              email: cleanEmail,
-              userName: profile.companyName,
-              role: "logistics"
-            })
+          const { ok, data: vData } = await fetchSendVerificationWithRetry({
+            email: cleanEmail,
+            userName: profile.companyName,
+            role: "logistics"
           });
-          const vData = await vRes.json().catch(() => ({}));
-          if (vRes.ok && vData.sent) {
+          if (ok && vData.sent) {
             setVerificationToken(vData.verificationToken || "");
-            setSuccessMsg(`Your account is not verified yet. A 6-digit verification code has been sent to ${cleanEmail} via Brevo. Check your email inbox.`);
+            setSuccessMsg(`Your account is not verified yet. A 6-digit verification code has been sent to ${cleanEmail}. Check your email inbox.`);
           } else {
-            setError(vData.error || "Failed to send verification code via Brevo. Please click Resend Code.");
+            if (typeof window !== "undefined") {
+              sessionStorage.removeItem(`shopiversity_logistics_otp_sent_${cleanEmail}`);
+            }
+            setError(vData.error || "Failed to send verification code. Please click Resend Code.");
           }
         } catch {
-          setError("Network error sending verification code via Brevo. Please click Resend Code.");
+          if (typeof window !== "undefined") {
+            sessionStorage.removeItem(`shopiversity_logistics_otp_sent_${cleanEmail}`);
+          }
+          setError("Network error sending verification code. Please click Resend Code.");
         }
         setView("verify");
         setLoading(false);
@@ -1355,28 +1398,24 @@ export default function LogisticsHub({
         await signOut(auth).catch(() => {});
       }
 
-      // Dispatch 6-digit verification code strictly via Brevo (generated on server, never revealed in UI)
-      const vRes = await fetch("/api/send-verification", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: cleanEmail,
-          userName: companyName.trim()
-        })
+      // Dispatch 6-digit verification code (generated on server, never revealed in UI)
+      const { ok, data: vData } = await fetchSendVerificationWithRetry({
+        email: cleanEmail,
+        userName: companyName.trim(),
+        role: "logistics"
       });
-      const vData = await vRes.json().catch(() => ({}));
       setVerificationCode("");
       setResendCooldown(30);
 
-      if (vRes.ok && vData.sent) {
+      if (ok && vData.sent) {
         setVerificationToken(vData.verificationToken || "");
-        setSuccessMsg(`A 6-digit verification code has been dispatched to ${cleanEmail} via Brevo. Check your email inbox and enter it below.`);
+        setSuccessMsg(`A 6-digit verification code has been dispatched to ${cleanEmail}. Check your email inbox and enter it below.`);
       } else {
-        setError(vData.error || `Failed to send verification code to ${cleanEmail} via Brevo. Please try Resend Code.`);
+        setError(vData.error || `Failed to send verification code to ${cleanEmail}. Please try Resend Code.`);
       }
     } catch (checkErr) {
       console.warn("Logistics register init notice:", checkErr);
-      setError("Failed to connect to Brevo verification service. Please try Resend Code.");
+      setError("Failed to connect to email verification service. Please try Resend Code.");
     } finally {
       setLoading(false);
     }
@@ -1384,7 +1423,7 @@ export default function LogisticsHub({
     setView("verify");
   };
 
-  // Resend Logistics Verification Code strictly via Brevo
+  // Resend Logistics Verification Code
   const handleResendLogisticsCode = async () => {
     if (resendCooldown > 0 || isResending) return;
     setIsResending(true);
@@ -1395,24 +1434,20 @@ export default function LogisticsHub({
 
     const cleanEmail = email.trim().toLowerCase();
     try {
-      const vRes = await fetch("/api/send-verification", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: cleanEmail,
-          userName: companyName.trim() || "Logistics Partner"
-        })
+      const { ok, data: vData } = await fetchSendVerificationWithRetry({
+        email: cleanEmail,
+        userName: companyName.trim() || "Logistics Partner",
+        role: "logistics"
       });
-      const vData = await vRes.json().catch(() => ({}));
-      if (vRes.ok && vData.sent) {
+      if (ok && vData.sent) {
         setVerificationToken(vData.verificationToken || "");
-        setSuccessMsg(`A fresh 6-digit verification code has been sent to ${cleanEmail} via Brevo! Check your email inbox.`);
+        setSuccessMsg(`A fresh 6-digit verification code has been sent to ${cleanEmail}! Check your email inbox.`);
       } else {
-        setError(vData.error || `Failed to resend verification code to ${cleanEmail} via Brevo.`);
+        setError(vData.error || `Failed to resend verification code to ${cleanEmail}.`);
       }
     } catch (e) {
       console.warn("Resend verification notice:", e);
-      setError("Network error resending verification code via Brevo.");
+      setError("Network error resending verification code.");
     } finally {
       setIsResending(false);
     }
@@ -1468,20 +1503,16 @@ export default function LogisticsHub({
       setNewEmailInput("");
       setResendCooldown(30);
 
-      const vRes = await fetch("/api/send-verification", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: trimmed,
-          userName: companyName.trim() || companyProfile?.companyName || "Logistics Partner"
-        })
+      const { ok, data: vData } = await fetchSendVerificationWithRetry({
+        email: trimmed,
+        userName: companyName.trim() || companyProfile?.companyName || "Logistics Partner",
+        role: "logistics"
       });
-      const vData = await vRes.json().catch(() => ({}));
-      if (vRes.ok && vData.sent) {
+      if (ok && vData.sent) {
         setVerificationToken(vData.verificationToken || "");
-        setSuccessMsg(`Email updated from ${formerEmail} to ${trimmed}! A new 6-digit verification code has been sent to ${trimmed} via Brevo.`);
+        setSuccessMsg(`Email updated from ${formerEmail} to ${trimmed}! A new 6-digit verification code has been sent to ${trimmed}.`);
       } else {
-        setError(vData.error || `Email updated to ${trimmed}, but Brevo delivery failed. Please click Resend Code.`);
+        setError(vData.error || `Email updated to ${trimmed}, but code delivery failed. Please click Resend Code.`);
       }
     } catch (err: any) {
       setError(err?.message || "Failed to update email address.");

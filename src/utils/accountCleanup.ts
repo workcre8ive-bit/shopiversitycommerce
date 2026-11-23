@@ -19,6 +19,7 @@ import {
   releasePendingLogisticsJobsBeforeDelete
 } from "./deletionGuards";
 import { triggerTemplatedEmail } from "./orderEmailNotifications";
+import { removeCachedUserProfile } from "../lib/profileCache";
 
 export interface CascadeDeleteOptions {
   skipOrderGuards?: boolean;
@@ -524,6 +525,7 @@ export async function cascadeDeleteUserAccount(
     const isDeletingCurrentBrowserUser = Boolean(auth.currentUser?.uid === uid || authUser?.uid === uid);
 
     // 16. Clear Local Storage and Session Storage artifacts when deleting the active browser user
+    removeCachedUserProfile(uid);
     if (isDeletingCurrentBrowserUser) {
       try {
         localStorage.removeItem("shopiversity_cart");

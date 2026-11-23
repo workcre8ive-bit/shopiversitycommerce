@@ -177,7 +177,7 @@ app.use((req, res, next) => {
     return "";
   }
 
-  // Load saved Brevo config from disk if available (never override an env REST xkeysib- key with a saved SMTP xsmtpsib- key)
+  // Load saved Brevo config from disk if available (never let an unconfigured template file override env/default senderEmail)
   for (const cfgPath of [BREVO_CONFIG_FILE, TMP_BREVO_CONFIG_FILE]) {
     try {
       if (fs.existsSync(cfgPath)) {
@@ -189,12 +189,12 @@ app.use((req, res, next) => {
           runtimeBrevoConfig.apiKey = savedKey;
         }
         const hasEnvSender = Boolean(process.env.BREVO_SENDER_EMAIL || process.env.brevo_sender_email);
-        if ((hasSavedKey || !hasEnvSender) && savedConfig.senderEmail && savedConfig.senderEmail.includes("@")) {
+        if (hasSavedKey && !hasEnvSender && savedConfig.senderEmail && savedConfig.senderEmail.includes("@")) {
           runtimeBrevoConfig.senderEmail = savedConfig.senderEmail.trim();
         }
         if (hasSavedKey && savedConfig.senderName) runtimeBrevoConfig.senderName = savedConfig.senderName.trim();
-        if (savedConfig.smsSender) runtimeBrevoConfig.smsSender = savedConfig.smsSender.trim();
-        if (savedConfig.smtpUser && savedConfig.smtpUser.includes("@")) {
+        if (hasSavedKey && savedConfig.smsSender) runtimeBrevoConfig.smsSender = savedConfig.smsSender.trim();
+        if (hasSavedKey && savedConfig.smtpUser && savedConfig.smtpUser.includes("@")) {
           runtimeBrevoConfig.smtpUser = savedConfig.smtpUser.trim();
         }
       }
@@ -210,6 +210,43 @@ app.use((req, res, next) => {
     smsSender: runtimeBrevoConfig.smsSender,
     hasSmtpUser: Boolean(getActiveBrevoSmtpUser())
   });
+
+  let lastBrevoFirestoreHydrationAt = 0;
+  async function hydrateBrevoConfigFromFirestore(force = false): Promise<void> {
+    if (!force && getActiveBrevoKey().startsWith("xkeysib-")) return;
+    if (!force && Date.now() - lastBrevoFirestoreHydrationAt < 5 * 60 * 1000) return;
+    if (Date.now() < firestoreQuotaBackoffUntil) return;
+    lastBrevoFirestoreHydrationAt = Date.now();
+    try {
+      if (!firebaseAdminDb || !isAdminDbAuthorized) return;
+      const snap = await firebaseAdminDb.collection("system_config").doc("brevo").get();
+      if (!snap.exists) return;
+      const data = snap.data() || {};
+      const dbKey = typeof data.apiKey === "string" ? data.apiKey.trim() : "";
+      if (dbKey.length > 6 && (!runtimeBrevoConfig.apiKey || dbKey.startsWith("xkeysib-"))) {
+        runtimeBrevoConfig.apiKey = dbKey;
+      }
+      if (typeof data.senderEmail === "string" && data.senderEmail.includes("@") && !(process.env.BREVO_SENDER_EMAIL || process.env.brevo_sender_email)) {
+        runtimeBrevoConfig.senderEmail = data.senderEmail.trim();
+      }
+      if (typeof data.senderName === "string" && data.senderName.trim() && !(process.env.BREVO_SENDER_NAME || process.env.brevo_sender_name)) {
+        runtimeBrevoConfig.senderName = data.senderName.trim();
+      }
+      if (typeof data.smsSender === "string" && data.smsSender.trim()) {
+        runtimeBrevoConfig.smsSender = data.smsSender.trim();
+      }
+      if (typeof data.smtpUser === "string" && data.smtpUser.includes("@") && !getActiveBrevoSmtpUser()) {
+        runtimeBrevoConfig.smtpUser = data.smtpUser.trim();
+      }
+    } catch (err: any) {
+      const msg = String(err?.message || "").toLowerCase();
+      if (err?.code === 7 || msg.includes("permission_denied")) {
+        isAdminDbAuthorized = false;
+      } else if (err?.code === 8 || msg.includes("quota") || msg.includes("resource_exhausted")) {
+        firestoreQuotaBackoffUntil = Date.now() + 15 * 60 * 1000;
+      }
+    }
+  }
 
   // In-memory OTP code store + stateless HMAC token verifier for serverless compatibility
   interface StoredVerificationCode {
@@ -358,6 +395,7 @@ app.use((req, res, next) => {
     smtpUser?: string;
     skipFallback?: boolean;
   }): Promise<{ success: boolean; provider: string; messageId?: string; error?: string }> {
+    await hydrateBrevoConfigFromFirestore();
     const keyCandidates = collectValidBrevoKeys(options.customApiKey);
     const activeSmtpUser = getActiveBrevoSmtpUser(options.smtpUser);
     const fromName = options.senderName || runtimeBrevoConfig.senderName || "SHOPIVERSITY Campus Marketplace";
@@ -476,75 +514,84 @@ app.use((req, res, next) => {
             continue;
           }
 
-          try {
-            const plainTextFallback = (
-              options.textContent ||
-              options.htmlContent
-                .replace(/<style[\s\S]*?<\/style>/gi, " ")
-                .replace(/<br\s*\/?>/gi, "\n")
-                .replace(/<\/(p|div|tr|li|h[1-6])>/gi, "\n")
-                .replace(/<[^>]+>/g, " ")
-                .replace(/[ \t]+\n/g, "\n")
-                .replace(/\n{3,}/g, "\n\n")
-                .trim()
-            );
-            console.log(`[BREVO SMTP DISPATCHER] Sending "${options.subject}" from ${fromEmail} via Brevo SMTP (smtp-relay.brevo.com:587)...`);
-            const transporter = nodemailer.createTransport({
-              host: "smtp-relay.brevo.com",
-              port: 587,
-              secure: false,
-              auth: {
-                user: activeSmtpUser,
-                pass: candidateKey
-              },
-              tls: {
-                rejectUnauthorized: false
-              },
-              connectionTimeout: 7000,
-              greetingTimeout: 7000,
-              socketTimeout: 10000
-            });
+          const plainTextFallback = (
+            options.textContent ||
+            options.htmlContent
+              .replace(/<style[\s\S]*?<\/style>/gi, " ")
+              .replace(/<br\s*\/?>/gi, "\n")
+              .replace(/<\/(p|div|tr|li|h[1-6])>/gi, "\n")
+              .replace(/<[^>]+>/g, " ")
+              .replace(/[ \t]+\n/g, "\n")
+              .replace(/\n{3,}/g, "\n\n")
+              .trim()
+          );
+          const cleanFromEmail = fromEmail.trim().toLowerCase();
+          const smtpPorts = [
+            { port: 587, secure: false },
+            { port: 465, secure: true }
+          ];
 
-            const cleanFromEmail = fromEmail.trim().toLowerCase();
-            const info = await transporter.sendMail({
-              from: `"${fromName}" <${cleanFromEmail}>`,
-              sender: cleanFromEmail,
-              replyTo: options.replyTo ? `"${options.replyTo.name || fromName}" <${options.replyTo.email}>` : cleanFromEmail,
-              to: recipients.map(r => r.email).join(", "),
-              subject: options.subject,
-              html: options.htmlContent,
-              text: plainTextFallback,
-              messageId: `<${crypto.randomUUID()}@shopiversity.app>`,
-              headers: {
-                "X-Mailer": "Shopiversity Transactional",
-                "X-Auto-Response-Suppress": "OOF, AutoReply",
-                ...(options.tags && options.tags.length > 0 ? { "X-Mailin-Tag": options.tags.join(",") } : {})
+          for (const smtpTarget of smtpPorts) {
+            try {
+              console.log(`[BREVO SMTP DISPATCHER] Sending "${options.subject}" from ${cleanFromEmail} via Brevo SMTP (smtp-relay.brevo.com:${smtpTarget.port})...`);
+              const transporter = nodemailer.createTransport({
+                host: "smtp-relay.brevo.com",
+                port: smtpTarget.port,
+                secure: smtpTarget.secure,
+                auth: {
+                  user: activeSmtpUser,
+                  pass: candidateKey
+                },
+                tls: {
+                  rejectUnauthorized: false
+                },
+                connectionTimeout: 3500,
+                greetingTimeout: 3500,
+                socketTimeout: 5000
+              });
+
+              const info = await transporter.sendMail({
+                from: `"${fromName}" <${cleanFromEmail}>`,
+                sender: cleanFromEmail,
+                replyTo: options.replyTo ? `"${options.replyTo.name || fromName}" <${options.replyTo.email}>` : cleanFromEmail,
+                to: recipients.map(r => r.email).join(", "),
+                subject: options.subject,
+                html: options.htmlContent,
+                text: plainTextFallback,
+                messageId: `<${crypto.randomUUID()}@shopiversity.app>`,
+                headers: {
+                  "X-Mailer": "Shopiversity Transactional",
+                  "X-Auto-Response-Suppress": "OOF, AutoReply",
+                  ...(options.tags && options.tags.length > 0 ? { "X-Mailin-Tag": options.tags.join(",") } : {})
+                }
+              });
+
+              if (Array.isArray(info.rejected) && info.rejected.length > 0 && (!info.accepted || info.accepted.length === 0)) {
+                lastError = `Brevo SMTP rejected recipient(s): ${info.rejected.join(", ")}. Please ensure your sender (${cleanFromEmail}) is verified in Brevo.`;
+                console.warn(`[BREVO SMTP REJECTED]`, info);
+                break;
               }
-            });
 
-            if (Array.isArray(info.rejected) && info.rejected.length > 0 && (!info.accepted || info.accepted.length === 0)) {
-              lastError = `Brevo SMTP rejected recipient(s): ${info.rejected.join(", ")}. Please ensure your sender (${cleanFromEmail}) is verified in Brevo.`;
-              console.warn(`[BREVO SMTP REJECTED]`, info);
-              continue;
+              console.log(`[BREVO SMTP QUEUED] Port ${smtpTarget.port} | Accepted: ${JSON.stringify(info.accepted)} | Response: ${info.response} | MessageId: ${info.messageId}`);
+              lastBrevoError = null;
+              return {
+                success: true,
+                provider: "brevo-smtp",
+                messageId: info.messageId
+              };
+            } catch (smtpErr: any) {
+              const rawMsg = String(smtpErr?.message || "SMTP delivery failed");
+              if (rawMsg.includes("525") || rawMsg.toLowerCase().includes("unauthorized ip")) {
+                lastError = "Brevo blocked this server's IP address (525 Unauthorized IP). In your Brevo dashboard, go to Profile > Security > Authorized IPs and turn OFF / disable Authorized IPs (or add a Brevo REST API v3 key xkeysib-... in BREVO_API_KEY with IP restrictions disabled).";
+                break;
+              } else if (rawMsg.includes("535")) {
+                lastError = "Brevo SMTP credentials rejected (535). Please verify your Brevo SMTP Login (xxxxx@smtp-brevo.com) and SMTP key (xsmtpsib-) in Brevo > SMTP & API > SMTP, or switch to a Brevo REST API v3 key (xkeysib-...).";
+                break;
+              } else {
+                lastError = `Brevo SMTP Relay (${smtpTarget.port}): ${rawMsg}`;
+                console.warn(`[BREVO SMTP] Port ${smtpTarget.port} failed (${smtpErr?.responseCode || "error"}): ${rawMsg}`);
+              }
             }
-
-            console.log(`[BREVO SMTP QUEUED] Accepted: ${JSON.stringify(info.accepted)} | Response: ${info.response} | MessageId: ${info.messageId}`);
-            lastBrevoError = null;
-            return {
-              success: true,
-              provider: "brevo-smtp",
-              messageId: info.messageId
-            };
-          } catch (smtpErr: any) {
-            const rawMsg = String(smtpErr?.message || "SMTP delivery failed");
-            if (rawMsg.includes("525") || rawMsg.toLowerCase().includes("unauthorized ip")) {
-              lastError = "Brevo blocked this server's IP address (525 Unauthorized IP). In your Brevo dashboard, go to Profile > Security > Authorized IPs and turn OFF / disable Authorized IPs (or add a Brevo REST API v3 key xkeysib-... in BREVO_API_KEY with IP restrictions disabled).";
-            } else if (rawMsg.includes("535")) {
-              lastError = "Brevo SMTP credentials rejected (535). Please verify your Brevo SMTP Login (xxxxx@smtp-brevo.com) and SMTP key (xsmtpsib-) in Brevo > SMTP & API > SMTP, or switch to a Brevo REST API v3 key (xkeysib-...).";
-            } else {
-              lastError = `Brevo SMTP Relay: ${rawMsg}`;
-            }
-            console.warn(`[BREVO SMTP] Relay could not send with configured login (${smtpErr?.responseCode || "error"}): ${rawMsg}`);
           }
         }
       }
@@ -625,7 +672,8 @@ app.use((req, res, next) => {
   }
 
   // Brevo Status & Config Endpoints
-  app.get("/api/brevo/status", (req, res) => {
+  app.get("/api/brevo/status", async (req, res) => {
+    await hydrateBrevoConfigFromFirestore();
     const key = getActiveBrevoKey();
     const hasKey = key.length > 5;
     const isSmtp = key.startsWith("xsmtpsib-");
@@ -730,8 +778,22 @@ app.use((req, res, next) => {
       } catch {}
       console.warn(`[BREVO PERSISTENCE NOTICE] Fallback /tmp persistence used:`, saveErr);
     }
+
+    if (firebaseAdminDb && isAdminDbAuthorized && Date.now() >= firestoreQuotaBackoffUntil) {
+      try {
+        await firebaseAdminDb.collection("system_config").doc("brevo").set({
+          ...runtimeBrevoConfig,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+        console.log("[BREVO PERSISTENCE] Synced Brevo config to Firestore system_config/brevo for serverless cold-start durability.");
+      } catch (dbSaveErr: any) {
+        console.warn("[BREVO PERSISTENCE NOTICE] Firestore config sync skipped:", dbSaveErr?.message || dbSaveErr);
+      }
+    }
+
     cachedBrevoSenders = null;
     lastBrevoError = null;
+    lastBrevoFirestoreHydrationAt = Date.now();
 
     console.log(`[BREVO CONFIG UPDATED] Sender: ${runtimeBrevoConfig.senderName} <${runtimeBrevoConfig.senderEmail}>, SMS: ${runtimeBrevoConfig.smsSender}, Key Set: ${Boolean(runtimeBrevoConfig.apiKey)}`);
 
@@ -1036,8 +1098,7 @@ app.use((req, res, next) => {
       subject: `${cleanCode} is your SHOPIVERSITY Verification Code`,
       htmlContent,
       textContent,
-      tags: ["verification", "signup-auth"],
-      skipFallback: true
+      tags: ["verification", "signup-auth"]
     });
 
     if (!dispatchResult.success) {
@@ -1495,8 +1556,7 @@ app.use((req, res, next) => {
       subject: `${resetCode} is your SHOPIVERSITY Password Reset Code`,
       htmlContent,
       textContent,
-      tags: ["security", "password-reset"],
-      skipFallback: true
+      tags: ["security", "password-reset"]
     });
 
     if (!dispatchResult.success) {

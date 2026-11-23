@@ -1,5 +1,37 @@
 [
   {
+    "id": "ELG_1795423666847_20675e",
+    "templateId": "buyer_email_verification",
+    "templateCode": "B-02",
+    "templateName": "Buyer Email Verification",
+    "recipientCategory": "buyer",
+    "classification": "transactional",
+    "recipientEmail": "shopiversitycommerce@gmail.com",
+    "subject": "275939 is your SHOPIVERSITY Verification Code",
+    "triggerEvent": "auth.email_verification_requested",
+    "status": "sent",
+    "provider": "brevo-smtp",
+    "messageId": "<99dcf973-9ece-437b-b5c6-a67ff3b83e3a@shopiversity.app>",
+    "retryCount": 0,
+    "createdAt": "2026-11-23T08:47:46.847Z"
+  },
+  {
+    "id": "ELG_1795029938856_df542f",
+    "templateId": "buyer_email_verification",
+    "templateCode": "B-02",
+    "templateName": "Buyer Email Verification",
+    "recipientCategory": "buyer",
+    "classification": "transactional",
+    "recipientEmail": "shopiversitycommerce@gmail.com",
+    "subject": "712278 is your SHOPIVERSITY Verification Code",
+    "triggerEvent": "auth.email_verification_requested",
+    "status": "sent",
+    "provider": "brevo-smtp",
+    "messageId": "<ee8ca873-9a3d-4a7a-a59d-85e4e2b3a757@shopiversity.app>",
+    "retryCount": 0,
+    "createdAt": "2026-11-18T19:25:38.856Z"
+  },
+  {
     "id": "ELG_1794923458395_956e2f",
     "templateId": "buyer_email_verification",
     "templateCode": "B-02",

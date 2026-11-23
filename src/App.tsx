@@ -17,6 +17,19 @@ import {
 } from "firebase/firestore";
 import { Product, UserProfile, CartItem, Notification } from "./types";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage, isFirestoreQuotaError } from "./lib/firebase-errors";
+import {
+  getCachedUserProfile,
+  setCachedUserProfile,
+  removeCachedUserProfile,
+  hasPendingProfileSync,
+  setPendingProfileSync,
+  hasPendingVerifySync,
+  setPendingVerifySync,
+  getCachedProducts,
+  setCachedProducts,
+  getCachedSellers,
+  setCachedSellers
+} from "./lib/profileCache";
 import SellerStorefront from "./components/SellerStorefront";
 import LogisticsHub from "./components/LogisticsHub";
 import Sidebar from "./components/Sidebar";
@@ -216,29 +229,14 @@ export default function App() {
   const [firestoreQuotaExceeded, setFirestoreQuotaExceeded] = React.useState(false);
   const [currentUser, setCurrentUser] = React.useState<UserProfile | null>(null);
 
-  // Automatically detect and delete from Firebase any orphaned products created by deleted accounts
+  // Automatically clear products belonging to accounts explicitly deleted in this session
+  // (Cascade deletion handles Firestore product purging without requiring full-collection user reads on every page load)
   React.useEffect(() => {
-    if (loading || !usersLoaded || products.length === 0) return;
-
-    // Detect products whose seller does not exist in Firebase users collection
+    if (loading || !usersLoaded || products.length === 0 || existingUserIds.size === 0) return;
     const orphaned = products.filter(p => p.sellerId && !existingUserIds.has(p.sellerId));
     if (orphaned.length > 0) {
-      console.log(`[ORPHAN CLEANUP] Detected ${orphaned.length} orphaned products from deleted accounts. Purging from Firebase...`);
       const orphanedSet = new Set(orphaned.map(p => p.id));
-      // Remove from app state immediately
       setProducts(prev => prev.filter(p => !orphanedSet.has(p.id)));
-
-      // Delete from Firebase Firestore
-      orphaned.forEach(p => {
-        deleteDoc(doc(db, "products", p.id)).catch(() => {});
-      });
-
-      // Call backend cleanup endpoint to purge database
-      fetch("/api/account/cleanup-orphaned-content", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productIds: orphaned.map(p => p.id) })
-      }).catch(() => {});
     }
   }, [products, existingUserIds, usersLoaded, loading]);
 
@@ -647,8 +645,8 @@ export default function App() {
   React.useEffect(() => {
     if (!currentUser) return; // Only track idle timeout if a user is logged in
     
-    // Inactivity limit of 10 minutes (600,000 ms)
-    const INACTIVITY_LIMIT = 10 * 60 * 1000; 
+    // Inactivity limit of 2 hours (7,200,000 ms) so users aren't unexpectedly logged out during normal use
+    const INACTIVITY_LIMIT = 2 * 60 * 60 * 1000; 
     let timeoutId: any;
 
     const handleInactivity = () => {
@@ -659,7 +657,7 @@ export default function App() {
       // 2. Log user out
       signOut(auth);
       setCart([]);
-      alert("You have been logged out due to inactivity.");
+      triggerDynamicIsland("Signed out after 2 hours of inactivity");
     };
 
     const resetTimer = () => {
@@ -843,6 +841,22 @@ export default function App() {
         unsubscribeProfile = onSnapshot(doc(db, "users", user.uid), async (docSnap) => {
           if (docSnap.exists()) {
             let profile = docSnap.data() as UserProfile;
+
+            // Flush deferred verification status if user verified while Firestore was over quota
+            if (hasPendingVerifySync(user.uid)) {
+              if (!profile.isVerified) {
+                profile = { ...profile, isVerified: true, emailVerified: true } as UserProfile;
+                updateDoc(doc(db, "users", user.uid), {
+                  isVerified: true,
+                  emailVerified: true
+                }).then(() => setPendingVerifySync(user.uid, false)).catch(() => {});
+              } else {
+                setPendingVerifySync(user.uid, false);
+              }
+            }
+            if (hasPendingProfileSync(user.uid)) {
+              setPendingProfileSync(user.uid, false);
+            }
             
             // ADMIN CHECK: Only grant admin privileges AFTER email verification succeeds, and never override a Seller account's role
             const adminEmails = [
@@ -904,7 +918,9 @@ export default function App() {
               }
             }
 
-            // If the user has not completed 6-digit email verification, do NOT log them in yet — keep them pinned on the verification screen!
+            setCachedUserProfile(profile);
+
+            // If the user has not completed verification, do NOT log them in yet — keep them pinned on the verification screen!
             if (profile.isVerified === false || (!profile.isVerified && profile.role !== "admin")) {
               setCurrentUser(null);
               if (profile.state === "Logistics Partner" || profile.role === "logistics") {
@@ -969,9 +985,31 @@ export default function App() {
             setAuthLoading(false);
             setNeedsProfile(false);
           } else {
-            // User document does not exist in Firestore!
-            // If the user is authenticated in Firebase Auth, check if they are a logistics partner first
+            // User document does not exist in Firestore yet!
             if (user && user.uid) {
+              // If signup/verification happened locally while Firestore was over quota, sync the cached profile now
+              const pendingProfile = hasPendingProfileSync(user.uid) ? getCachedUserProfile(user.uid) : null;
+              if (pendingProfile) {
+                const syncedProfile: UserProfile = {
+                  ...pendingProfile,
+                  isVerified: Boolean(pendingProfile.isVerified || hasPendingVerifySync(user.uid) || user.emailVerified)
+                };
+                try {
+                  await setDoc(doc(db, "users", user.uid), syncedProfile, { merge: true });
+                  setPendingProfileSync(user.uid, false);
+                  setPendingVerifySync(user.uid, false);
+                  setCachedUserProfile(syncedProfile);
+                  if (syncedProfile.isVerified) {
+                    setCurrentUser(syncedProfile);
+                    setAuthLoading(false);
+                    return;
+                  }
+                } catch (syncErr) {
+                  console.warn("Deferred profile sync notice:", syncErr);
+                }
+              }
+
+              // Check if they are a logistics partner first
               let isLogistics = activeTabRef.current === "logistics";
               try {
                 const logCompSnap = await getDoc(doc(db, "logistics_companies", user.uid));
@@ -1000,6 +1038,7 @@ export default function App() {
                     profileCompleted: true
                   };
                   await setDoc(doc(db, "users", user.uid), autoLogisticsProfile);
+                  setCachedUserProfile(autoLogisticsProfile);
                   setCurrentUser(autoLogisticsProfile);
                   setActiveTab("logistics");
                   setAuthLoading(false);
@@ -1059,7 +1098,16 @@ export default function App() {
                       isGoogleAccount: isGoogleProvider,
                       hasPassword: hasPwdProvider
                     };
-                    await setDoc(doc(db, "users", user.uid), fallbackProfile, { merge: true });
+                    try {
+                      await setDoc(doc(db, "users", user.uid), fallbackProfile, { merge: true });
+                    } catch (writeErr) {
+                      if (isFirestoreQuotaError(writeErr)) {
+                        setPendingProfileSync(user.uid, true);
+                      } else {
+                        throw writeErr;
+                      }
+                    }
+                    setCachedUserProfile(fallbackProfile);
                     const pendingFallbackEmail = (fallbackProfile.email || "").trim().toLowerCase();
                     if (pendingFallbackEmail) {
                       sessionStorage.setItem("shopiversity_verifying_email", pendingFallbackEmail);
@@ -1092,6 +1140,7 @@ export default function App() {
               // This account was deleted from Firebase while actively browsing!
               // Sign out immediately so deleted users cannot persist on the website
               console.log(`[AUTH SYNC] Account ${user.uid} does not exist in Firebase Firestore (deleted). Terminating session.`);
+              removeCachedUserProfile(user.uid);
               setCurrentUser(null);
               setAuthLoading(false);
               signOut(auth).catch(() => {});
@@ -1104,7 +1153,76 @@ export default function App() {
           setAuthLoading(false);
           if (isFirestoreQuotaError(error)) {
             setFirestoreQuotaExceeded(true);
-            console.warn("Firestore daily read quota exceeded while subscribing to user profile.");
+            console.warn("Firestore daily read quota exceeded while subscribing to user profile; using cached fallback.");
+            const cachedProfile = getCachedUserProfile(user.uid);
+            const verifiedViaAuthOrCache = Boolean(
+              cachedProfile?.isVerified ||
+              user.emailVerified ||
+              hasPendingVerifySync(user.uid)
+            );
+            if (cachedProfile && verifiedViaAuthOrCache) {
+              const recovered: UserProfile = { ...cachedProfile, isVerified: true };
+              setCachedUserProfile(recovered);
+              setPendingVerificationEmail("");
+              setCurrentUser(recovered);
+              const isSellerAcc = recovered.role === "seller" || recovered.activeRole === "seller";
+              if (recovered.state === "Logistics Partner" || recovered.role === "logistics") {
+                setActiveTab("logistics");
+              } else if (isSellerAcc) {
+                setActiveRole("seller");
+                if (!isVerifyingNewSignupRef.current && (!initialTabSet.current || activeTabRef.current === "auth" || activeTabRef.current === "signup")) {
+                  setActiveTab("dashboard");
+                  initialTabSet.current = true;
+                }
+              } else {
+                setActiveRole("buyer");
+                if (!isVerifyingNewSignupRef.current && (!initialTabSet.current || activeTabRef.current === "auth" || activeTabRef.current === "signup")) {
+                  setActiveTab("market");
+                  initialTabSet.current = true;
+                }
+              }
+            } else if (cachedProfile && !cachedProfile.isVerified) {
+              const pendingEmail = (cachedProfile.email || user.email || "").trim().toLowerCase();
+              setCurrentUser(null);
+              if (pendingEmail) {
+                sessionStorage.setItem("shopiversity_verifying_email", pendingEmail);
+                sessionStorage.setItem("shopiversity_chosen_role", cachedProfile.role === "seller" ? "seller" : "buyer");
+                sessionStorage.setItem("shopiversity_auth_mode", "signup");
+                setPendingVerificationEmail(pendingEmail);
+                isVerifyingNewSignupRef.current = true;
+                setIsVerifyingNewSignup(true);
+                setAuthMode("signup");
+                if (activeTabRef.current !== "signup" && activeTabRef.current !== "auth") {
+                  setActiveTab("signup");
+                }
+              }
+            } else if (!cachedProfile && user.emailVerified) {
+              const chosenSessionRole = typeof window !== "undefined" ? sessionStorage.getItem("shopiversity_chosen_role") : null;
+              const fallbackRole: "buyer" | "seller" = chosenSessionRole === "seller" ? "seller" : "buyer";
+              const cleanEmail = (user.email || "").trim().toLowerCase();
+              const synthesized: UserProfile = {
+                uid: user.uid,
+                displayName: user.displayName || (cleanEmail ? cleanEmail.split("@")[0] : "Student"),
+                username: generateSmartUsername(user.displayName || cleanEmail || "User"),
+                email: cleanEmail,
+                phoneNumber: user.phoneNumber || "",
+                role: fallbackRole,
+                activeRole: fallbackRole,
+                isVerified: true,
+                isSuspended: false,
+                reportCount: 0,
+                createdAt: user.metadata?.creationTime || new Date().toISOString(),
+                profileCompleted: false
+              };
+              setCachedUserProfile(synthesized);
+              setPendingVerificationEmail("");
+              setCurrentUser(synthesized);
+              setActiveRole(fallbackRole);
+              if (!isVerifyingNewSignupRef.current && (!initialTabSet.current || activeTabRef.current === "auth" || activeTabRef.current === "signup")) {
+                setActiveTab(fallbackRole === "seller" ? "dashboard" : "market");
+                initialTabSet.current = true;
+              }
+            }
             return;
           }
           handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
@@ -1160,40 +1278,50 @@ export default function App() {
         .filter(p => !p.isDeleted)
         .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()); 
       setProducts(productsData);
+      setCachedProducts(productsData);
       setLoading(false);
     }, (error) => {
       setLoading(false);
       if (isFirestoreQuotaError(error)) {
         setFirestoreQuotaExceeded(true);
-        console.warn("Firestore daily read quota exceeded while subscribing to products.");
+        const cachedProducts = getCachedProducts();
+        if (cachedProducts.length > 0) {
+          setProducts(cachedProducts);
+        }
+        console.warn("Firestore daily read quota exceeded while subscribing to products; using cached catalog.");
         return;
       }
       handleFirestoreError(error, OperationType.LIST, "products");
     });
 
-    const usersQ = query(collection(db, "users"));
-    const unsubscribeUsers = onSnapshot(usersQ, (snapshot) => {
-      const usersData = snapshot.docs.map(docSnap => ({ uid: docSnap.id, ...docSnap.data() } as UserProfile));
-      const uIds = new Set(snapshot.docs.map(docSnap => docSnap.id));
-      setExistingUserIds(uIds);
+    // Fetch sellers once with a 15-minute cache instead of opening a real-time onSnapshot listener on the entire users collection
+    // (Subscribing to all users on every page load was rapidly exhausting the 50,000 daily free-tier Firestore reads)
+    let isUnmounted = false;
+    const { sellers: cachedSellers, isFresh: sellersCacheFresh } = getCachedSellers();
+    if (cachedSellers.length > 0) {
+      setSellers(cachedSellers.filter(u => u.state !== "Logistics Partner"));
       setUsersLoaded(true);
-      const sellersList = usersData.filter(u => 
-        (u.role === "seller" || u.businessName || u.storefrontSettings?.businessName) && 
-        u.state !== "Logistics Partner"
-      );
-      setSellers(sellersList);
-
-      // Instantly remove products from website state if their seller account was deleted from Firebase
-      setProducts(prev => prev.filter(p => !p.sellerId || uIds.has(p.sellerId)));
-    }, (error) => {
-      setUsersLoaded(true);
-      if (isFirestoreQuotaError(error)) {
-        setFirestoreQuotaExceeded(true);
-        console.warn("Firestore daily read quota exceeded while subscribing to users for storefront search.");
-        return;
-      }
-      console.error("Error subscribing to users for storefront search:", error);
-    });
+    }
+    if (!sellersCacheFresh) {
+      getDocs(query(collection(db, "users"), where("role", "in", ["seller", "both"]))).then((snapshot) => {
+        if (isUnmounted) return;
+        const sellersList = snapshot.docs
+          .map(docSnap => ({ uid: docSnap.id, ...docSnap.data() } as UserProfile))
+          .filter(u => u.state !== "Logistics Partner");
+        setSellers(sellersList);
+        setCachedSellers(sellersList);
+        setUsersLoaded(true);
+      }).catch((error) => {
+        if (isUnmounted) return;
+        setUsersLoaded(true);
+        if (isFirestoreQuotaError(error)) {
+          setFirestoreQuotaExceeded(true);
+          console.warn("Firestore daily read quota exceeded while loading sellers for storefront search.");
+          return;
+        }
+        console.error("Error loading sellers for storefront search:", error);
+      });
+    }
 
     // Live Watchdog: Detect immediately when the currently signed-in account is deleted in Firebase Console -> Authentication -> Users
     // (Uses Identity Toolkit accounts:lookup — zero Firestore reads; full offline audit runs on-demand via Admin Sync Firebase Auth button)
@@ -1216,6 +1344,7 @@ export default function App() {
       const deletedUid = e.detail?.uid;
       if (!deletedUid) return;
       console.log(`[ACCOUNT DELETED] Purging all website state for user: ${deletedUid}`);
+      removeCachedUserProfile(deletedUid);
       setProducts(prev => prev.filter(p => p.sellerId !== deletedUid));
       setSellers(prev => prev.filter(s => s.uid !== deletedUid));
       setExistingUserIds(prev => {
@@ -1233,6 +1362,7 @@ export default function App() {
     window.addEventListener('account-deleted', handleAccountDeleted);
 
     return () => {
+      isUnmounted = true;
       window.removeEventListener('view-product-market', handleViewProduct);
       window.removeEventListener('view-category', handleViewCategory);
       window.removeEventListener('view-product-detail', handleViewProductDetail);
@@ -1250,7 +1380,6 @@ export default function App() {
       if (unsubscribeProfile) unsubscribeProfile();
       if (unsubscribeNotifs) unsubscribeNotifs();
       unsubscribeProducts();
-      unsubscribeUsers();
       window.removeEventListener('keydown', handleAdminKeyCombo);
     };
   }, []);
@@ -1730,7 +1859,7 @@ export default function App() {
               </button>
             )}
             <Logo 
-              showText={true}
+              showText={false}
               onClick={handleLogoHomeClick} 
               className="ml-0.5 sm:ml-1 shrink-0 cursor-pointer" 
             />
@@ -1874,7 +2003,7 @@ export default function App() {
                     Daily Firebase Firestore Free-Tier Read Quota Exceeded
                   </p>
                   <p className="text-[11px] text-red-800/90 dark:text-red-300/90 font-normal mt-0.5">
-                    This database has reached its free daily read limit and will reset tomorrow. Site owners can upgrade the database in Firebase Console to lift the daily cap.
+                    This database has reached its free daily read limit and will reset tomorrow. Cached profiles and catalog data remain active so you can continue signing in and browsing; site owners can upgrade the Firestore plan in Firebase Console to remove the daily cap.
                   </p>
                 </div>
               </div>
