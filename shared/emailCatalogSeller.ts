@@ -420,7 +420,7 @@ export const SELLER_EMAIL_TEMPLATES: EmailTemplateDefinition[] = [
     recipientCategory: "seller",
     section: "Orders and Sales",
     classification: "transactional",
-    subjectTemplate: "Urgent Reminder: Confirm Order {{order_id}} Before Auto-Expiry",
+    subjectTemplate: "Action Needed: Confirm Order {{order_id}} Before Auto-Expiry",
     previewTextTemplate: "Accept or decline {{order_id}} soon to protect your merchant response score.",
     badgeLabel: "CONFIRMATION DEADLINE",
     badgeColor: "#dc2626",

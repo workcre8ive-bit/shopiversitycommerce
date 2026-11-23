@@ -46,6 +46,37 @@ export function isFirestoreQuotaError(error: unknown): boolean {
   );
 }
 
+export const FIRESTORE_QUOTA_EVENT = "shopiversity-firestore-quota";
+let lastQuotaWarnAt = 0;
+
+export function notifyFirestoreQuotaExceeded(context?: string): void {
+  const now = Date.now();
+  if (now - lastQuotaWarnAt > 15000) {
+    lastQuotaWarnAt = now;
+    console.warn(
+      `Firestore daily read quota exceeded${context ? ` (${context})` : ""}; serving cached data cleanly.`
+    );
+  }
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(FIRESTORE_QUOTA_EVENT, { detail: { context } }));
+  }
+}
+
+export function handleListenerError(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null,
+  onQuota?: () => void
+): void {
+  if (isFirestoreQuotaError(error)) {
+    notifyFirestoreQuotaExceeded(path || undefined);
+    onQuota?.();
+    return;
+  }
+  onQuota?.();
+  handleFirestoreError(error, operationType, path);
+}
+
 export function getFirestoreErrorMessage(error: unknown): string {
   let message = "";
   

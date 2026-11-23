@@ -11,7 +11,7 @@ export const BUYER_EMAIL_TEMPLATES: EmailTemplateDefinition[] = [
     classification: "transactional",
     subjectTemplate: "Welcome to Shopiversity, {{buyer_name}}",
     previewTextTemplate: "Your campus marketplace account is ready. Explore verified student vendors and escrow-backed deals.",
-    badgeLabel: "WELCOME TO SHOPIVERSITY",
+    badgeLabel: "Welcome to Shopiversity",
     badgeColor: "#ff6b00",
     heroTitleTemplate: "Welcome to Shopiversity",
     greetingTemplate: "Hello {{buyer_name}},",

@@ -1,7 +1,7 @@
 import React from "react";
 import { Order, UserProfile } from "../types";
 import { auth, db } from "../firebase";
-import { collection, query, where, orderBy, onSnapshot, doc, updateDoc, addDoc, getDoc, getDocs, increment, serverTimestamp } from "firebase/firestore";
+import { collection, query, where, orderBy, onSnapshot, doc, updateDoc, addDoc, getDoc, getDocs, increment, serverTimestamp, limit } from "firebase/firestore";
 import { 
   ShoppingBag, 
   Package, 
@@ -27,7 +27,8 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn, getOrderDeliveryPin } from "../lib/utils";
-import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
+import { handleFirestoreError, handleListenerError, isFirestoreQuotaError, notifyFirestoreQuotaExceeded, OperationType } from "../lib/firebase-errors";
+import { getCachedUserProfile } from "../lib/profileCache";
 import { usePaystackPayment } from "../hooks/usePaystackPayment";
 import { getSyncPaystackPublicKey } from "../utils/paystackConfig";
 import ReceiptModal from "./ReceiptModal";
@@ -42,9 +43,10 @@ import { notifyOrderCompleted } from "../utils/orderEmailNotifications";
 interface OrderTrackingProps {
   setActiveTab: (tab: string) => void;
   onBack?: () => void;
+  userProfile?: UserProfile | null;
 }
 
-export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingProps) {
+export default function OrderTracking({ setActiveTab, onBack, userProfile }: OrderTrackingProps) {
   const [orders, setOrders] = React.useState<Order[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [markingId, setMarkingId] = React.useState<string | null>(null);
@@ -205,11 +207,16 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
   };
 
   React.useEffect(() => {
-    if (!auth.currentUser) return;
+    const uid = userProfile?.uid || auth.currentUser?.uid;
+    if (!uid) {
+      setLoading(false);
+      return;
+    }
 
     const q = query(
       collection(db, "orders"),
-      where("buyerId", "==", auth.currentUser.uid)
+      where("buyerId", "==", uid),
+      limit(60)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -230,12 +237,11 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
       setOrders(ordersData);
       setLoading(false);
     }, (error) => {
-      handleFirestoreError(error, OperationType.GET, "orders");
-      setLoading(false);
+      handleListenerError(error, OperationType.GET, "orders", () => setLoading(false));
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [userProfile?.uid]);
 
   const handleConfirmPickup = async (order: Order) => {
     if (!auth.currentUser) return;
@@ -537,17 +543,27 @@ export default function OrderTracking({ setActiveTab, onBack }: OrderTrackingPro
     return `${hours}h ${minutes}m ${seconds}s left`;
   };
 
-  const [currentUser, setCurrentUser] = React.useState<UserProfile | null>(null);
+  const [currentUser, setCurrentUser] = React.useState<UserProfile | null>(
+    () => userProfile || getCachedUserProfile(auth.currentUser?.uid)
+  );
 
   React.useEffect(() => {
+    if (userProfile !== undefined) {
+      setCurrentUser(userProfile);
+      return;
+    }
     if (!auth.currentUser) return;
     const unsub = onSnapshot(doc(db, "users", auth.currentUser.uid), (doc) => {
       if (doc.exists()) setCurrentUser(doc.data() as UserProfile);
     }, (error) => {
-      console.error("OrderTracking user profile subscription failed:", error);
+      if (isFirestoreQuotaError(error)) {
+        notifyFirestoreQuotaExceeded(`users/${auth.currentUser?.uid}`);
+        return;
+      }
+      console.warn("OrderTracking user profile subscription notice:", error);
     });
     return () => unsub();
-  }, []);
+  }, [userProfile]);
 
   const processDeliveryConfirmation = async (order: Order, paymentReference?: string) => {
     try {

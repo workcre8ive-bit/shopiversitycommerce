@@ -10,11 +10,12 @@ import {
   updateDoc,
   deleteDoc,
   getDocs,
-  addDoc
+  addDoc,
+  limit
 } from 'firebase/firestore';
 import { MessageCircle, Search, User, Loader2, Pin, PinOff, Trash2, Edit3, Check, X, AlertTriangle, Plus, ArrowLeft, Store, Building, MessageSquare } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { handleFirestoreError, OperationType } from '../../lib/firebase-errors';
+import { handleFirestoreError, handleListenerError, OperationType } from '../../lib/firebase-errors';
 
 interface Chat {
   id: string;
@@ -199,7 +200,8 @@ export default function ChatList({ onSelectChat, selectedChatId }: ChatListProps
     // Fetch all chats where current user is a participant
     const q = query(
       collection(db, 'chats'),
-      where('participants', 'array-contains', userId)
+      where('participants', 'array-contains', userId),
+      limit(50)
     );
 
     const unsubscribe = onSnapshot(q, async (snapshot) => {
@@ -262,7 +264,7 @@ export default function ChatList({ onSelectChat, selectedChatId }: ChatListProps
         setLoading(false);
       }
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'chats');
+      handleListenerError(error, OperationType.LIST, 'chats', () => setLoading(false));
     });
 
     return () => unsubscribe();

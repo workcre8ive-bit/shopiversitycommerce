@@ -132,3 +132,65 @@ export function setCachedSellers(sellers: UserProfile[]): void {
     // Ignore storage errors
   }
 }
+
+function getScopedCache<T>(key: string): T[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function setScopedCache<T>(key: string, items: T[], maxItems = 100): void {
+  if (typeof window === "undefined" || !Array.isArray(items)) return;
+  try {
+    localStorage.setItem(key, JSON.stringify(items.slice(0, maxItems)));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+export function getCachedSellerOrders<T = any>(uid?: string | null): T[] {
+  return uid ? getScopedCache<T>(`shopiversity_seller_orders_${uid}`) : [];
+}
+
+export function setCachedSellerOrders<T = any>(uid: string | null | undefined, orders: T[]): void {
+  if (uid) setScopedCache(`shopiversity_seller_orders_${uid}`, orders, 100);
+}
+
+export function getCachedSellerProducts(uid?: string | null): Product[] {
+  return uid ? getScopedCache<Product>(`shopiversity_seller_products_${uid}`) : [];
+}
+
+export function setCachedSellerProducts(uid: string | null | undefined, products: Product[]): void {
+  if (uid) setScopedCache(`shopiversity_seller_products_${uid}`, products, 100);
+}
+
+export function getCachedSellerPayouts<T = any>(uid?: string | null): T[] {
+  return uid ? getScopedCache<T>(`shopiversity_seller_payouts_${uid}`) : [];
+}
+
+export function setCachedSellerPayouts<T = any>(uid: string | null | undefined, payouts: T[]): void {
+  if (uid) setScopedCache(`shopiversity_seller_payouts_${uid}`, payouts, 50);
+}
+
+export function getCachedSellerAnalytics<T = any>(uid?: string | null): T[] {
+  return uid ? getScopedCache<T>(`shopiversity_seller_analytics_${uid}`) : [];
+}
+
+export function setCachedSellerAnalytics<T = any>(uid: string | null | undefined, analytics: T[]): void {
+  if (uid) setScopedCache(`shopiversity_seller_analytics_${uid}`, analytics, 100);
+}
+
+export function getCachedNotifications<T = any>(uid?: string | null): T[] {
+  return uid ? getScopedCache<T>(`shopiversity_notifications_${uid}`) : [];
+}
+
+export function setCachedNotifications<T = any>(uid: string | null | undefined, notifications: T[]): void {
+  if (uid) setScopedCache(`shopiversity_notifications_${uid}`, notifications, 40);
+}
+

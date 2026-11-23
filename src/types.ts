@@ -1,3 +1,15 @@
+export interface PublicContactInfo {
+  phone?: string;
+  whatsapp?: string;
+  email?: string;
+  instagram?: string;
+  twitter?: string;
+  tiktok?: string;
+  facebook?: string;
+  website?: string;
+  other?: string;
+}
+
 export interface StorefrontSettings {
   theme: "minimal" | "bold" | "technical" | "playful";
   primaryColor: string;
@@ -8,6 +20,7 @@ export interface StorefrontSettings {
   bannerHeight?: "small" | "medium" | "large";
   customFont?: string;
   layoutBlocks?: any[];
+  publicContact?: PublicContactInfo;
 }
 
 export interface UserProfile {
@@ -69,6 +82,7 @@ export interface UserProfile {
   };
   theme?: "light" | "dark";
   storefrontSettings?: StorefrontSettings;
+  publicContact?: PublicContactInfo;
   wishlistProductIds?: string[];
   authProvider?: string;
   isGoogleAccount?: boolean;
@@ -158,7 +172,10 @@ export interface Product {
   pickupSchool?: string | null;
   outOfStockAt?: string | null;
   isArchived?: boolean;
-  status?: "active" | "inactive";
+  isDraft?: boolean;
+  status?: "active" | "inactive" | "draft";
+  updatedAt?: string;
+  publicContact?: PublicContactInfo;
   pickupState?: string;
   pickupLga?: string;
   schoolAddress?: string;

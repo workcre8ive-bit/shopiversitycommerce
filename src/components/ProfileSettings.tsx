@@ -1,6 +1,6 @@
 import React from "react";
 import { db } from "../firebase";
-import { doc, updateDoc, collection, query, where, getDocs, deleteDoc, onSnapshot, orderBy, addDoc } from "firebase/firestore";
+import { doc, updateDoc, collection, query, where, getDocs, deleteDoc, onSnapshot, orderBy, addDoc, limit } from "firebase/firestore";
 import { UserProfile } from "../types";
 import { NIGERIAN_CAMPUSES } from "../constants/campuses";
 import { SCHOOL_TYPES, NIGERIAN_SCHOOLS } from "../constants/schools";
@@ -46,7 +46,7 @@ import {
   Mail,
   Bell
 } from "lucide-react";
-import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
+import { handleFirestoreError, isFirestoreQuotaError, notifyFirestoreQuotaExceeded, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
 import { compressImage } from "../lib/imageUtils";
 import { auth } from "../firebase";
 import { deleteUser, signOut } from "firebase/auth";
@@ -517,28 +517,40 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
 
   React.useEffect(() => {
     if (user.role === 'seller') {
-      const ordersQuery = query(collection(db, "orders"), where("sellerId", "==", user.uid), where("status", "==", "delivered"));
+      const ordersQuery = query(collection(db, "orders"), where("sellerId", "==", user.uid), where("status", "==", "delivered"), limit(100));
       const unsubscribeOrders = onSnapshot(ordersQuery, (snapshot) => {
         const total = snapshot.docs.reduce((acc, doc) => acc + (doc.data().sellerEarnings || 0), 0);
         setEarnings(total);
       }, (error) => {
-        console.error("Profile settings orders subscription failed:", error);
+        if (isFirestoreQuotaError(error)) {
+          notifyFirestoreQuotaExceeded("orders");
+          return;
+        }
+        console.warn("Profile settings orders subscription notice:", error);
       });
 
-      const payoutsQuery = query(collection(db, "payoutRequests"), where("sellerId", "==", user.uid), orderBy("createdAt", "desc"));
+      const payoutsQuery = query(collection(db, "payoutRequests"), where("sellerId", "==", user.uid), orderBy("createdAt", "desc"), limit(50));
       const unsubscribePayouts = onSnapshot(payoutsQuery, (snapshot) => {
         const payouts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         setPayoutRequests(payouts);
       }, (error) => {
-        console.error("Profile settings payouts subscription failed:", error);
+        if (isFirestoreQuotaError(error)) {
+          notifyFirestoreQuotaExceeded("payoutRequests");
+          return;
+        }
+        console.warn("Profile settings payouts subscription notice:", error);
       });
 
-      const pendingOrdersQuery = query(collection(db, "orders"), where("sellerId", "==", user.uid), where("status", "==", "pending"));
+      const pendingOrdersQuery = query(collection(db, "orders"), where("sellerId", "==", user.uid), where("status", "==", "pending"), limit(100));
       const unsubscribePending = onSnapshot(pendingOrdersQuery, (snapshot) => {
         const total = snapshot.docs.reduce((acc, doc) => acc + (doc.data().sellerEarnings || 0), 0);
         setPendingEarnings(total);
       }, (error) => {
-        console.error("Profile settings pending earnings subscription failed:", error);
+        if (isFirestoreQuotaError(error)) {
+          notifyFirestoreQuotaExceeded("orders/pending");
+          return;
+        }
+        console.warn("Profile settings pending earnings subscription notice:", error);
       });
 
       return () => {

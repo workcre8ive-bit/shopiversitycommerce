@@ -89,7 +89,7 @@ app.use((req, res, next) => {
       ""
     ).trim(),
     senderEmail: process.env.BREVO_SENDER_EMAIL || process.env.brevo_sender_email || "shopiversitycommerce@gmail.com",
-    senderName: process.env.BREVO_SENDER_NAME || process.env.brevo_sender_name || "SHOPIVERSITY Campus Marketplace",
+    senderName: process.env.BREVO_SENDER_NAME || process.env.brevo_sender_name || "Shopiversity",
     smsSender: process.env.BREVO_SMS_SENDER || process.env.brevo_sms_sender || "SHOPIV",
     smtpUser: (
       process.env.BREVO_SMTP_USER ||
@@ -299,7 +299,7 @@ app.use((req, res, next) => {
       const list = Array.isArray(resp.data?.senders) ? resp.data.senders : [];
       const activeList = list
         .filter((s: any) => s && s.email && s.active !== false)
-        .map((s: any) => ({ email: String(s.email).trim(), name: String(s.name || "SHOPIVERSITY Campus Marketplace").trim(), active: Boolean(s.active) }));
+        .map((s: any) => ({ email: String(s.email).trim(), name: String(s.name || "Shopiversity").trim(), active: Boolean(s.active) }));
       cachedBrevoSenders = { keyPrefix: prefix, senders: activeList, fetchedAt: Date.now() };
       return activeList;
     } catch (e: any) {
@@ -378,6 +378,52 @@ app.use((req, res, next) => {
     }
   }
 
+  const FREE_WEBMAIL_DOMAINS = new Set([
+    "gmail.com",
+    "googlemail.com",
+    "yahoo.com",
+    "ymail.com",
+    "outlook.com",
+    "hotmail.com",
+    "live.com",
+    "aol.com",
+    "icloud.com",
+    "protonmail.com",
+    "proton.me"
+  ]);
+
+  function isFreeWebmailEmail(email: string): boolean {
+    const domain = String(email || "").trim().toLowerCase().split("@")[1] || "";
+    return FREE_WEBMAIL_DOMAINS.has(domain);
+  }
+
+  function escapeEmailTitle(val: string): string {
+    return String(val || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function wrapEmailHtmlDocument(subject: string, rawHtml: string): string {
+    const trimmed = String(rawHtml || "").trim();
+    if (/^<!doctype\s+html/i.test(trimmed) || /^<html[\s>]/i.test(trimmed)) {
+      return trimmed;
+    }
+    return `<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <title>${escapeEmailTitle(subject)}</title>
+</head>
+<body style="margin:0;padding:24px 12px;background-color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0f172a;-webkit-font-smoothing:antialiased;">
+${trimmed}
+</body>
+</html>`;
+  }
+
   /**
    * Unified Email Sender
    * Tries Brevo (Sendinblue REST API or Brevo SMTP Relay) -> then Resend -> then SMTP -> then fallback
@@ -391,6 +437,7 @@ app.use((req, res, next) => {
     senderEmail?: string;
     replyTo?: { email: string; name?: string };
     tags?: string[];
+    listUnsubscribeUrl?: string;
     customApiKey?: string;
     smtpUser?: string;
     skipFallback?: boolean;
@@ -398,8 +445,9 @@ app.use((req, res, next) => {
     await hydrateBrevoConfigFromFirestore();
     const keyCandidates = collectValidBrevoKeys(options.customApiKey);
     const activeSmtpUser = getActiveBrevoSmtpUser(options.smtpUser);
-    const fromName = options.senderName || runtimeBrevoConfig.senderName || "SHOPIVERSITY Campus Marketplace";
+    const fromName = options.senderName || runtimeBrevoConfig.senderName || "Shopiversity";
     const fromEmail = options.senderEmail || runtimeBrevoConfig.senderEmail || "shopiversitycommerce@gmail.com";
+    const finalHtmlContent = wrapEmailHtmlDocument(options.subject, options.htmlContent);
 
     // Normalize recipients
     let recipients: { email: string; name?: string }[] = [];
@@ -423,22 +471,37 @@ app.use((req, res, next) => {
       for (const candidateKey of keyCandidates) {
         const isSmtpKey = candidateKey.startsWith("xsmtpsib-");
 
-        // A: Brevo REST API v3 (xkeysib-...): Resolve verified senders so emails deliver to ALL recipient addresses
+        // A: Brevo REST API v3 (xkeysib-...): Resolve verified senders so emails deliver cleanly with best DMARC alignment
         if (!isSmtpKey) {
           const verifiedSenders = await resolveBrevoVerifiedSenders(candidateKey);
-          const senderCandidates: { email: string; name: string }[] = [];
+          const customDomainSenders = verifiedSenders.filter(s => !isFreeWebmailEmail(s.email));
+          const webmailVerifiedSenders = verifiedSenders.filter(s => isFreeWebmailEmail(s.email));
+          const orderedVerifiedSenders = [...customDomainSenders, ...webmailVerifiedSenders];
 
-          // If configured fromEmail matches a verified Brevo sender, try it first; otherwise prioritize verified senders from Brevo account
-          const matchingVerified = verifiedSenders.find(s => s.email.toLowerCase() === fromEmail.toLowerCase());
-          if (matchingVerified) {
-            senderCandidates.push({ email: matchingVerified.email, name: fromName || matchingVerified.name });
-          } else if (verifiedSenders.length > 0) {
-            for (const vs of verifiedSenders) {
-              senderCandidates.push({ email: vs.email, name: fromName || vs.name });
-            }
-            senderCandidates.push({ email: fromEmail, name: fromName });
+          const senderCandidates: { email: string; name: string }[] = [];
+          const seenSenderEmails = new Set<string>();
+          const pushCandidate = (emailVal: string, nameVal: string) => {
+            const clean = String(emailVal || "").trim().toLowerCase();
+            if (!clean || !clean.includes("@") || seenSenderEmails.has(clean)) return;
+            seenSenderEmails.add(clean);
+            senderCandidates.push({ email: emailVal.trim(), name: nameVal || "Shopiversity" });
+          };
+
+          const matchingVerified = orderedVerifiedSenders.find(s => s.email.toLowerCase() === fromEmail.toLowerCase());
+          // Prefer custom-domain verified senders over @gmail.com senders to prevent consumer-domain DMARC spam flagging
+          if (matchingVerified && !isFreeWebmailEmail(matchingVerified.email)) {
+            pushCandidate(matchingVerified.email, fromName || matchingVerified.name);
           } else {
-            senderCandidates.push({ email: fromEmail, name: fromName });
+            for (const vs of customDomainSenders) {
+              pushCandidate(vs.email, fromName || vs.name);
+            }
+            if (matchingVerified) {
+              pushCandidate(matchingVerified.email, fromName || matchingVerified.name);
+            }
+            for (const vs of webmailVerifiedSenders) {
+              pushCandidate(vs.email, fromName || vs.name);
+            }
+            pushCandidate(fromEmail, fromName);
           }
 
           for (const senderCandidate of senderCandidates) {
@@ -447,7 +510,7 @@ app.use((req, res, next) => {
 
               const fallbackPlainText = (
                 options.textContent ||
-                options.htmlContent
+                finalHtmlContent
                   .replace(/<style[\s\S]*?<\/style>/gi, " ")
                   .replace(/<br\s*\/?>/gi, "\n")
                   .replace(/<\/(p|div|tr|li|h[1-6])>/gi, "\n")
@@ -457,22 +520,28 @@ app.use((req, res, next) => {
                   .trim()
               );
 
+              const extraHeaders: Record<string, string> = {
+                "X-Auto-Response-Suppress": "OOF, AutoReply"
+              };
+              if (options.listUnsubscribeUrl) {
+                extraHeaders["List-Unsubscribe"] = `<${options.listUnsubscribeUrl}>`;
+                extraHeaders["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
+              }
+
               const brevoPayload: any = {
                 sender: {
-                  name: senderCandidate.name || "SHOPIVERSITY Campus Marketplace",
+                  name: senderCandidate.name || "Shopiversity",
                   email: senderCandidate.email
                 },
                 to: recipients,
                 subject: options.subject,
-                htmlContent: options.htmlContent,
+                htmlContent: finalHtmlContent,
                 textContent: fallbackPlainText,
                 replyTo: options.replyTo || {
                   email: senderCandidate.email,
-                  name: senderCandidate.name || "SHOPIVERSITY Campus Marketplace"
+                  name: senderCandidate.name || "Shopiversity"
                 },
-                headers: {
-                  "X-Auto-Response-Suppress": "OOF, AutoReply"
-                }
+                headers: extraHeaders
               };
 
               if (options.tags && options.tags.length > 0) {
@@ -516,7 +585,7 @@ app.use((req, res, next) => {
 
           const plainTextFallback = (
             options.textContent ||
-            options.htmlContent
+            finalHtmlContent
               .replace(/<style[\s\S]*?<\/style>/gi, " ")
               .replace(/<br\s*\/?>/gi, "\n")
               .replace(/<\/(p|div|tr|li|h[1-6])>/gi, "\n")
@@ -550,20 +619,24 @@ app.use((req, res, next) => {
                 socketTimeout: 5000
               });
 
+              const smtpHeaders: Record<string, string> = {
+                "X-Auto-Response-Suppress": "OOF, AutoReply",
+                ...(options.tags && options.tags.length > 0 ? { "X-Mailin-Tag": options.tags.join(",") } : {})
+              };
+              if (options.listUnsubscribeUrl) {
+                smtpHeaders["List-Unsubscribe"] = `<${options.listUnsubscribeUrl}>`;
+                smtpHeaders["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
+              }
+
               const info = await transporter.sendMail({
                 from: `"${fromName}" <${cleanFromEmail}>`,
                 sender: cleanFromEmail,
                 replyTo: options.replyTo ? `"${options.replyTo.name || fromName}" <${options.replyTo.email}>` : cleanFromEmail,
                 to: recipients.map(r => r.email).join(", "),
                 subject: options.subject,
-                html: options.htmlContent,
+                html: finalHtmlContent,
                 text: plainTextFallback,
-                messageId: `<${crypto.randomUUID()}@shopiversity.app>`,
-                headers: {
-                  "X-Mailer": "Shopiversity Transactional",
-                  "X-Auto-Response-Suppress": "OOF, AutoReply",
-                  ...(options.tags && options.tags.length > 0 ? { "X-Mailin-Tag": options.tags.join(",") } : {})
-                }
+                headers: smtpHeaders
               });
 
               if (Array.isArray(info.rejected) && info.rejected.length > 0 && (!info.accepted || info.accepted.length === 0)) {
@@ -825,13 +898,13 @@ app.use((req, res, next) => {
     const testHtml = `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
         <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ff6b00;">
-          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">SHOPIVERSITY</h1>
+          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">Shopiversity</h1>
           <p style="color: #64748b; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Brevo Email Integration Active</p>
         </div>
         <div style="background: linear-gradient(135deg, #059669 0%, #10b981 100%); padding: 24px; border-radius: 18px; color: #ffffff; margin: 24px 0; text-align: center;">
-          <h2 style="font-size: 20px; font-weight: 800; margin: 0 0 8px 0;">🎉 Brevo Connection Test Successful!</h2>
-          <p style="font-size: 14px; margin: 0; opacity: 0.95;">
-            Your Brevo API Key has been verified. All transactional emails across SHOPIVERSITY will now be delivered via Brevo.
+          <h2 style="font-size: 20px; font-weight: 800; margin: 0 0 8px 0;">Brevo Connection Test Successful</h2>
+          <p style="font-size: 14px; margin: 0;">
+            Your Brevo API Key has been verified. All transactional emails across Shopiversity will now be delivered via Brevo.
           </p>
         </div>
         <div style="background-color: #f8fafc; padding: 18px; border-radius: 16px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
@@ -845,16 +918,16 @@ app.use((req, res, next) => {
           </ul>
         </div>
         <div style="text-align: center; color: #64748b; font-size: 12px;">
-          <p>SHOPIVERSITY uses Brevo for Email Verification, Receipts, Password Resets, Customer Service, and Feedback.</p>
+          <p>Shopiversity uses Brevo for Email Verification, Receipts, Password Resets, Customer Service, and Feedback.</p>
         </div>
       </div>
     `;
 
     const result = await sendBrevoOrFallbackEmail({
       to: targetEmail,
-      subject: "SHOPIVERSITY: Brevo Email Integration Test",
+      subject: "Shopiversity: Brevo Email Integration Test",
       htmlContent: testHtml,
-      textContent: `SHOPIVERSITY Brevo Integration Test\n\nYour Brevo API key is connected and active.\nSender: ${senderEmail || runtimeBrevoConfig.senderEmail}\nRecipient: ${targetEmail}`,
+      textContent: `Shopiversity Brevo Integration Test\n\nYour Brevo API key is connected and active.\nSender: ${senderEmail || runtimeBrevoConfig.senderEmail}\nRecipient: ${targetEmail}`,
       senderName: senderName || runtimeBrevoConfig.senderName,
       senderEmail: senderEmail || runtimeBrevoConfig.senderEmail,
       customApiKey: testKey,
@@ -942,15 +1015,14 @@ app.use((req, res, next) => {
     const testHtml = `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 32px 24px; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 24px;">
         <div style="text-align: center; padding-bottom: 24px; border-bottom: 2px solid #ff6b00;">
-          <h1 style="color: #ff6b00; font-size: 28px; font-weight: 900; margin: 0; letter-spacing: -0.5px;">SHOPIVERSITY</h1>
-          <p style="color: #64748b; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 2px; margin-top: 6px;">Campus Marketplace • Brevo Email Integration</p>
+          <h1 style="color: #ff6b00; font-size: 28px; font-weight: 900; margin: 0; letter-spacing: -0.5px;">Shopiversity</h1>
+          <p style="color: #64748b; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 2px; margin-top: 6px;">Campus Marketplace &bull; Brevo Email Integration</p>
         </div>
 
-        <div style="background: linear-gradient(135deg, #ff6b00 0%, #ea580c 100%); padding: 28px 24px; border-radius: 20px; color: #ffffff; margin: 28px 0; text-align: center; box-shadow: 0 10px 25px -5px rgba(255, 107, 0, 0.3);">
-          <div style="font-size: 40px; margin-bottom: 8px;">🚀</div>
-          <h2 style="font-size: 22px; font-weight: 800; margin: 0 0 10px 0; color: #ffffff;">Brevo Connection Live &amp; Verified!</h2>
-          <p style="font-size: 14px; margin: 0; opacity: 0.95; line-height: 1.6;">
-            Your Brevo transactional email engine is functioning with 100% operational integrity on SHOPIVERSITY.
+        <div style="background: linear-gradient(135deg, #ff6b00 0%, #ea580c 100%); padding: 28px 24px; border-radius: 20px; color: #ffffff; margin: 28px 0; text-align: center;">
+          <h2 style="font-size: 22px; font-weight: 800; margin: 0 0 10px 0; color: #ffffff;">Brevo Connection Verified</h2>
+          <p style="font-size: 14px; margin: 0; line-height: 1.6;">
+            Your Brevo transactional email configuration is active on Shopiversity.
           </p>
         </div>
 
@@ -959,7 +1031,7 @@ app.use((req, res, next) => {
           <table style="width: 100%; border-collapse: collapse; font-size: 13px; color: #334155;">
             <tr>
               <td style="padding: 6px 0; font-weight: 700; width: 35%;">Service Provider:</td>
-              <td style="padding: 6px 0; color: #ff6b00; font-weight: 800;">Brevo (Sendinblue) Transactional v3</td>
+              <td style="padding: 6px 0; color: #ff6b00; font-weight: 800;">Brevo Transactional v3</td>
             </tr>
             <tr>
               <td style="padding: 6px 0; font-weight: 700;">Sender Address:</td>
@@ -971,11 +1043,11 @@ app.use((req, res, next) => {
             </tr>
             <tr>
               <td style="padding: 6px 0; font-weight: 700;">Security Status:</td>
-              <td style="padding: 6px 0; color: #16a34a; font-weight: 700;">✓ Restricted &amp; Authenticated</td>
+              <td style="padding: 6px 0; color: #16a34a; font-weight: 700;">Restricted &amp; Authenticated</td>
             </tr>
             <tr>
               <td style="padding: 6px 0; font-weight: 700;">Server Timestamp:</td>
-              <td style="padding: 6px 0; font-mono; font-size: 12px;">${new Date().toISOString()}</td>
+              <td style="padding: 6px 0; font-family: monospace; font-size: 12px;">${new Date().toISOString()}</td>
             </tr>
           </table>
         </div>
@@ -983,16 +1055,16 @@ app.use((req, res, next) => {
         <div style="background-color: #fff7ed; padding: 16px 20px; border-radius: 16px; border: 1px solid #fed7aa; margin-bottom: 24px;">
           <h4 style="font-size: 12px; font-weight: 800; color: #c2410c; margin: 0 0 6px 0; text-transform: uppercase;">Active Automated Notifications:</h4>
           <p style="font-size: 12px; color: #9a3412; margin: 0; line-height: 1.6;">
-            • Welcome &amp; Signup Verification Codes<br/>
-            • Password Reset Instructions<br/>
-            • Order Placement &amp; Escrow Payment Receipts<br/>
-            • Vendor Sales Alerts &amp; Logistics Dispatch Updates<br/>
-            • 3-Day Refund Countdown &amp; Return Processing
+            &bull; Welcome &amp; Signup Verification Codes<br/>
+            &bull; Password Reset Instructions<br/>
+            &bull; Order Placement &amp; Escrow Payment Receipts<br/>
+            &bull; Vendor Sales Alerts &amp; Logistics Dispatch Updates<br/>
+            &bull; 3-Day Refund Countdown &amp; Return Processing
           </p>
         </div>
 
         <div style="text-align: center; color: #94a3b8; font-size: 11px; border-top: 1px solid #f1f5f9; padding-top: 20px;">
-          <p style="margin: 0;">SHOPIVERSITY Campus Marketplace • Multi-Campus Student Commerce &amp; Escrow System</p>
+          <p style="margin: 0;">Shopiversity Campus Marketplace &bull; Multi-Campus Student Commerce &amp; Escrow System</p>
           <p style="margin: 4px 0 0 0;">Need support? Contact <a href="mailto:shopiversitycommerce@gmail.com" style="color: #ff6b00; text-decoration: none; font-weight: 700;">shopiversitycommerce@gmail.com</a></p>
         </div>
       </div>
@@ -1002,9 +1074,9 @@ app.use((req, res, next) => {
 
     const result = await sendBrevoOrFallbackEmail({
       to: recipient,
-      subject: "SHOPIVERSITY: Brevo Email Delivery Verification",
+      subject: "Shopiversity: Brevo Email Delivery Verification",
       htmlContent: testHtml,
-      textContent: `SHOPIVERSITY Brevo Delivery Verification\n\nTransactional email delivery is active for ${recipient}.`,
+      textContent: `Shopiversity Brevo Delivery Verification\n\nTransactional email delivery is active for ${recipient}.`,
       senderName: req.body?.senderName || runtimeBrevoConfig.senderName,
       senderEmail: req.body?.senderEmail || runtimeBrevoConfig.senderEmail,
       customApiKey: req.body?.apiKey || req.query?.apiKey,
@@ -1061,41 +1133,41 @@ app.use((req, res, next) => {
 
     const htmlContent = `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff; color: #0f172a;">
-        <div style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;">Your SHOPIVERSITY 6-digit verification code is ${cleanCode}. Valid for 15 minutes.</div>
+        <div style="display:none;max-height:0px;max-width:0px;overflow:hidden;mso-hide:all;">Your Shopiversity 6-digit verification code is ${cleanCode}. Valid for 15 minutes.</div>
         <div style="text-align: center; padding-bottom: 20px;">
-          <h1 style="color: #ea580c; font-size: 28px; font-weight: 900; margin: 0; letter-spacing: -0.5px;">SHOPIVERSITY</h1>
-          <p style="color: #64748b; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Campus Marketplace & Secure Escrow</p>
+          <h1 style="color: #ea580c; font-size: 28px; font-weight: 900; margin: 0; letter-spacing: -0.5px;">Shopiversity</h1>
+          <p style="color: #64748b; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Campus Marketplace &amp; Secure Escrow</p>
         </div>
-        <div style="background-color: #fff7ed; background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%); padding: 32px; text-align: center; border-radius: 20px; border: 1px solid #fed7aa; margin-bottom: 24px;">
-          <div style="display: inline-block; background-color: #ea580c; color: #ffffff; padding: 4px 12px; border-radius: 999px; font-size: 11px; font-weight: 900; letter-spacing: 1px; margin-bottom: 12px;">
+        <div style="background-color: #fff7ed; padding: 32px; text-align: center; border-radius: 20px; border: 1px solid #fed7aa; margin-bottom: 24px;">
+          <div style="display: inline-block; background-color: #ea580c; color: #ffffff; padding: 4px 12px; border-radius: 999px; font-size: 11px; font-weight: 800; letter-spacing: 1px; margin-bottom: 12px;">
             ACCOUNT VERIFICATION
           </div>
           <h2 style="color: #1e293b; font-size: 22px; font-weight: 800; margin-top: 0; margin-bottom: 8px;">Verify Your Email Address</h2>
           <p style="color: #334155; font-size: 14px; margin-bottom: 24px; line-height: 1.5;">
-            Welcome ${userName ? `<strong>${userName}</strong>` : "to SHOPIVERSITY"}! Please enter the 6-digit confirmation code below on the website to verify your account:
+            Welcome ${userName ? `<strong>${userName}</strong>` : "to Shopiversity"}! Please enter the 6-digit confirmation code below on the website to verify your account:
           </p>
-          <div style="background-color: #ffffff; padding: 20px 32px; display: inline-block; border-radius: 16px; border: 2px dashed #ea580c; box-shadow: 0 10px 20px -3px rgba(234, 88, 12, 0.15);">
+          <div style="background-color: #ffffff; padding: 20px 32px; display: inline-block; border-radius: 16px; border: 1px solid #fdba74;">
             <span style="font-size: 38px; font-weight: 900; letter-spacing: 12px; color: #ea580c; font-family: monospace;">${cleanCode}</span>
           </div>
           <p style="color: #64748b; font-size: 11px; margin-top: 16px; margin-bottom: 0;">Code expires in 15 minutes.</p>
         </div>
         <div style="background-color: #f8fafc; padding: 16px; border-radius: 14px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
           <p style="color: #475569; font-size: 12px; line-height: 1.5; margin: 0; text-align: center;">
-            🔒 This code was requested for <strong>${targetEmail}</strong>. If you did not initiate this request, no action is needed.
+            This code was requested for <strong>${targetEmail}</strong>. If you did not initiate this request, no action is needed.
           </p>
         </div>
         <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 24px 0;" />
         <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">
-          &copy; 2026 SHOPIVERSITY Campus Network. Escrow-Protected Marketplace.
+          &copy; 2026 Shopiversity Campus Network. Escrow-Protected Marketplace.
         </p>
       </div>
     `;
 
-    const textContent = `SHOPIVERSITY Account Verification\n\nWelcome${userName ? ` ${userName}` : ""}!\nYour 6-digit verification code is: ${cleanCode}\n\nThis code expires in 15 minutes.\nRequested for: ${targetEmail}`;
+    const textContent = `Shopiversity Account Verification\n\nWelcome${userName ? ` ${userName}` : ""}!\nYour 6-digit verification code is: ${cleanCode}\n\nThis code expires in 15 minutes.\nRequested for: ${targetEmail}`;
 
     const dispatchResult = await sendBrevoOrFallbackEmail({
       to: targetEmail,
-      subject: `${cleanCode} is your SHOPIVERSITY Verification Code`,
+      subject: `${cleanCode} is your Shopiversity verification code`,
       htmlContent,
       textContent,
       tags: ["verification", "signup-auth"]
@@ -1110,7 +1182,7 @@ app.use((req, res, next) => {
         recipientCategory: "buyer",
         classification: "transactional",
         recipientEmail: targetEmail,
-        subject: `${cleanCode} is your SHOPIVERSITY Verification Code`,
+        subject: `${cleanCode} is your Shopiversity verification code`,
         triggerEvent: "auth.email_verification_requested",
         status: "failed",
         provider: dispatchResult.provider,
@@ -1345,7 +1417,7 @@ app.use((req, res, next) => {
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
         <!-- Header -->
         <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ff6b00;">
-          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">SHOPIVERSITY</h1>
+          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">Shopiversity</h1>
           <p style="color: #64748b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Official Escrow Transaction Receipt</p>
         </div>
 
@@ -1353,7 +1425,7 @@ app.use((req, res, next) => {
         <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 24px; border-radius: 18px; color: #ffffff; margin: 20px 0;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
             <span style="background-color: #10b981; color: #ffffff; font-size: 11px; font-weight: 800; padding: 3px 10px; border-radius: 999px; text-transform: uppercase;">
-              Payment Secured & Verified
+              Payment Secured &amp; Verified
             </span>
             <span style="color: #94a3b8; font-size: 11px;">${orderDate}</span>
           </div>
@@ -1366,7 +1438,7 @@ app.use((req, res, next) => {
         <!-- Escrow Protection Badge -->
         <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; padding: 14px; border-radius: 14px; margin-bottom: 20px;">
           <p style="color: #166534; font-size: 12px; font-weight: 700; margin: 0; line-height: 1.5;">
-            🛡️ <strong>48-Hour Campus Escrow Guarantee Active:</strong> Your funds are safely vaulted. The seller only receives payout after you confirm physical handover or inspection.
+            <strong>48-Hour Campus Escrow Guarantee Active:</strong> Your funds are safely vaulted. The seller only receives payout after you confirm physical handover or inspection.
           </p>
         </div>
 
@@ -1381,9 +1453,9 @@ app.use((req, res, next) => {
               <span style="font-weight: 700;">₦${totalPrice.toLocaleString()}</span>
             </div>
             <div style="font-size: 12px; color: #64748b; margin-bottom: 12px;">
-              Campus: ${campus} • Merchant: ${sellerName}
+              Campus: ${campus} &bull; Merchant: ${sellerName}
             </div>
-            <hr style="border: 0; border-top: 1px dashed #e2e8f0; margin: 12px 0;" />
+            <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 12px 0;" />
             <div style="display: flex; justify-content: space-between; font-size: 12px; color: #64748b; margin-bottom: 4px;">
               <span>Fulfillment Method</span>
               <span style="font-weight: 600; color: #1e293b;">${deliveryType}</span>
@@ -1409,7 +1481,7 @@ app.use((req, res, next) => {
           <h4 style="color: #9a3412; font-size: 13px; font-weight: 800; margin: 0 0 6px 0;">What happens next?</h4>
           <p style="color: #c2410c; font-size: 12px; margin: 0; line-height: 1.5;">
             1. The merchant prepares your order for handover/delivery.<br />
-            2. You can track courier dispatch live inside your SHOPIVERSITY Orders tab.<br />
+            2. You can track courier dispatch live inside your Shopiversity Orders tab.<br />
             3. Tap <strong>Confirm Received</strong> upon handover to release the payout.
           </p>
         </div>
@@ -1417,14 +1489,14 @@ app.use((req, res, next) => {
         <!-- Footer -->
         <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;" />
         <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">
-          Need help? Reply directly to this email or visit SHOPIVERSITY Support.<br />
-          &copy; 2026 SHOPIVERSITY Campus Marketplace. All rights reserved.
+          Need help? Reply directly to this email or visit Shopiversity Support.<br />
+          &copy; 2026 Shopiversity Campus Marketplace. All rights reserved.
         </p>
       </div>
     `;
 
     const receiptText = [
-      "SHOPIVERSITY - Official Escrow Transaction Receipt",
+      "Shopiversity - Official Escrow Transaction Receipt",
       `Order Reference: ${finalOrderId}`,
       `Date: ${orderDate}`,
       `Item: ${productName} (x${quantity})`,
@@ -1435,12 +1507,12 @@ app.use((req, res, next) => {
       `Campus: ${campus}`,
       "",
       "48-Hour Campus Escrow Guarantee: Funds remain protected in escrow until you confirm physical handover or inspection.",
-      "Track live progress inside your SHOPIVERSITY Orders tab."
+      "Track live progress inside your Shopiversity Orders tab."
     ].join("\n");
 
     const dispatchResult = await sendBrevoOrFallbackEmail({
       to: targetEmail,
-      subject: `SHOPIVERSITY Escrow Receipt: Order ${finalOrderId}`,
+      subject: `Shopiversity Escrow Receipt: Order ${finalOrderId}`,
       htmlContent: receiptHtml,
       textContent: receiptText,
       tags: ["receipt", "order-confirmation", "escrow"]
@@ -1514,20 +1586,20 @@ app.use((req, res, next) => {
     const htmlContent = `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
         <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ef4444;">
-          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">SHOPIVERSITY</h1>
-          <p style="color: #64748b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Security & Password Management</p>
+          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">Shopiversity</h1>
+          <p style="color: #64748b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Security &amp; Password Management</p>
         </div>
 
-        <div style="background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%); padding: 30px; text-align: center; border-radius: 20px; border: 1px solid #fecaca; margin: 24px 0;">
-          <div style="display: inline-block; background-color: #ef4444; color: #ffffff; padding: 4px 12px; border-radius: 999px; font-size: 11px; font-weight: 900; letter-spacing: 1px; margin-bottom: 12px;">
+        <div style="background-color: #fef2f2; padding: 30px; text-align: center; border-radius: 20px; border: 1px solid #fecaca; margin: 24px 0;">
+          <div style="display: inline-block; background-color: #ef4444; color: #ffffff; padding: 4px 12px; border-radius: 999px; font-size: 11px; font-weight: 800; letter-spacing: 1px; margin-bottom: 12px;">
             PASSWORD RESET REQUEST
           </div>
           <h2 style="color: #991b1b; font-size: 22px; font-weight: 800; margin: 0 0 10px 0;">Reset Your Password</h2>
           <p style="color: #475569; font-size: 14px; margin-bottom: 20px; line-height: 1.5;">
-            Hello ${userName ? `<strong>${userName}</strong>` : ""}, we received a request to reset the password for your SHOPIVERSITY account. Enter the 6-digit security code below on the website:
+            Hello ${userName ? `<strong>${userName}</strong>` : ""}, we received a request to reset the password for your Shopiversity account. Enter the 6-digit security code below on the website:
           </p>
 
-          <div style="background-color: #ffffff; padding: 18px 28px; display: inline-block; border-radius: 16px; border: 2px dashed #ef4444; box-shadow: 0 10px 20px -3px rgba(239, 68, 68, 0.15); margin-bottom: 16px;">
+          <div style="background-color: #ffffff; padding: 18px 28px; display: inline-block; border-radius: 16px; border: 1px solid #fca5a5; margin-bottom: 16px;">
             <span style="font-size: 36px; font-weight: 900; letter-spacing: 10px; color: #dc2626; font-family: monospace;">${resetCode}</span>
           </div>
 
@@ -1538,22 +1610,22 @@ app.use((req, res, next) => {
 
         <div style="background-color: #f8fafc; padding: 16px; border-radius: 14px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
           <p style="color: #64748b; font-size: 12px; line-height: 1.5; margin: 0;">
-            ⚠️ <strong>Security Alert:</strong> If you did not make this request, you can safely ignore this email.
+            <strong>Security Notice:</strong> If you did not make this request, you can safely ignore this email.
           </p>
         </div>
 
         <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;" />
         <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">
-          &copy; 2026 SHOPIVERSITY Campus Network. All rights reserved.
+          &copy; 2026 Shopiversity Campus Network. All rights reserved.
         </p>
       </div>
     `;
 
-    const textContent = `SHOPIVERSITY Password Reset\n\nHello${userName ? ` ${userName}` : ""},\nYour 6-digit password reset security code is: ${resetCode}\n\nThis code expires in 15 minutes.`;
+    const textContent = `Shopiversity Password Reset\n\nHello${userName ? ` ${userName}` : ""},\nYour 6-digit password reset security code is: ${resetCode}\n\nThis code expires in 15 minutes.`;
 
     const dispatchResult = await sendBrevoOrFallbackEmail({
       to: targetEmail,
-      subject: `${resetCode} is your SHOPIVERSITY Password Reset Code`,
+      subject: `${resetCode} is your Shopiversity password reset code`,
       htmlContent,
       textContent,
       tags: ["security", "password-reset"]
@@ -1785,8 +1857,9 @@ app.use((req, res, next) => {
 
     await sendBrevoOrFallbackEmail({
       to: teamEmail,
-      subject: `🚨 [NEW TICKET ${refId}] ${category}: ${subject || requesterName}`,
+      subject: `[Support Ticket ${refId}] ${category}: ${subject || requesterName}`,
       htmlContent: teamHtml,
+      textContent: `New Support Ticket ${refId}\nFrom: ${requesterName} (${requesterEmail})\nCategory: ${category}\nSubject: ${subject}\n\n${message || ""}`,
       replyTo: requesterEmail ? { email: requesterEmail, name: requesterName } : undefined,
       tags: ["admin-alert", "support-inbox"]
     });
@@ -1811,12 +1884,12 @@ app.use((req, res, next) => {
     const thankYouHtml = `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
         <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ff6b00;">
-          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">SHOPIVERSITY</h1>
-          <p style="color: #64748b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Student Voice & Platform Feedback</p>
+          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">Shopiversity</h1>
+          <p style="color: #64748b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Student Voice &amp; Platform Feedback</p>
         </div>
 
-        <div style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); padding: 24px; border-radius: 18px; margin: 20px 0; border: 1px solid #fcd34d; text-align: center;">
-          <h2 style="color: #92400e; font-size: 20px; font-weight: 800; margin: 0 0 8px 0;">💛 Thank You for Your Feedback!</h2>
+        <div style="background-color: #fef3c7; padding: 24px; border-radius: 18px; margin: 20px 0; border: 1px solid #fcd34d; text-align: center;">
+          <h2 style="color: #92400e; font-size: 20px; font-weight: 800; margin: 0 0 8px 0;">Thank You for Your Feedback</h2>
           <p style="color: #b45309; font-size: 13px; margin: 0; line-height: 1.5;">
             Hi ${requesterName}, your thoughts help us make campus commerce safer, faster, and more rewarding for every student.
           </p>
@@ -1825,7 +1898,7 @@ app.use((req, res, next) => {
         <div style="background-color: #f8fafc; padding: 18px; border-radius: 16px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
           <h4 style="font-size: 12px; font-weight: 800; color: #334155; margin: 0 0 10px 0; text-transform: uppercase;">Your Submission:</h4>
           <p style="font-size: 13px; color: #475569; margin: 0 0 6px 0;"><strong>Category:</strong> ${feedbackType || "General Feedback"}</p>
-          ${rating ? `<p style="font-size: 13px; color: #475569; margin: 0 0 6px 0;"><strong>Rating:</strong> ⭐ ${rating}/5</p>` : ""}
+          ${rating ? `<p style="font-size: 13px; color: #475569; margin: 0 0 6px 0;"><strong>Rating:</strong> ${rating}/5</p>` : ""}
           ${campus ? `<p style="font-size: 13px; color: #475569; margin: 0 0 6px 0;"><strong>Campus:</strong> ${campus}</p>` : ""}
           <div style="background-color: #ffffff; padding: 12px; border-radius: 10px; border: 1px solid #e2e8f0; font-size: 12px; color: #334155; line-height: 1.5; margin-top: 10px;">
             ${message ? message.replace(/\n/g, "<br/>") : "No comment entered"}
@@ -1834,7 +1907,7 @@ app.use((req, res, next) => {
 
         <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;" />
         <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">
-          &copy; 2026 SHOPIVERSITY Campus Network. All rights reserved.
+          &copy; 2026 Shopiversity Campus Network. All rights reserved.
         </p>
       </div>
     `;
@@ -1842,8 +1915,9 @@ app.use((req, res, next) => {
     if (requesterEmail) {
       await sendBrevoOrFallbackEmail({
         to: requesterEmail,
-        subject: "💌 Thank You for Your Feedback on SHOPIVERSITY",
+        subject: "Thank you for your feedback on Shopiversity",
         htmlContent: thankYouHtml,
+        textContent: `Shopiversity\n\nHi ${requesterName},\nThank you for your feedback (${feedbackType || "General Feedback"}).\n\n${message || ""}`,
         tags: ["feedback", "user-appreciation"]
       });
     }
@@ -1861,8 +1935,9 @@ app.use((req, res, next) => {
 
     await sendBrevoOrFallbackEmail({
       to: teamEmail,
-      subject: `💡 [FEEDBACK] ${feedbackType || "User Review"} from ${requesterName}`,
+      subject: `[Feedback] ${feedbackType || "User Review"} from ${requesterName}`,
       htmlContent: teamNotice,
+      textContent: `User Feedback from ${requesterName} (${requesterEmail || "Anonymous"})\nType: ${feedbackType || "General"}\nRating: ${rating || "N/A"}\n\n${message || ""}`,
       tags: ["internal-feedback"]
     });
 
@@ -2182,12 +2257,16 @@ app.use((req, res, next) => {
       recipient_email: resolvedEmail
     };
     const rendered = renderShopiversityEmail(template, mergedVars, options.origin);
+    const marketingUnsubUrl = template.classification === "marketing"
+      ? `${(options.origin || "https://shopiversity.app").replace(/\/+$/, "")}/api/emails/unsubscribe?email=${encodeURIComponent(resolvedEmail)}`
+      : undefined;
 
     let sendRes = await sendBrevoOrFallbackEmail({
       to: resolvedEmail,
       subject: rendered.subject,
       htmlContent: rendered.html,
       textContent: rendered.text,
+      listUnsubscribeUrl: marketingUnsubUrl,
       tags: [template.code, template.recipientCategory, template.classification, template.id]
     });
 
@@ -2200,6 +2279,7 @@ app.use((req, res, next) => {
         subject: rendered.subject,
         htmlContent: rendered.html,
         textContent: rendered.text,
+        listUnsubscribeUrl: marketingUnsubUrl,
         tags: [template.code, template.recipientCategory, template.classification, template.id, "retry-1"]
       });
     }
@@ -2551,16 +2631,16 @@ app.use((req, res, next) => {
 
     const htmlContent = `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff; color: #0f172a;">
-        <div style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;">${cleanStatusTitle} - Order ${cleanOrderId} (${itemTitle}).</div>
+        <div style="display:none;max-height:0px;max-width:0px;overflow:hidden;mso-hide:all;">${cleanStatusTitle} - Order ${cleanOrderId} (${itemTitle}).</div>
         <!-- Header -->
         <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ff6b00;">
-          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0; letter-spacing: -0.5px;">SHOPIVERSITY</h1>
+          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0; letter-spacing: -0.5px;">Shopiversity</h1>
           <p style="color: #64748b; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Verified Campus Escrow Network</p>
         </div>
 
         <!-- Hero Status Card -->
         <div style="background-color: #0f172a; background: ${bannerGradient}; padding: 26px; border-radius: 20px; color: #ffffff; margin: 20px 0; text-align: left;">
-          <div style="display: inline-block; background-color: ${badgeColor}; color: #ffffff; padding: 4px 12px; border-radius: 999px; font-size: 10px; font-weight: 900; letter-spacing: 1px; margin-bottom: 12px; text-transform: uppercase;">
+          <div style="display: inline-block; background-color: ${badgeColor}; color: #ffffff; padding: 4px 12px; border-radius: 999px; font-size: 10px; font-weight: 800; letter-spacing: 1px; margin-bottom: 12px; text-transform: uppercase;">
             ${badgeText}
           </div>
           <h2 style="font-size: 21px; font-weight: 800; margin: 0 0 8px 0; color: #ffffff; line-height: 1.3;">
@@ -2580,7 +2660,7 @@ app.use((req, res, next) => {
             ${statusMessage || `Your order status is now: <strong>${status}</strong>`}
           </p>
 
-          <table style="width: 100%; border-collapse: collapse; font-size: 13px; color: #475569; margin-top: 12px; border-top: 1px dashed #cbd5e1; padding-top: 12px;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 13px; color: #475569; margin-top: 12px; border-top: 1px solid #cbd5e1; padding-top: 12px;">
             <tr>
               <td style="padding: 8px 0; font-weight: 600;">Product:</td>
               <td style="padding: 8px 0; text-align: right; font-weight: 700; color: #0f172a;">${itemTitle} (x${qty})</td>
@@ -2610,7 +2690,7 @@ app.use((req, res, next) => {
           </table>
 
           ${deliveryOtp ? `
-            <div style="background-color: #ffffff; padding: 16px; border-radius: 14px; border: 2px dashed #ff6b00; text-align: center; margin-top: 18px;">
+            <div style="background-color: #ffffff; padding: 16px; border-radius: 14px; border: 1px solid #fdba74; text-align: center; margin-top: 18px;">
               <span style="font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; display: block; margin-bottom: 4px; letter-spacing: 1px;">
                 ${resolvedPinLabel}
               </span>
@@ -2627,21 +2707,21 @@ app.use((req, res, next) => {
         <!-- Escrow Protection Note -->
         <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; padding: 14px 18px; border-radius: 14px; margin-bottom: 22px;">
           <p style="color: #166534; font-size: 12px; font-weight: 700; margin: 0; line-height: 1.5;">
-            <strong>SHOPIVERSITY Escrow Protection:</strong> Funds remain securely vaulted in escrow until delivery is verified. Buyers have 72 hours from receipt to inspect goods and raise a dispute if needed.
+            <strong>Shopiversity Escrow Protection:</strong> Funds remain securely vaulted in escrow until delivery is verified. Buyers have 72 hours from receipt to inspect goods and raise a dispute if needed.
           </p>
         </div>
 
         <!-- Footer -->
         <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;" />
         <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0; line-height: 1.5;">
-          This is an automated transactional update from SHOPIVERSITY for your active order.<br />
-          &copy; 2026 SHOPIVERSITY Campus Network. All rights reserved.
+          This is an automated transactional update from Shopiversity for your active order.<br />
+          &copy; 2026 Shopiversity Campus Network. All rights reserved.
         </p>
       </div>
     `;
 
     const textContentLines = [
-      `SHOPIVERSITY - ${cleanStatusTitle}`,
+      `Shopiversity - ${cleanStatusTitle}`,
       `Order Reference: ${cleanOrderId}`,
       "",
       `Hello ${rName},`,
@@ -2654,12 +2734,12 @@ app.use((req, res, next) => {
       logisticsName ? `Logistics Partner: ${logisticsName}` : "",
       deliveryOtp ? `\n${resolvedPinLabel}: ${deliveryOtp}` : "",
       "",
-      "SHOPIVERSITY Escrow Protection: Funds remain protected until handover verification."
+      "Shopiversity Escrow Protection: Funds remain protected until handover verification."
     ].filter(Boolean);
 
     const dispatchResult = await sendBrevoOrFallbackEmail({
       to: targetEmail,
-      subject: `SHOPIVERSITY Order ${cleanOrderId}: ${cleanStatusTitle}`,
+      subject: `Shopiversity Order ${cleanOrderId}: ${cleanStatusTitle}`,
       htmlContent,
       textContent: textContentLines.join("\n"),
       tags: ["order-lifecycle", status || "status-update"]
@@ -2680,7 +2760,7 @@ app.use((req, res, next) => {
       recipientCategory: recipientRole || "buyer",
       classification: "transactional",
       recipientEmail: targetEmail,
-      subject: `SHOPIVERSITY Order ${cleanOrderId}: ${cleanStatusTitle}`,
+      subject: `Shopiversity Order ${cleanOrderId}: ${cleanStatusTitle}`,
       triggerEvent: `order.lifecycle.${String(status || "update").toLowerCase()}`,
       status: dispatchResult.success ? "sent" : "failed",
       provider: dispatchResult.provider,
@@ -2763,21 +2843,21 @@ app.use((req, res, next) => {
     const htmlContent = `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
         <div style="text-align: center; padding-bottom: 20px;">
-          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">SHOPIVERSITY</h1>
-          <p style="color: #64748b; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Exclusive Super-Admin Gateway</p>
+          <h1 style="color: #ff6b00; font-size: 26px; font-weight: 900; margin: 0;">Shopiversity</h1>
+          <p style="color: #64748b; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 4px;">Admin Access Gateway</p>
         </div>
         <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 30px; text-align: center; border-radius: 20px; color: #ffffff; margin-bottom: 24px;">
-          <div style="display: inline-block; background-color: rgba(255,107,0,0.2); border: 1px solid #ff6b00; color: #ff6b00; padding: 4px 14px; border-radius: 999px; font-size: 11px; font-weight: 900; letter-spacing: 1px; margin-bottom: 14px;">
-            ${triggerReason ? triggerReason.toUpperCase() : "EXCLUSIVE ADMIN CREDENTIALS"}
+          <div style="display: inline-block; background-color: rgba(255,107,0,0.2); border: 1px solid #ff6b00; color: #ff6b00; padding: 4px 14px; border-radius: 999px; font-size: 11px; font-weight: 800; letter-spacing: 1px; margin-bottom: 14px;">
+            ${triggerReason ? triggerReason.toUpperCase() : "ADMIN SESSION CREDENTIALS"}
           </div>
-          <h2 style="color: #ffffff; font-size: 22px; font-weight: 800; margin: 0 0 10px 0;">Executive Admin Access Portal</h2>
+          <h2 style="color: #ffffff; font-size: 22px; font-weight: 800; margin: 0 0 10px 0;">Admin Access Portal</h2>
           <p style="color: #94a3b8; font-size: 13px; margin: 0 0 22px 0; line-height: 1.5;">
-            Your one-time confidential administrative passkey and direct login gateway link are ready:
+            Your one-time confidential administrative passkey and direct login link are ready:
           </p>
 
           <div style="background-color: rgba(255,255,255,0.06); padding: 18px; border-radius: 14px; text-align: left; margin-bottom: 20px; border: 1px solid rgba(255,255,255,0.1);">
             <div style="margin-bottom: 10px;">
-              <span style="color: #94a3b8; font-size: 11px; font-weight: 700; text-transform: uppercase;">Designated Super-Admin:</span>
+              <span style="color: #94a3b8; font-size: 11px; font-weight: 700; text-transform: uppercase;">Designated Admin:</span>
               <div style="color: #ffffff; font-weight: 700; font-size: 14px; font-family: monospace;">${username || requestedEmail}</div>
             </div>
             <div style="margin-bottom: 10px;">
@@ -2791,8 +2871,8 @@ app.use((req, res, next) => {
           </div>
 
           <div style="margin-top: 24px; margin-bottom: 12px;">
-            <a href="${directLoginLink}" target="_blank" style="display: inline-block; background-color: #ff6b00; color: #ffffff; text-decoration: none; padding: 14px 28px; border-radius: 14px; font-size: 14px; font-weight: 800; letter-spacing: 0.5px; box-shadow: 0 4px 14px rgba(255,107,0,0.4);">
-              🚀 CLICK HERE TO ENTER ADMIN PORTAL
+            <a href="${directLoginLink}" target="_blank" style="display: inline-block; background-color: #ff6b00; color: #ffffff; text-decoration: none; padding: 14px 28px; border-radius: 14px; font-size: 14px; font-weight: 800; letter-spacing: 0.5px;">
+              Open Admin Portal
             </a>
           </div>
           <p style="color: #64748b; font-size: 11px; margin: 10px 0 0 0; word-break: break-all;">
@@ -2802,21 +2882,22 @@ app.use((req, res, next) => {
 
         <div style="background-color: #f8fafc; padding: 16px; border-radius: 12px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
           <p style="color: #475569; font-size: 12px; line-height: 1.5; margin: 0;">
-            🔒 <strong>Zero-Trust Policy:</strong> Normal user dashboards and menus have no admin links. Only you have this gateway link. Whenever you log out, a new passkey is automatically dispatched here.
+            <strong>Security Policy:</strong> Keep this session passkey and direct portal link confidential.
           </p>
         </div>
 
         <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 20px 0;" />
         <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">
-          &copy; 2026 SHOPIVERSITY Campus Network. Super-Admin Exclusive Dispatch.
+          &copy; 2026 Shopiversity Campus Network. Admin Notification.
         </p>
       </div>
     `;
 
     const dispatchResult = await sendBrevoOrFallbackEmail({
       to: recipients,
-      subject: `SHOPIVERSITY Admin Credentials & Portal Link (${passkeyDisplay})`,
+      subject: `Shopiversity Admin Session Passkey (${passkeyDisplay})`,
       htmlContent,
+      textContent: `Shopiversity Admin Access\n\nAdmin: ${username || requestedEmail}\nPasskey: ${passkeyDisplay}\nToken: ${tokenDisplay}\nPortal Link: ${directLoginLink}`,
       tags: ["admin-credentials", "security-alert"]
     });
 
@@ -5906,9 +5987,9 @@ const FALLBACK_BANKS = [
           if (sentEmailEventFingerprints.has(evKey)) return;
           const sendRes = await sendBrevoOrFallbackEmail({
             to: resolved,
-            subject: `SHOPIVERSITY Order ${displayOrdId}: ${titleVal}`,
-            htmlContent: `<div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;border:1px solid #e2e8f0;border-radius:18px;background:#fff;color:#0f172a;"><h2 style="color:#ff6b00;margin:0 0 8px 0;">SHOPIVERSITY</h2><p style="font-size:15px;font-weight:700;margin:0 0 12px 0;">${titleVal}</p><p style="font-size:14px;line-height:1.6;color:#334155;">Hello ${nameVal},</p><p style="font-size:14px;line-height:1.6;color:#334155;">${msgVal}</p><p style="font-size:12px;color:#64748b;margin-top:16px;">Order Reference: ${displayOrdId} | Product: ${prodName}</p></div>`,
-            textContent: `SHOPIVERSITY - ${titleVal}\nOrder: ${displayOrdId}\nHello ${nameVal},\n${msgVal}`,
+            subject: `Shopiversity Order ${displayOrdId}: ${titleVal}`,
+            htmlContent: `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:560px;margin:0 auto;padding:24px;border:1px solid #e2e8f0;border-radius:18px;background:#fff;color:#0f172a;"><h2 style="color:#ff6b00;margin:0 0 8px 0;">Shopiversity</h2><p style="font-size:15px;font-weight:700;margin:0 0 12px 0;">${titleVal}</p><p style="font-size:14px;line-height:1.6;color:#334155;">Hello ${nameVal},</p><p style="font-size:14px;line-height:1.6;color:#334155;">${msgVal}</p><p style="font-size:12px;color:#64748b;margin-top:16px;">Order Reference: ${displayOrdId} | Product: ${prodName}</p></div>`,
+            textContent: `Shopiversity - ${titleVal}\nOrder: ${displayOrdId}\nHello ${nameVal},\n${msgVal}`,
             tags: ["order-lifecycle", "completed"]
           });
           if (sendRes.success) sentEmailEventFingerprints.add(evKey);

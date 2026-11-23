@@ -270,6 +270,17 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
           const prodData = productSnap.data();
           if (prodData.logisticsType === "registered" && prodData.logisticsCompanyId) {
             try {
+              let resolvedDeliveryPrice = Number(prodData.deliveryPrice) > 0 ? Number(prodData.deliveryPrice) : 0;
+              if (resolvedDeliveryPrice <= 0) {
+                try {
+                  const compSnap = await getDoc(doc(db, "logistics_companies", prodData.logisticsCompanyId));
+                  if (compSnap.exists()) {
+                    const compFee = Number(compSnap.data()?.baseDeliveryPrice) || 0;
+                    if (compFee > 0) resolvedDeliveryPrice = compFee;
+                  }
+                } catch {}
+              }
+
               const deliveryPayload = {
                 orderId: orderId,
                 productName: item.name,
@@ -286,7 +297,7 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
                 status: "pending",
                 logisticsId: prodData.logisticsCompanyId,
                 logisticsName: prodData.logisticsCompanyName || "Shopiversity Logistics",
-                deliveryPrice: Number(prodData.deliveryPrice) || 500,
+                deliveryPrice: resolvedDeliveryPrice,
                 deliveryOtp,
                 deliveryPin: deliveryOtp,
                 sellerHandoverPin,
@@ -318,7 +329,7 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
               bookedLogisticsPartner = {
                 id: prodData.logisticsCompanyId,
                 name: prodData.logisticsCompanyName || "Shopiversity Logistics",
-                deliveryPrice: Number(prodData.deliveryPrice) || 500
+                deliveryPrice: resolvedDeliveryPrice
               };
             } catch (logErr) {
               console.error("Error setting up automated logistics:", logErr);

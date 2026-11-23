@@ -1,10 +1,11 @@
 import React from "react";
 import { auth, db } from "../firebase";
-import { collection, query, where, orderBy, onSnapshot, deleteDoc, doc, updateDoc } from "firebase/firestore";
-import { ProductHistory as ProductHistoryType, Order } from "../types";
+import { collection, query, where, orderBy, onSnapshot, deleteDoc, doc, updateDoc, limit } from "firebase/firestore";
+import { Product, ProductHistory as ProductHistoryType, Order } from "../types";
 import { Trash2, History, ShoppingBag, Loader2, CheckSquare, Square, Package, CheckCircle, RotateCcw, ArrowLeft } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
+import { handleFirestoreError, handleListenerError, OperationType } from "../lib/firebase-errors";
+import { getCachedProducts } from "../lib/profileCache";
 import { cn } from "../lib/utils";
 
 type HistoryItem = {
@@ -21,9 +22,10 @@ type HistoryItem = {
 
 interface ProductHistoryProps {
   onBack?: () => void;
+  appProducts?: Product[];
 }
 
-export default function ProductHistory({ onBack }: ProductHistoryProps) {
+export default function ProductHistory({ onBack, appProducts }: ProductHistoryProps) {
   const [historyItems, setHistoryItems] = React.useState<HistoryItem[]>([]);
   const [hiddenItems, setHiddenItems] = React.useState<HistoryItem[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -37,37 +39,40 @@ export default function ProductHistory({ onBack }: ProductHistoryProps) {
   const [softDeletedProductIds, setSoftDeletedProductIds] = React.useState<Set<string>>(new Set());
 
   React.useEffect(() => {
-    if (!auth.currentUser) return;
-
-    const productsQ = query(collection(db, "products"));
-    const unsubscribeProducts = onSnapshot(productsQ, (snapshot) => {
-      const activeIds = new Set<string>();
-      const softDeletedIds = new Set<string>();
-      snapshot.docs.forEach(doc => {
-        const data = doc.data();
-        if (data.isDeleted) {
-          softDeletedIds.add(doc.id);
-        } else {
-          activeIds.add(doc.id);
-        }
-      });
-      setActiveProductIds(activeIds);
-      setSoftDeletedProductIds(softDeletedIds);
-    }, (error) => {
-      console.error("Error loading products for deletion check:", error);
+    const sourceProducts = appProducts && appProducts.length > 0 ? appProducts : getCachedProducts();
+    const activeIds = new Set<string>();
+    const softDeletedIds = new Set<string>();
+    sourceProducts.forEach((p) => {
+      if (p.isDeleted) {
+        softDeletedIds.add(p.id);
+      } else {
+        activeIds.add(p.id);
+      }
     });
+    setActiveProductIds(activeIds);
+    setSoftDeletedProductIds(softDeletedIds);
+  }, [appProducts]);
+
+  React.useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      setLoading(false);
+      return;
+    }
 
     const viewedQ = query(
       collection(db, "product_history"),
-      where("userId", "==", auth.currentUser.uid),
-      orderBy("viewedAt", "desc")
+      where("userId", "==", uid),
+      orderBy("viewedAt", "desc"),
+      limit(60)
     );
 
     const deliveredQ = query(
       collection(db, "orders"),
-      where("buyerId", "==", auth.currentUser.uid),
+      where("buyerId", "==", uid),
       where("status", "==", "delivered"),
-      orderBy("deliveredAt", "desc")
+      orderBy("deliveredAt", "desc"),
+      limit(60)
     );
 
     let viewedData: (HistoryItem & { hiddenFromHistory: boolean })[] = [];
@@ -91,7 +96,7 @@ export default function ProductHistory({ onBack }: ProductHistoryProps) {
       })).values());
       updateCombinedHistory();
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, "product_history");
+      handleListenerError(error, OperationType.LIST, "product_history", () => setLoading(false));
     });
 
     const unsubscribeDelivered = onSnapshot(deliveredQ, (snapshot) => {
@@ -113,7 +118,7 @@ export default function ProductHistory({ onBack }: ProductHistoryProps) {
 
       updateCombinedHistory();
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, "orders/delivered");
+      handleListenerError(error, OperationType.LIST, "orders/delivered", () => setLoading(false));
     });
 
     const updateCombinedHistory = () => {
@@ -130,7 +135,6 @@ export default function ProductHistory({ onBack }: ProductHistoryProps) {
     };
 
     return () => {
-      unsubscribeProducts();
       unsubscribeViewed();
       unsubscribeDelivered();
     };

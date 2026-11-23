@@ -1,10 +1,11 @@
 import React from "react";
 import { auth, db } from "../firebase";
-import { collection, query, where, orderBy, onSnapshot, updateDoc, doc, deleteDoc } from "firebase/firestore";
+import { collection, query, where, orderBy, onSnapshot, updateDoc, doc, deleteDoc, limit } from "firebase/firestore";
 import { Notification } from "../types";
 import { Bell, CheckCircle2, Trash2, Loader2, Mail, MailOpen, AlertCircle, Info, Package, User, CreditCard, ArrowLeft } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
+import { handleFirestoreError, handleListenerError, isFirestoreQuotaError, notifyFirestoreQuotaExceeded, OperationType } from "../lib/firebase-errors";
+import { getCachedNotifications, setCachedNotifications } from "../lib/profileCache";
 import { cn } from "../lib/utils";
 
 interface NotificationsPageProps {
@@ -19,12 +20,23 @@ export default function NotificationsPage({ onBack }: NotificationsPageProps) {
   const [clearing, setClearing] = React.useState(false);
 
   React.useEffect(() => {
-    if (!auth.currentUser) return;
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      setLoading(false);
+      return;
+    }
+
+    const cached = getCachedNotifications<Notification>(uid);
+    if (cached.length > 0) {
+      setNotifications(cached);
+      setLoading(false);
+    }
 
     const q = query(
       collection(db, "notifications"),
-      where("userId", "==", auth.currentUser.uid),
-      orderBy("createdAt", "desc")
+      where("userId", "==", uid),
+      orderBy("createdAt", "desc"),
+      limit(50)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -33,10 +45,10 @@ export default function NotificationsPage({ onBack }: NotificationsPageProps) {
         return [d.id, d];
       })).values());
       setNotifications(data);
+      setCachedNotifications(uid, data);
       setLoading(false);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, "notifications");
-      setLoading(false);
+      handleListenerError(error, OperationType.LIST, "notifications", () => setLoading(false));
     });
 
     return () => unsubscribe();
@@ -52,6 +64,10 @@ export default function NotificationsPage({ onBack }: NotificationsPageProps) {
     try {
       await updateDoc(doc(db, "notifications", id), { isRead: true });
     } catch (error) {
+      if (isFirestoreQuotaError(error)) {
+        notifyFirestoreQuotaExceeded(`notifications/${id}`);
+        return;
+      }
       handleFirestoreError(error, OperationType.UPDATE, `notifications/${id}`);
     }
   };
@@ -68,7 +84,7 @@ export default function NotificationsPage({ onBack }: NotificationsPageProps) {
     try {
       await Promise.all(promises);
     } catch (error) {
-      console.error("Error marking all as read:", error);
+      console.warn("Error marking all as read:", error);
     }
   };
 
@@ -82,6 +98,10 @@ export default function NotificationsPage({ onBack }: NotificationsPageProps) {
     try {
       await deleteDoc(doc(db, "notifications", id));
     } catch (error) {
+      if (isFirestoreQuotaError(error)) {
+        notifyFirestoreQuotaExceeded(`notifications/${id}`);
+        return;
+      }
       handleFirestoreError(error, OperationType.DELETE, `notifications/${id}`);
     }
   };

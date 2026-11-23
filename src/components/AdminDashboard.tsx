@@ -43,11 +43,11 @@ import {
   SortAsc,
   SortDesc
 } from "lucide-react";
-import { collection, onSnapshot, query, doc, updateDoc, deleteDoc, addDoc, getDoc } from "firebase/firestore";
+import { collection, onSnapshot, query, doc, updateDoc, deleteDoc, addDoc, getDoc, limit } from "firebase/firestore";
 import { db } from "../firebase";
 import { UserProfile, Product, Order } from "../types";
 import { cn } from "../lib/utils";
-import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
+import { handleFirestoreError, handleListenerError, OperationType } from "../lib/firebase-errors";
 import AdminSuspendModal from "./AdminSuspendModal";
 import AdminUserDetailModal from "./AdminUserDetailModal";
 import AdminAnalyticsCharts from "./AdminAnalyticsCharts";
@@ -94,39 +94,38 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
   useEffect(() => {
     setLoading(true);
 
-    const unsubUsers = onSnapshot(collection(db, "users"), (snapshot) => {
+    const unsubUsers = onSnapshot(query(collection(db, "users"), limit(150)), (snapshot) => {
       const uList = snapshot.docs.map(doc => ({ id: doc.id, uid: doc.id, ...doc.data() } as unknown as UserProfile));
       setUsers(uList);
-    }, (err) => handleFirestoreError(err, OperationType.LIST, "users"));
+    }, (err) => handleListenerError(err, OperationType.LIST, "users", () => setLoading(false)));
 
-    const unsubProducts = onSnapshot(collection(db, "products"), (snapshot) => {
+    const unsubProducts = onSnapshot(query(collection(db, "products"), limit(150)), (snapshot) => {
       const pList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Product));
       setAllProducts(pList);
-    }, (err) => handleFirestoreError(err, OperationType.LIST, "products"));
+    }, (err) => handleListenerError(err, OperationType.LIST, "products", () => setLoading(false)));
 
-    const unsubOrders = onSnapshot(collection(db, "orders"), (snapshot) => {
+    const unsubOrders = onSnapshot(query(collection(db, "orders"), limit(150)), (snapshot) => {
       const oList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
       setOrders(oList);
       setLoading(false);
     }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, "orders");
-      setLoading(false);
+      handleListenerError(err, OperationType.LIST, "orders", () => setLoading(false));
     });
 
-    const unsubPayouts = onSnapshot(collection(db, "payoutRequests"), (snapshot) => {
+    const unsubPayouts = onSnapshot(query(collection(db, "payoutRequests"), limit(100)), (snapshot) => {
       const payList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setPayouts(payList);
-    }, (err) => handleFirestoreError(err, OperationType.LIST, "payoutRequests"));
+    }, (err) => handleListenerError(err, OperationType.LIST, "payoutRequests", () => setLoading(false)));
 
-    const unsubReports = onSnapshot(collection(db, "reports"), (snapshot) => {
+    const unsubReports = onSnapshot(query(collection(db, "reports"), limit(100)), (snapshot) => {
       const rList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setReports(rList);
-    }, (err) => handleFirestoreError(err, OperationType.LIST, "reports"));
+    }, (err) => handleListenerError(err, OperationType.LIST, "reports", () => setLoading(false)));
 
-    const unsubLogs = onSnapshot(collection(db, "contact_moderation_logs"), (snapshot) => {
+    const unsubLogs = onSnapshot(query(collection(db, "contact_moderation_logs"), limit(100)), (snapshot) => {
       const logs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setModerationLogs(logs);
-    }, (err) => handleFirestoreError(err, OperationType.LIST, "contact_moderation_logs"));
+    }, (err) => handleListenerError(err, OperationType.LIST, "contact_moderation_logs", () => setLoading(false)));
 
     return () => {
       unsubUsers();
@@ -537,7 +536,7 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
           </div>
           <div>
             <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Active Listings</span>
-            <p className="text-2xl font-black text-white mt-1">{allProducts.filter(p => !p.isDeleted).length}</p>
+            <p className="text-2xl font-black text-white mt-1">{allProducts.filter(p => !p.isDeleted && !p.isDraft && p.status !== "draft").length}</p>
             <p className="text-[10px] text-slate-400 font-bold">{allProducts.filter(p => p.isDeleted).length} removed</p>
           </div>
           <div>

@@ -15,7 +15,6 @@ import {
   RecaptchaVerifier,
   signInWithPhoneNumber,
   fetchSignInMethodsForEmail,
-  sendEmailVerification,
   type ConfirmationResult
 } from "firebase/auth";
 import { doc, setDoc, getDoc, updateDoc, collection, addDoc, query, where, getDocs, deleteDoc } from "firebase/firestore";
@@ -561,8 +560,6 @@ export default function AuthPage({
   const [verifyingOtp, setVerifyingOtp] = React.useState<boolean>(false);
   const [resendCooldown, setResendCooldown] = React.useState<number>(0);
   const [brevoNotice, setBrevoNotice] = React.useState<string>("");
-  const [firebaseLinkSent, setFirebaseLinkSent] = React.useState<boolean>(false);
-  const [sendingFirebaseLink, setSendingFirebaseLink] = React.useState<boolean>(false);
   const [verifiedTargetRole, setVerifiedTargetRole] = React.useState<"buyer" | "seller" | null>(null);
   const [verifiedUserProfile, setVerifiedUserProfile] = React.useState<UserProfile | null>(null);
   const verifyRedirectTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -636,31 +633,6 @@ export default function AuthPage({
     }
   };
 
-  const trySendFirebaseBackupLink = async (targetEmail: string): Promise<"sent" | "already_verified" | "unavailable" | "failed"> => {
-    const activeUser = auth.currentUser;
-    if (!activeUser) return "unavailable";
-    try {
-      await activeUser.reload().catch(() => {});
-      if (activeUser.emailVerified) {
-        return "already_verified";
-      }
-      const userEmail = (activeUser.email || "").trim().toLowerCase();
-      if (targetEmail && userEmail && userEmail !== targetEmail.trim().toLowerCase()) {
-        return "unavailable";
-      }
-      await sendEmailVerification(activeUser);
-      setFirebaseLinkSent(true);
-      return "sent";
-    } catch (err: any) {
-      if (String(err?.code || "") === "auth/too-many-requests") {
-        setFirebaseLinkSent(true);
-        return "sent";
-      }
-      console.warn("Firebase backup verification link notice:", err);
-      return "failed";
-    }
-  };
-
   // Automatically activate 6-digit verification screen and dispatch Brevo code if user is authenticated but unverified
   React.useEffect(() => {
     if (isLogin && !pendingVerificationEmail && !currentUser) {
@@ -705,7 +677,7 @@ export default function AuthPage({
           email: cleanTarget,
           userName: currentUser?.displayName || auth.currentUser?.displayName || "Shopiversity Member",
           role: role === "seller" ? "seller" : "buyer"
-        }).then(async ({ ok, data, errorMessage }) => {
+        }).then(({ ok, data, errorMessage }) => {
           setEnteredOtpCode("");
           if (ok && data.sent) {
             if (data.verificationToken) {
@@ -719,7 +691,6 @@ export default function AuthPage({
               sessionStorage.setItem(`shopiversity_verify_notice_${cleanTarget}`, nextNotice);
             }
             setBrevoNotice(nextNotice);
-            setFirebaseLinkSent(false);
             setError("");
           } else {
             const existingNotice = typeof window !== "undefined" ? sessionStorage.getItem(`shopiversity_verify_notice_${cleanTarget}`) : null;
@@ -731,16 +702,10 @@ export default function AuthPage({
               sessionStorage.removeItem(sentFlagKey);
               sessionStorage.removeItem(`shopiversity_verify_notice_${cleanTarget}`);
             }
-            const backupStatus = await trySendFirebaseBackupLink(cleanTarget);
-            if (backupStatus === "sent") {
-              setBrevoNotice(`We sent a backup verification link to ${cleanTarget}. Click the link in your inbox (or Spam/Promotions folder), then tap "I Have Clicked the Link" below.`);
-              setError("");
-            } else {
-              setBrevoNotice("");
-              setError(errorMessage || `Could not send verification code to ${cleanTarget} via Brevo. Please tap Resend Code or use the backup verification link below.`);
-            }
+            setBrevoNotice("");
+            setError(errorMessage || `Could not send verification code to ${cleanTarget}. Please tap Resend Code or check your email address.`);
           }
-        }).catch(async (err) => {
+        }).catch((err) => {
           console.warn("Auto verification dispatch error:", err);
           const existingNotice = typeof window !== "undefined" ? sessionStorage.getItem(`shopiversity_verify_notice_${cleanTarget}`) : null;
           if (existingNotice) {
@@ -752,14 +717,8 @@ export default function AuthPage({
             sessionStorage.removeItem(`shopiversity_verify_notice_${cleanTarget}`);
           }
           setEnteredOtpCode("");
-          const backupStatus = await trySendFirebaseBackupLink(cleanTarget);
-          if (backupStatus === "sent") {
-            setBrevoNotice(`We sent a backup verification link to ${cleanTarget}. Click the link in your inbox (or Spam/Promotions folder), then tap "I Have Clicked the Link" below.`);
-            setError("");
-          } else {
-            setBrevoNotice("");
-            setError("Failed to connect to email verification service. Please tap Resend Code or send a backup verification link below.");
-          }
+          setBrevoNotice("");
+          setError("Failed to connect to email verification service. Please tap Resend Code to try again.");
         });
       }
     }
@@ -1464,7 +1423,6 @@ export default function AuthPage({
           if (vOk && vData.sent) {
             nextToken = vData.verificationToken || "";
             noticeMessage = `A 6-digit verification code has been sent to ${cleanEmail}. Check your Inbox, Spam/Junk, and Promotions folders and enter it below.`;
-            setFirebaseLinkSent(false);
             if (typeof window !== "undefined") {
               sessionStorage.setItem(`shopiversity_verify_notice_${cleanEmail}`, noticeMessage);
               if (nextToken) {
@@ -1476,13 +1434,7 @@ export default function AuthPage({
               sessionStorage.removeItem(`shopiversity_otp_sent_${cleanEmail}`);
               sessionStorage.removeItem(`shopiversity_verify_notice_${cleanEmail}`);
             }
-            const backupStatus = await trySendFirebaseBackupLink(cleanEmail);
-            if (backupStatus === "sent") {
-              noticeMessage = `6-digit email delivery had a temporary issue, so we sent a backup verification link to ${cleanEmail}. Click that link in your inbox, then tap "I Have Clicked the Link" below (or tap Resend Code).`;
-              dispatchError = "";
-            } else {
-              dispatchError = errorMessage || `Failed to send verification code to ${cleanEmail}. Please tap Resend Code or send a backup link below.`;
-            }
+            dispatchError = errorMessage || `Failed to send verification code to ${cleanEmail}. Please tap Resend Code to try again.`;
           }
         } catch (vErr: any) {
           console.warn("Email verification API dispatch notice:", vErr);
@@ -1490,13 +1442,7 @@ export default function AuthPage({
             sessionStorage.removeItem(`shopiversity_otp_sent_${cleanEmail}`);
             sessionStorage.removeItem(`shopiversity_verify_notice_${cleanEmail}`);
           }
-          const backupStatus = await trySendFirebaseBackupLink(cleanEmail);
-          if (backupStatus === "sent") {
-            noticeMessage = `We could not reach the code mailer, so we sent a backup verification link to ${cleanEmail}. Click that link in your inbox, then tap "I Have Clicked the Link" below.`;
-            dispatchError = "";
-          } else {
-            dispatchError = "Network error sending verification code. Please tap Resend Code or send a backup link below.";
-          }
+          dispatchError = "Network error sending verification code. Please tap Resend Code to try again.";
         }
 
         setEmail(cleanEmail);
@@ -1539,179 +1485,6 @@ export default function AuthPage({
     }
   };
 
-  const handleSendFirebaseLinkFallback = async () => {
-    const activeUser = auth.currentUser;
-    const targetEmail = (email || activeUser?.email || "").trim().toLowerCase();
-    if (!activeUser) {
-      setError("Your sign-up session expired. Please return to Sign Up or Sign In and try again.");
-      return;
-    }
-    setSendingFirebaseLink(true);
-    setError("");
-    try {
-      await activeUser.reload().catch(() => {});
-      if (activeUser.emailVerified) {
-        await handleCheckVerifiedStatus();
-        return;
-      }
-      await sendEmailVerification(activeUser);
-      setFirebaseLinkSent(true);
-      setBrevoNotice(`Backup verification link sent to ${targetEmail}! Open the email (check Spam/Promotions too), click the verification link, then tap "I Have Clicked the Link" below.`);
-    } catch (err: any) {
-      const code = String(err?.code || "");
-      if (code === "auth/too-many-requests") {
-        setFirebaseLinkSent(true);
-        setError("A verification link was already sent recently. Check your Inbox/Spam folder, click the link, then tap 'I Have Clicked the Link'.");
-      } else {
-        setError(err?.message || "Could not send backup verification link right now. Please tap Resend Code in a moment.");
-      }
-    } finally {
-      setSendingFirebaseLink(false);
-    }
-  };
-
-  const handleCheckVerifiedStatus = async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const activeAuthUser = auth.currentUser;
-      if (activeAuthUser) {
-        await activeAuthUser.reload();
-        if (activeAuthUser.emailVerified) {
-          const targetEmail = (email || activeAuthUser.email || "").trim().toLowerCase();
-          let confirmedRole: "buyer" | "seller" =
-            role === "seller" || (typeof window !== "undefined" && sessionStorage.getItem("shopiversity_chosen_role") === "seller")
-              ? "seller"
-              : "buyer";
-          const cachedExisting = getCachedUserProfile(activeAuthUser.uid);
-          let existingProfileData: Partial<UserProfile> | null = cachedExisting || null;
-          if (cachedExisting) {
-            if (cachedExisting.role === "seller" || cachedExisting.activeRole === "seller") {
-              confirmedRole = "seller";
-            } else if (cachedExisting.role === "buyer") {
-              confirmedRole = "buyer";
-            }
-          }
-
-          try {
-            const uRef = doc(db, "users", activeAuthUser.uid);
-            const uSnap = await getDoc(uRef);
-            if (uSnap.exists()) {
-              existingProfileData = uSnap.data() as Partial<UserProfile>;
-              if (existingProfileData.role === "seller" || existingProfileData.activeRole === "seller") {
-                confirmedRole = "seller";
-              } else if (existingProfileData.role === "buyer") {
-                confirmedRole = "buyer";
-              }
-              await updateDoc(uRef, {
-                isVerified: true,
-                emailVerified: true,
-                ...(targetEmail ? { email: targetEmail } : {})
-              });
-              setPendingVerifySync(activeAuthUser.uid, false);
-              setPendingProfileSync(activeAuthUser.uid, false);
-            } else {
-              const fallbackName = fullName.trim() || businessName.trim() || activeAuthUser.displayName || (targetEmail ? targetEmail.split("@")[0] : "Student");
-              const createdProfile: UserProfile = {
-                uid: activeAuthUser.uid,
-                displayName: cachedExisting?.displayName || fallbackName,
-                businessName: cachedExisting?.businessName || (confirmedRole === "seller" ? (businessName.trim() || fallbackName) : ""),
-                username: cachedExisting?.username || username || generateSmartUsername(fallbackName),
-                email: targetEmail || (activeAuthUser.email || "").toLowerCase(),
-                phoneNumber: activeAuthUser.phoneNumber || "",
-                gender: gender || "male",
-                role: confirmedRole,
-                activeRole: confirmedRole,
-                schoolType: "",
-                schoolName: "",
-                state: "",
-                city: "",
-                deliveryAddress: "",
-                ...(cachedExisting || {}),
-                isVerified: true,
-                isSuspended: false,
-                reportCount: 0,
-                createdAt: cachedExisting?.createdAt || new Date().toISOString(),
-                verificationIdUrl: verificationIdUrl || "",
-                profileCompleted: Boolean(cachedExisting?.profileCompleted)
-              };
-              await setDoc(uRef, createdProfile, { merge: true });
-              existingProfileData = createdProfile;
-              setPendingVerifySync(activeAuthUser.uid, false);
-              setPendingProfileSync(activeAuthUser.uid, false);
-            }
-          } catch (uErr: any) {
-            if (isFirestoreQuotaError(uErr)) {
-              setPendingVerifySync(activeAuthUser.uid, true);
-              setPendingProfileSync(activeAuthUser.uid, true);
-            } else {
-              console.warn("User doc update notice:", uErr);
-            }
-          }
-
-          const finalRole: "buyer" | "seller" =
-            existingProfileData?.role === "seller" || existingProfileData?.activeRole === "seller"
-              ? "seller"
-              : confirmedRole;
-
-          const hydratedVerifiedProfile: UserProfile = {
-            uid: activeAuthUser.uid,
-            displayName: existingProfileData?.displayName || fullName || businessName || activeAuthUser.displayName || "Student",
-            username: existingProfileData?.username || username || generateSmartUsername(fullName || "User"),
-            email: targetEmail || existingProfileData?.email || (activeAuthUser.email || "").toLowerCase(),
-            phoneNumber: existingProfileData?.phoneNumber || activeAuthUser.phoneNumber || "",
-            role: (existingProfileData?.role as any) || finalRole,
-            activeRole: (existingProfileData?.activeRole as any) || finalRole,
-            isSuspended: Boolean(existingProfileData?.isSuspended),
-            reportCount: Number(existingProfileData?.reportCount || 0),
-            createdAt: existingProfileData?.createdAt || new Date().toISOString(),
-            ...existingProfileData,
-            isVerified: true
-          } as UserProfile;
-
-          setCachedUserProfile(hydratedVerifiedProfile);
-
-          if (typeof window !== "undefined") {
-            sessionStorage.removeItem("shopiversity_verifying_email");
-            sessionStorage.removeItem("shopiversity_in_signup");
-            sessionStorage.removeItem("shopiversity_google_pending");
-            sessionStorage.removeItem("shopiversity_auth_mode");
-            sessionStorage.setItem("shopiversity_chosen_role", finalRole);
-            if (targetEmail) {
-              sessionStorage.removeItem(`shopiversity_verify_token_${targetEmail}`);
-              sessionStorage.removeItem(`shopiversity_otp_sent_${targetEmail}`);
-              sessionStorage.removeItem(`shopiversity_verify_notice_${targetEmail}`);
-            }
-          }
-
-          setRole(finalRole);
-          setVerifiedTargetRole(finalRole);
-          setVerifiedUserProfile(hydratedVerifiedProfile);
-          setIsVerificationSuccess(true);
-          setError("");
-
-          if (verifyRedirectTimerRef.current) {
-            clearTimeout(verifyRedirectTimerRef.current);
-          }
-          verifyRedirectTimerRef.current = setTimeout(() => {
-            setIsVerificationSuccess(false);
-            setIsVerifyingEmail(false);
-            setIsVerifyingPhone(false);
-            setIsVerificationChoice(false);
-            handleGoToMarket(finalRole, hydratedVerifiedProfile);
-          }, 700);
-          return;
-        }
-      }
-      setError(`Email is not verified yet. Open the verification email sent to ${email || auth.currentUser?.email || 'your email'} (check Spam/Promotions), click the verification link, then tap 'I Have Clicked the Link'.`);
-    } catch (err: any) {
-      console.error("Verification check error:", err);
-      setError("Unable to check verification status right now. Please check your connection or tap 'Resend Code'.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleResendVerificationEmail = async () => {
     const currentAuthUser = auth.currentUser;
     const targetEmail = (email || currentAuthUser?.email || "").trim().toLowerCase();
@@ -1737,14 +1510,8 @@ export default function AuthPage({
           sessionStorage.removeItem(`shopiversity_otp_sent_${targetEmail}`);
           sessionStorage.removeItem(`shopiversity_verify_notice_${targetEmail}`);
         }
-        const backupStatus = await trySendFirebaseBackupLink(targetEmail);
-        if (backupStatus === "sent") {
-          setBrevoNotice(`Code email delivery failed, so we sent a backup verification link to ${targetEmail}. Click the link in your inbox, then tap "I Have Clicked the Link" below.`);
-          setError("");
-        } else {
-          setBrevoNotice("");
-          setError(errorMessage || `Failed to resend verification email to ${targetEmail}. Please try again or use the backup link below.`);
-        }
+        setBrevoNotice("");
+        setError(errorMessage || `Failed to resend verification email to ${targetEmail}. Please try again in a moment.`);
         return;
       }
       if (vData.verificationToken) {
@@ -1758,19 +1525,12 @@ export default function AuthPage({
         sessionStorage.setItem(`shopiversity_verify_notice_${targetEmail}`, nextNotice);
       }
       setBrevoNotice(nextNotice);
-      setFirebaseLinkSent(false);
       setError("");
       setResendCooldown(30);
     } catch (err: any) {
       console.error("Resend verification error:", err);
-      const backupStatus = await trySendFirebaseBackupLink(targetEmail);
-      if (backupStatus === "sent") {
-        setBrevoNotice(`We sent a backup verification link to ${targetEmail}. Click the link in your inbox, then tap "I Have Clicked the Link" below.`);
-        setError("");
-      } else {
-        setBrevoNotice("");
-        setError("Failed to resend verification email. Please try again in a moment or send a backup verification link below.");
-      }
+      setBrevoNotice("");
+      setError("Failed to resend verification email. Please try again in a moment.");
     } finally {
       setResendingCode(false);
     }
@@ -1944,21 +1704,14 @@ export default function AuthPage({
           sessionStorage.setItem(`shopiversity_verify_notice_${trimmed}`, nextNotice);
         }
         setBrevoNotice(nextNotice);
-        setFirebaseLinkSent(false);
         setError("");
       } else {
         if (typeof window !== "undefined") {
           sessionStorage.removeItem(`shopiversity_otp_sent_${trimmed}`);
           sessionStorage.removeItem(`shopiversity_verify_notice_${trimmed}`);
         }
-        const backupStatus = await trySendFirebaseBackupLink(trimmed);
-        if (backupStatus === "sent") {
-          setBrevoNotice(`Email updated to ${trimmed}! We sent a backup verification link to ${trimmed}. Click it in your inbox, then tap "I Have Clicked the Link".`);
-          setError("");
-        } else {
-          setBrevoNotice("");
-          setError(errorMessage || `Email updated to ${trimmed}, but code delivery failed. Please tap Resend Code or use the backup link below.`);
-        }
+        setBrevoNotice("");
+        setError(errorMessage || `Email updated to ${trimmed}, but code delivery failed. Please tap Resend Code to try again.`);
       }
 
       setResendCooldown(30);
@@ -2036,20 +1789,13 @@ export default function AuthPage({
           }
         }
         setBrevoNotice(nextNotice);
-        setFirebaseLinkSent(false);
       } else {
         if (typeof window !== "undefined" && targetEmail) {
           sessionStorage.removeItem(`shopiversity_otp_sent_${targetEmail}`);
           sessionStorage.removeItem(`shopiversity_verify_notice_${targetEmail}`);
         }
-        const backupStatus = await trySendFirebaseBackupLink(targetEmail);
-        if (backupStatus === "sent") {
-          setBrevoNotice(`We sent a backup verification link to ${targetEmail}. Click the link in your inbox, then tap "I Have Clicked the Link" below.`);
-          setError("");
-        } else {
-          setBrevoNotice("");
-          setError(errorMessage || `Failed to send verification code to ${targetEmail}. Please tap Resend Code or use the backup link below.`);
-        }
+        setBrevoNotice("");
+        setError(errorMessage || `Failed to send verification code to ${targetEmail}. Please tap Resend Code to try again.`);
       }
 
       setEmail(targetEmail);
@@ -2063,14 +1809,8 @@ export default function AuthPage({
       }
     } catch (err: any) {
       console.error("Brevo send-verification error:", err);
-      const backupStatus = await trySendFirebaseBackupLink(targetEmail);
-      if (backupStatus === "sent") {
-        setBrevoNotice(`We sent a backup verification link to ${targetEmail}. Click the link in your inbox, then tap "I Have Clicked the Link" below.`);
-        setError("");
-      } else {
-        setBrevoNotice("");
-        setError(getFirestoreErrorMessage(err) || `Could not dispatch verification email to ${targetEmail}. Please tap Resend Code or use the backup verification link.`);
-      }
+      setBrevoNotice("");
+      setError(getFirestoreErrorMessage(err) || `Could not dispatch verification email to ${targetEmail}. Please tap Resend Code to try again.`);
       if (auth.currentUser || targetEmail) {
         setEmail(targetEmail);
         setVerificationMethod("email");
@@ -2615,7 +2355,6 @@ export default function AuthPage({
         if (vOk && vData.sent) {
           nextToken = vData.verificationToken || "";
           noticeMessage = `A 6-digit verification code has been dispatched to ${cleanUserEmail}! Check your Inbox, Spam/Junk, and Promotions folders.`;
-          setFirebaseLinkSent(false);
           if (typeof window !== "undefined") {
             sessionStorage.setItem(`shopiversity_verify_notice_${cleanUserEmail}`, noticeMessage);
           }
@@ -2624,13 +2363,7 @@ export default function AuthPage({
             sessionStorage.removeItem(`shopiversity_otp_sent_${cleanUserEmail}`);
             sessionStorage.removeItem(`shopiversity_verify_notice_${cleanUserEmail}`);
           }
-          const backupStatus = await trySendFirebaseBackupLink(cleanUserEmail);
-          if (backupStatus === "sent") {
-            noticeMessage = `We sent a backup verification link to ${cleanUserEmail}. Click the link in your inbox, then tap "I Have Clicked the Link" below.`;
-            dispatchError = "";
-          } else {
-            dispatchError = errorMessage || `Failed to dispatch verification code to ${cleanUserEmail}. Please tap Resend Code or send a backup link below.`;
-          }
+          dispatchError = errorMessage || `Failed to dispatch verification code to ${cleanUserEmail}. Please tap Resend Code to try again.`;
         }
       } catch (vErr) {
         console.warn("Google email verification API dispatch notice:", vErr);
@@ -2638,13 +2371,7 @@ export default function AuthPage({
           sessionStorage.removeItem(`shopiversity_otp_sent_${cleanUserEmail}`);
           sessionStorage.removeItem(`shopiversity_verify_notice_${cleanUserEmail}`);
         }
-        const backupStatus = await trySendFirebaseBackupLink(cleanUserEmail);
-        if (backupStatus === "sent") {
-          noticeMessage = `We sent a backup verification link to ${cleanUserEmail}. Click the link in your inbox, then tap "I Have Clicked the Link" below.`;
-          dispatchError = "";
-        } else {
-          dispatchError = "Network error dispatching verification code. Please tap Resend Code or send a backup link below.";
-        }
+        dispatchError = "Network error dispatching verification code. Please tap Resend Code to try again.";
       }
 
       if (typeof window !== "undefined" && nextToken) {
@@ -2706,7 +2433,6 @@ export default function AuthPage({
           if (vOk && vData.sent) {
             nextToken = vData.verificationToken || "";
             noticeMessage = `A 6-digit verification code has been sent to ${cleanUserEmail}! Check your Inbox, Spam/Junk, and Promotions folders.`;
-            setFirebaseLinkSent(false);
             if (typeof window !== "undefined") {
               sessionStorage.setItem(`shopiversity_verify_notice_${cleanUserEmail}`, noticeMessage);
             }
@@ -2715,13 +2441,7 @@ export default function AuthPage({
               sessionStorage.removeItem(`shopiversity_otp_sent_${cleanUserEmail}`);
               sessionStorage.removeItem(`shopiversity_verify_notice_${cleanUserEmail}`);
             }
-            const backupStatus = await trySendFirebaseBackupLink(cleanUserEmail);
-            if (backupStatus === "sent") {
-              noticeMessage = `We sent a backup verification link to ${cleanUserEmail}. Click the link in your inbox, then tap "I Have Clicked the Link" below.`;
-              dispatchError = "";
-            } else {
-              dispatchError = errorMessage || `Failed to send verification code to ${cleanUserEmail}. Please tap Resend Code or send a backup link below.`;
-            }
+            dispatchError = errorMessage || `Failed to send verification code to ${cleanUserEmail}. Please tap Resend Code to try again.`;
           }
         } catch (vErr) {
           console.warn("Google verification dispatch notice:", vErr);
@@ -2729,13 +2449,7 @@ export default function AuthPage({
             sessionStorage.removeItem(`shopiversity_otp_sent_${cleanUserEmail}`);
             sessionStorage.removeItem(`shopiversity_verify_notice_${cleanUserEmail}`);
           }
-          const backupStatus = await trySendFirebaseBackupLink(cleanUserEmail);
-          if (backupStatus === "sent") {
-            noticeMessage = `We sent a backup verification link to ${cleanUserEmail}. Click the link in your inbox, then tap "I Have Clicked the Link" below.`;
-            dispatchError = "";
-          } else {
-            dispatchError = "Network error sending verification code. Please tap Resend Code or send a backup link below.";
-          }
+          dispatchError = "Network error sending verification code. Please tap Resend Code to try again.";
         }
 
         if (typeof window !== "undefined" && nextToken) {
@@ -2943,7 +2657,7 @@ export default function AuthPage({
             const logisticsProfile = {
               uid: firebaseUser.uid,
               companyName: targetName,
-              rcNumber: "RC-DEMO-12345",
+              rcNumber: "",
               email: targetEmail,
               phoneNumber: targetPhone,
               officeAddress: "UI Student Union Building, Room 10",
@@ -3589,40 +3303,6 @@ export default function AuthPage({
                     </div>
                   );
                 })()}
-
-                {/* Prominent Backup Verification Link Card when email delivery fails or backup link is active */}
-                {(firebaseLinkSent || (error && !isVerificationSuccess && auth.currentUser)) && (
-                  <div className="p-3.5 bg-slate-50 dark:bg-zinc-900 border-2 border-orange-200 dark:border-orange-900/50 rounded-2xl text-left space-y-2.5 shadow-sm">
-                    <p className="text-xs font-bold text-slate-800 dark:text-zinc-200 leading-snug">
-                      {firebaseLinkSent
-                        ? "Backup Verification Link Sent: Open the link in your email (check Spam/Promotions too), then tap \"I Have Clicked the Link\" below."
-                        : "Code email delivery failed? Verify instantly using our backup email link instead:"}
-                    </p>
-                    <div className="flex flex-col sm:flex-row gap-2">
-                      {firebaseLinkSent ? (
-                        <button
-                          type="button"
-                          onClick={handleCheckVerifiedStatus}
-                          disabled={loading}
-                          className="flex-1 h-10 bg-orange-600 hover:bg-orange-700 text-white font-bold rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
-                        >
-                          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
-                          <span>I Have Clicked the Link</span>
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={handleSendFirebaseLinkFallback}
-                          disabled={sendingFirebaseLink}
-                          className="flex-1 h-10 bg-slate-900 dark:bg-zinc-800 hover:bg-slate-800 dark:hover:bg-zinc-700 text-white font-bold rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
-                        >
-                          {sendingFirebaseLink ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Mail className="w-3.5 h-3.5" />}
-                          <span>Send Backup Verification Link</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )}
 
                 {/* 6-Digit Code Input Form */}
                 <form onSubmit={handleVerifyOtpCode} className="space-y-4">

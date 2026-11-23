@@ -13,10 +13,11 @@ import {
   getDocs,
   addDoc,
   getDoc,
-  deleteDoc
+  deleteDoc,
+  limit
 } from "firebase/firestore";
 import { Product, UserProfile, CartItem, Notification } from "./types";
-import { handleFirestoreError, OperationType, getFirestoreErrorMessage, isFirestoreQuotaError } from "./lib/firebase-errors";
+import { handleFirestoreError, OperationType, getFirestoreErrorMessage, isFirestoreQuotaError, FIRESTORE_QUOTA_EVENT, notifyFirestoreQuotaExceeded } from "./lib/firebase-errors";
 import {
   getCachedUserProfile,
   setCachedUserProfile,
@@ -28,7 +29,9 @@ import {
   getCachedProducts,
   setCachedProducts,
   getCachedSellers,
-  setCachedSellers
+  setCachedSellers,
+  getCachedNotifications,
+  setCachedNotifications
 } from "./lib/profileCache";
 import SellerStorefront from "./components/SellerStorefront";
 import LogisticsHub from "./components/LogisticsHub";
@@ -227,6 +230,13 @@ export default function App() {
   const [loading, setLoading] = React.useState(true);
   const [authLoading, setAuthLoading] = React.useState(true);
   const [firestoreQuotaExceeded, setFirestoreQuotaExceeded] = React.useState(false);
+
+  React.useEffect(() => {
+    const onQuotaEvent = () => setFirestoreQuotaExceeded(true);
+    window.addEventListener(FIRESTORE_QUOTA_EVENT, onQuotaEvent);
+    return () => window.removeEventListener(FIRESTORE_QUOTA_EVENT, onQuotaEvent);
+  }, []);
+
   const [currentUser, setCurrentUser] = React.useState<UserProfile | null>(null);
 
   // Automatically clear products belonging to accounts explicitly deleted in this session
@@ -321,7 +331,6 @@ export default function App() {
 
   // Email verification handlers
   const [isResendingFirebaseEmail, setIsResendingFirebaseEmail] = React.useState(false);
-  const [isRefreshingVerification, setIsRefreshingVerification] = React.useState(false);
   const [verificationBannerNotice, setVerificationBannerNotice] = React.useState<string | null>(null);
 
   const handleResendFirebaseVerification = async () => {
@@ -359,27 +368,6 @@ export default function App() {
       }
     } finally {
       setIsResendingFirebaseEmail(false);
-    }
-  };
-
-  const handleRefreshFirebaseVerification = async () => {
-    if (!auth.currentUser) return;
-    setIsRefreshingVerification(true);
-    setVerificationBannerNotice(null);
-    try {
-      await auth.currentUser.reload();
-      if (auth.currentUser.emailVerified) {
-        setVerificationBannerNotice("Email verified successfully! All platform features are now unlocked.");
-        triggerDynamicIsland("Email verified! 🎉");
-        setCurrentUser(prev => prev ? { ...prev, isVerified: true } : null);
-      } else {
-        setVerificationBannerNotice(`Email is not verified yet. Please click the verification link sent to ${auth.currentUser.email}.`);
-      }
-    } catch (err: any) {
-      console.error("Error checking verification status:", err);
-      setVerificationBannerNotice("Failed to check verification status. Please try again.");
-    } finally {
-      setIsRefreshingVerification(false);
     }
   };
   
@@ -615,6 +603,10 @@ export default function App() {
         updateDoc(userDocRef, {
           theme: expectedTheme
         }).catch(err => {
+          if (isFirestoreQuotaError(err)) {
+            notifyFirestoreQuotaExceeded(`users/${currentUser.uid}`);
+            return;
+          }
           if (err.message?.includes("permissions") || err.code === 'not-found' || !auth.currentUser) {
             return;
           }
@@ -1228,10 +1220,16 @@ export default function App() {
           handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
         });
 
+        const cachedNotifs = getCachedNotifications<Notification>(user.uid);
+        if (cachedNotifs.length > 0) {
+          setNotifications(cachedNotifs);
+        }
+
         const notifQ = query(
           collection(db, "notifications"),
           where("userId", "==", user.uid),
-          orderBy("createdAt", "desc")
+          orderBy("createdAt", "desc"),
+          limit(40)
         );
         unsubscribeNotifs = onSnapshot(notifQ, (snapshot) => {
           const notifs = Array.from(new Map(snapshot.docs.map(doc => {
@@ -1239,11 +1237,12 @@ export default function App() {
             return [d.id, d];
           })).values());
           setNotifications(notifs);
+          setCachedNotifications(user.uid, notifs);
         }, (error) => {
           if (!auth.currentUser) return;
           if (isFirestoreQuotaError(error)) {
             setFirestoreQuotaExceeded(true);
-            console.warn("Firestore daily read quota exceeded while subscribing to notifications.");
+            notifyFirestoreQuotaExceeded("notifications");
             return;
           }
           handleFirestoreError(error, OperationType.LIST, "notifications");
@@ -1269,13 +1268,18 @@ export default function App() {
       }
     });
 
-    const productsQ = query(collection(db, "products")); 
+    const cachedInitialProducts = getCachedProducts();
+    if (cachedInitialProducts.length > 0) {
+      setProducts(cachedInitialProducts);
+      setLoading(false);
+    }
+    const productsQ = query(collection(db, "products"), limit(150)); 
     const unsubscribeProducts = onSnapshot(productsQ, (snapshot) => {
       const productsData = Array.from(new Map(snapshot.docs.map(doc => {
         const d = { id: doc.id, ...doc.data() } as Product;
         return [d.id, d];
       })).values())
-        .filter(p => !p.isDeleted)
+        .filter(p => !p.isDeleted && !p.isDraft && p.status !== "draft")
         .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()); 
       setProducts(productsData);
       setCachedProducts(productsData);
@@ -1393,7 +1397,7 @@ export default function App() {
         : false
     );
 
-    if (p.isDeleted || p.isHibernated || p.isArchived || isOutOfStockOver3Days) return false;
+    if (p.isDeleted || p.isDraft || p.status === "draft" || p.isHibernated || p.isArchived || isOutOfStockOver3Days) return false;
     
     // If the seller account has been deleted from Firebase, never show it in the app
     if (p.sellerId && existingUserIds.size > 0 && !existingUserIds.has(p.sellerId)) return false;
@@ -1447,13 +1451,17 @@ export default function App() {
     return matchesSearch && matchesCategory && matchesVendor && matchesCondition && matchesPrice && matchesSeller;
   }).map(p => [p.id, p])).values());
 
-  const vendorNames = Array.from(new Set(products.filter(p => !p.isDeleted).map(p => p.sellerName).filter(Boolean))).sort();
+  const vendorNames = Array.from(new Set(products.filter(p => !p.isDeleted && !p.isDraft && p.status !== "draft").map(p => p.sellerName).filter(Boolean))).sort();
   const categories = ALL_CATEGORIES;
 
   const markAsRead = async (id: string) => {
     try {
       await updateDoc(doc(db, "notifications", id), { isRead: true });
     } catch (error) {
+      if (isFirestoreQuotaError(error)) {
+        notifyFirestoreQuotaExceeded(`notifications/${id}`);
+        return;
+      }
       handleFirestoreError(error, OperationType.UPDATE, `notifications/${id}`);
     }
   };
@@ -1561,7 +1569,11 @@ export default function App() {
           createdAt: new Date().toISOString()
         });
       } catch (error) {
-        handleFirestoreError(error, OperationType.CREATE, "notifications/cart");
+        if (isFirestoreQuotaError(error)) {
+          notifyFirestoreQuotaExceeded("notifications/cart");
+        } else {
+          handleFirestoreError(error, OperationType.CREATE, "notifications/cart");
+        }
       }
     }
   };
@@ -1869,8 +1881,10 @@ export default function App() {
 
         {/* Dynamic Title for sub-tabs */}
         {activeTab === "settings" && (
-          <span className="hidden sm:inline-block text-xs font-bold text-slate-700 dark:text-slate-300 font-sans truncate max-w-[120px] sm:max-w-none">
-            {settingsSubView === "edit" ? "Edit Profile" : "My Profile"}
+          <span className="hidden sm:inline-block text-xs font-bold text-slate-700 dark:text-slate-300 font-sans truncate max-w-[160px] sm:max-w-none">
+            {(currentUser?.state === "Logistics Partner" || currentUser?.role === "logistics")
+              ? "Company Fleet Profile"
+              : (settingsSubView === "edit" ? "Edit Profile" : "My Profile")}
           </span>
         )}
         {(activeTab === "auth" || activeTab === "signup") && (
@@ -2050,14 +2064,6 @@ export default function App() {
                 >
                   {isResendingFirebaseEmail ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
                   Resend Email
-                </button>
-                <button
-                  onClick={handleRefreshFirebaseVerification}
-                  disabled={isRefreshingVerification}
-                  className="px-3 py-1.5 bg-white dark:bg-zinc-800 border border-amber-300 dark:border-amber-700/60 text-amber-900 dark:text-amber-200 hover:bg-amber-50 dark:hover:bg-zinc-750 rounded-xl font-bold text-xs transition-all cursor-pointer flex items-center gap-1.5 shadow-sm active:scale-95 disabled:opacity-50"
-                >
-                  {isRefreshingVerification ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-                  I've Verified
                 </button>
               </div>
             </div>
@@ -2574,7 +2580,7 @@ export default function App() {
                     }
 
                     const searchResults = products.filter((p) => {
-                      if (p.isDeleted || p.isHibernated || (p.stock !== undefined && p.stock <= 0)) return false;
+                      if (p.isDeleted || p.isDraft || p.status === "draft" || p.isHibernated || (p.stock !== undefined && p.stock <= 0)) return false;
                       if (p.type === "service") return false;
                       if (p.category === "Logistics & Errands" || p.category === "Logistics") return false;
                       
@@ -2702,6 +2708,8 @@ export default function App() {
                   initialProductType="good"
                   initialEditingProduct={pendingEditProduct}
                   onClearEditingProduct={() => setPendingEditProduct(null)}
+                  userProfile={currentUser}
+                  appNotifications={notifications}
                 />
               </motion.div>
             ) : activeTab === "notifications" && currentUser ? (
@@ -2735,7 +2743,7 @@ export default function App() {
                 exit={{ opacity: 0, y: -10 }}
                 className="space-y-8"
               >
-                <OrderTracking setActiveTab={setActiveTab} onBack={handleGoBack} />
+                <OrderTracking setActiveTab={setActiveTab} onBack={handleGoBack} userProfile={currentUser} />
               </motion.div>
             ) : activeTab === "history" && currentUser ? (
               <motion.div 
@@ -2745,7 +2753,7 @@ export default function App() {
                 exit={{ opacity: 0, y: -10 }}
                 className="space-y-8"
               >
-                <ProductHistory onBack={handleGoBack} />
+                <ProductHistory onBack={handleGoBack} appProducts={products} />
               </motion.div>
             ) : activeTab === "support" ? (
               <motion.div 
@@ -2768,28 +2776,46 @@ export default function App() {
                 <SupportPage user={currentUser} onBack={handleGoBack} mode="feedback" />
               </motion.div>
             ) : activeTab === "settings" && currentUser ? (
-              <motion.div 
-                key={settingsSubView === "hub" ? "settings-hub" : "settings-edit"}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                className="space-y-6 px-4 py-4"
-              >
-                {settingsSubView === "hub" ? (
-                  <UserProfileHub 
-                    user={currentUser}
-                    activeRole={activeRole}
-                    onToggleRole={toggleRole}
-                    onNavigateToEdit={() => setSettingsSubView("edit")}
-                    onNavigateTab={(tabId) => setActiveTab(tabId)}
-                    onLogout={handleLogout}
-                    isDarkMode={isDarkMode}
-                    toggleDarkMode={toggleDarkMode}
+              (currentUser.state === "Logistics Partner" || currentUser.role === "logistics") ? (
+                <motion.div
+                  key="logistics-company-profile"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                >
+                  <LogisticsHub
+                    initialDashboardTab="profile"
+                    onBackToMarket={handleGoBack}
+                    onNavigateToAuth={(mode) => {
+                      setAuthMode(mode || "login");
+                      setActiveTab("auth");
+                    }}
                   />
-                ) : (
-                  <ProfileSettings user={currentUser} onBack={() => setSettingsSubView("hub")} activeRole={activeRole} />
-                )}
-              </motion.div>
+                </motion.div>
+              ) : (
+                <motion.div 
+                  key={settingsSubView === "hub" ? "settings-hub" : "settings-edit"}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  className="space-y-6 px-4 py-4"
+                >
+                  {settingsSubView === "hub" ? (
+                    <UserProfileHub 
+                      user={currentUser}
+                      activeRole={activeRole}
+                      onToggleRole={toggleRole}
+                      onNavigateToEdit={() => setSettingsSubView("edit")}
+                      onNavigateTab={(tabId) => setActiveTab(tabId)}
+                      onLogout={handleLogout}
+                      isDarkMode={isDarkMode}
+                      toggleDarkMode={toggleDarkMode}
+                    />
+                  ) : (
+                    <ProfileSettings user={currentUser} onBack={() => setSettingsSubView("hub")} activeRole={activeRole} />
+                  )}
+                </motion.div>
+              )
             ) : activeTab === "terms" ? (
               <motion.div 
                 key="terms"

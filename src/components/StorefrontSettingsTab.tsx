@@ -19,10 +19,17 @@ import {
   EyeOff,
   Palette,
   Layout,
-  MousePointerClick
+  MousePointerClick,
+  Phone,
+  Mail,
+  Globe,
+  Instagram,
+  MessageCircle,
+  AtSign
 } from "lucide-react";
 import { motion, AnimatePresence, Reorder, useDragControls } from "motion/react";
 import { cn } from "../lib/utils";
+import { cleanPublicContact } from "../lib/publicContact";
 import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
 import { compressImage } from "../lib/imageUtils";
 import SellerStorefront from "./SellerStorefront";
@@ -229,8 +236,14 @@ export default function StorefrontSettingsTab({ user }: StorefrontSettingsTabPro
     setSuccess(false);
     
     try {
+      const cleanedContact = cleanPublicContact(settings.publicContact) || {};
+      const nextSettings: StorefrontSettings = {
+        ...settings,
+        publicContact: cleanedContact
+      };
       await updateDoc(doc(db, "users", user.uid), {
-        storefrontSettings: settings,
+        storefrontSettings: nextSettings,
+        publicContact: cleanedContact,
         businessName: settings.businessName || ""
       });
       setSuccess(true);
@@ -529,6 +542,93 @@ export default function StorefrontSettingsTab({ user }: StorefrontSettingsTabPro
                rows={4}
                className="w-full p-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 focus:bg-white dark:focus:bg-slate-900 focus:border-orange-500 rounded-3xl text-sm font-medium text-slate-900 dark:text-white outline-none transition-all resize-none placeholder:text-slate-400"
              />
+          </div>
+
+          {/* Public Contact & Social Media Handles */}
+          <div className="space-y-4 pt-6 border-t border-slate-100 dark:border-slate-800">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <label className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-slate-400">
+                <Globe className="w-4 h-4 text-orange-500" />
+                Public Store Contact & Social Media Handles
+              </label>
+              <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-orange-50 dark:bg-orange-950/30 text-orange-600 dark:text-orange-400 self-start sm:self-auto">
+                Visible to everyone on your storefront & products
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center gap-1.5 ml-1">
+                  <Phone className="w-3 h-3" /> Public Phone Number
+                </label>
+                <input
+                  type="tel"
+                  value={settings.publicContact?.phone || ""}
+                  onChange={(e) => setSettings({ ...settings, publicContact: { ...(settings.publicContact || {}), phone: e.target.value } })}
+                  placeholder="e.g. 08012345678"
+                  className="w-full h-12 px-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm font-bold text-slate-900 dark:text-white outline-none focus:border-orange-500"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center gap-1.5 ml-1">
+                  <MessageCircle className="w-3 h-3" /> WhatsApp Number / Link
+                </label>
+                <input
+                  type="text"
+                  value={settings.publicContact?.whatsapp || ""}
+                  onChange={(e) => setSettings({ ...settings, publicContact: { ...(settings.publicContact || {}), whatsapp: e.target.value } })}
+                  placeholder="e.g. 08012345678 or wa.me/234..."
+                  className="w-full h-12 px-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm font-bold text-slate-900 dark:text-white outline-none focus:border-orange-500"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center gap-1.5 ml-1">
+                  <Mail className="w-3 h-3" /> Public Email Address
+                </label>
+                <input
+                  type="email"
+                  value={settings.publicContact?.email || ""}
+                  onChange={(e) => setSettings({ ...settings, publicContact: { ...(settings.publicContact || {}), email: e.target.value } })}
+                  placeholder="e.g. myshop@gmail.com"
+                  className="w-full h-12 px-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm font-bold text-slate-900 dark:text-white outline-none focus:border-orange-500"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center gap-1.5 ml-1">
+                  <Instagram className="w-3 h-3" /> Instagram Handle
+                </label>
+                <input
+                  type="text"
+                  value={settings.publicContact?.instagram || ""}
+                  onChange={(e) => setSettings({ ...settings, publicContact: { ...(settings.publicContact || {}), instagram: e.target.value } })}
+                  placeholder="e.g. @campusstore"
+                  className="w-full h-12 px-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm font-bold text-slate-900 dark:text-white outline-none focus:border-orange-500"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center gap-1.5 ml-1">
+                  <AtSign className="w-3 h-3" /> X (Twitter) / TikTok
+                </label>
+                <input
+                  type="text"
+                  value={settings.publicContact?.twitter || ""}
+                  onChange={(e) => setSettings({ ...settings, publicContact: { ...(settings.publicContact || {}), twitter: e.target.value } })}
+                  placeholder="e.g. @campusstore"
+                  className="w-full h-12 px-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm font-bold text-slate-900 dark:text-white outline-none focus:border-orange-500"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider flex items-center gap-1.5 ml-1">
+                  <Globe className="w-3 h-3" /> TikTok / Facebook / Website
+                </label>
+                <input
+                  type="text"
+                  value={settings.publicContact?.tiktok || ""}
+                  onChange={(e) => setSettings({ ...settings, publicContact: { ...(settings.publicContact || {}), tiktok: e.target.value } })}
+                  placeholder="e.g. @mybrand or https://..."
+                  className="w-full h-12 px-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm font-bold text-slate-900 dark:text-white outline-none focus:border-orange-500"
+                />
+              </div>
+            </div>
           </div>
 
           <div className="flex flex-col sm:flex-row items-center justify-between pt-8 border-t border-slate-50 dark:border-slate-800 gap-4">

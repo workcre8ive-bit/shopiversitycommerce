@@ -280,7 +280,7 @@ export function renderShopiversityEmailHtml(
     ? `
       <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:20px 0;">
         <tr>
-          <td align="center" style="background-color:#fff7ed;border:2px dashed #ff6b00;border-radius:14px;padding:18px 16px;">
+          <td align="center" style="background-color:#fff7ed;border:1px solid #fdba74;border-radius:14px;padding:18px 16px;">
             <div style="font-size:11px;font-weight:800;color:#9a3412;text-transform:uppercase;letter-spacing:1.2px;margin-bottom:6px;">
               ${escapeHtml(template.highlightPinLabel || "Security Code")}
             </div>
@@ -340,7 +340,7 @@ export function renderShopiversityEmailHtml(
   <![endif]-->
 </head>
 <body style="margin:0;padding:0;background-color:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;">
-  <div style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;font-size:1px;line-height:1px;color:#f1f5f9;">
+  <div style="display:none;max-height:0px;max-width:0px;overflow:hidden;mso-hide:all;">
     ${escapeHtml(previewText)}
   </div>
   <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background-color:#f1f5f9;padding:24px 12px;">
@@ -474,7 +474,7 @@ export function renderShopiversityEmailText(
     .map((r) => `- ${r.label}: ${interpolateTemplate(r.valueTemplate, vars)}`);
 
   return [
-    `SHOPIVERSITY (${template.code}) - ${heroTitle}`,
+    `Shopiversity (${template.code}) - ${heroTitle}`,
     "=".repeat(48),
     greeting,
     "",

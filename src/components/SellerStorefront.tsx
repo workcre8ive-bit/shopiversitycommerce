@@ -6,8 +6,10 @@ import {
   where, 
   onSnapshot, 
   doc,
-  orderBy
+  orderBy,
+  limit
 } from "firebase/firestore";
+import { isFirestoreQuotaError, notifyFirestoreQuotaExceeded } from "../lib/firebase-errors";
 import { Product, UserProfile, StorefrontSettings } from "../types";
 import { 
   Store, 
@@ -20,10 +22,22 @@ import {
   Share2,
   Clock,
   MapPin,
-  LayoutGrid
+  LayoutGrid,
+  Phone,
+  Mail,
+  Instagram,
+  Globe,
+  AtSign
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/utils";
+import {
+  mergeSellerPublicContact,
+  hasAnyPublicContact,
+  normalizeUrl,
+  normalizeWhatsAppUrl,
+  normalizeTikTokUrl
+} from "../lib/publicContact";
 import { ProductCard, ProductCardSkeleton } from "./ProductCard";
 import VendorVerificationBadge from "./VendorVerificationBadge";
 
@@ -69,20 +83,25 @@ export default function SellerStorefront({ sellerId, currentUser, previewSetting
       }
       setLoading(false);
     }, (error) => {
-      console.error("Error fetching seller:", error);
+      if (isFirestoreQuotaError(error)) {
+        notifyFirestoreQuotaExceeded(`users/${sellerId}`);
+      } else {
+        console.warn("Error fetching seller:", error);
+      }
       setLoading(false);
     });
 
-    // Fetch seller products
+    // Fetch seller products (bounded)
     const q = query(
       collection(db, "products"),
-      where("sellerId", "==", sellerId)
+      where("sellerId", "==", sellerId),
+      limit(100)
     );
 
     const unsubscribeProducts = onSnapshot(q, (snapshot) => {
       const prods = snapshot.docs
         .map(docSnap => ({ id: docSnap.id, ...docSnap.data() } as Product))
-        .filter(p => !p.isDeleted)
+        .filter(p => !p.isDeleted && !p.isDraft && p.status !== "draft")
         .sort((a, b) => {
           const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
           const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
@@ -90,7 +109,11 @@ export default function SellerStorefront({ sellerId, currentUser, previewSetting
         });
       setProducts(prods);
     }, (error) => {
-      console.error("Error fetching products:", error);
+      if (isFirestoreQuotaError(error)) {
+        notifyFirestoreQuotaExceeded("products");
+      } else {
+        console.warn("Error fetching storefront products:", error);
+      }
     });
 
     return () => {
@@ -242,52 +265,129 @@ export default function SellerStorefront({ sellerId, currentUser, previewSetting
     </div>
   );
 
+  const sellerPublicContact = mergeSellerPublicContact(settings.publicContact, seller);
+
   const renderHeaderBlock = () => (
-    <div key="header-block" className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-6 sm:p-8 border border-slate-100 dark:border-slate-800/80 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-6">
-      <div className="flex items-center gap-6">
-        <div className="w-20 h-20 rounded-3xl bg-white dark:bg-slate-850 p-1 shadow-md relative shrink-0 border border-slate-100 dark:border-slate-800">
-          <img 
-            src={seller.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(seller.displayName)}&background=random`} 
-            alt={seller.displayName} 
-            className="w-full h-full object-cover rounded-[1.25rem]"
-          />
-          {seller.isVerified && (
-            <div className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full flex items-center justify-center text-white border-2 border-white dark:border-slate-900" style={{ backgroundColor: colors.primary }}>
-              <ShieldCheck className="w-3.5 h-3.5" />
+    <div key="header-block" className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-6 sm:p-8 border border-slate-100 dark:border-slate-800/80 shadow-sm space-y-5">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+        <div className="flex items-center gap-6">
+          <div className="w-20 h-20 rounded-3xl bg-white dark:bg-slate-850 p-1 shadow-md relative shrink-0 border border-slate-100 dark:border-slate-800">
+            <img 
+              src={seller.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(seller.displayName)}&background=random`} 
+              alt={seller.displayName} 
+              className="w-full h-full object-cover rounded-[1.25rem]"
+            />
+            {seller.isVerified && (
+              <div className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full flex items-center justify-center text-white border-2 border-white dark:border-slate-900" style={{ backgroundColor: colors.primary }}>
+                <ShieldCheck className="w-3.5 h-3.5" />
+              </div>
+            )}
+          </div>
+          <div>
+            <h2 className={cn("text-2xl sm:text-3xl font-black tracking-tight text-slate-900 dark:text-white", getThemeClasses())} style={{ color: colors.primary }}>
+              {settings.businessName || seller.displayName}
+            </h2>
+            {(settings.businessBio || (seller as any).description) && (
+              <p className="text-sm font-semibold text-slate-500 dark:text-slate-400 mt-1 max-w-xl italic">
+                {settings.businessBio || (seller as any).description}
+              </p>
+            )}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
+              <VendorVerificationBadge user={seller} size="sm" />
+              <span className="text-slate-300 dark:text-slate-700">•</span>
+              <div className="flex items-center gap-1 text-amber-500">
+                <Star className="w-4 h-4 fill-current" />
+                <span className="text-xs sm:text-sm font-black">4.9</span>
+              </div>
+              <span className="text-slate-300 dark:text-slate-700">•</span>
+              <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">{products.length} Items</div>
+              <span className="text-slate-300 dark:text-slate-700">•</span>
+              <div className="flex items-center gap-1 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                <Zap className="w-3.5 h-3.5 text-orange-500 animate-bounce" />
+                Explorer Choice
+              </div>
+              <span className="text-slate-300 dark:text-slate-700">•</span>
+              <span className="text-xs font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">{seller.campus || "CAMPUS STORE"}</span>
             </div>
-          )}
-        </div>
-        <div>
-          <h2 className={cn("text-2xl sm:text-3xl font-black tracking-tight text-slate-900 dark:text-white", getThemeClasses())} style={{ color: colors.primary }}>
-            {settings.businessName || seller.displayName}
-          </h2>
-          {(settings.businessBio || seller.description) && (
-            <p className="text-sm font-semibold text-slate-500 dark:text-slate-400 mt-1 max-w-xl italic">
-              {settings.businessBio || seller.description}
-            </p>
-          )}
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
-            <VendorVerificationBadge user={seller} size="sm" />
-            <span className="text-slate-300 dark:text-slate-700">•</span>
-            <div className="flex items-center gap-1 text-amber-500">
-              <Star className="w-4 h-4 fill-current" />
-              <span className="text-xs sm:text-sm font-black">4.9</span>
-            </div>
-            <span className="text-slate-300 dark:text-slate-700">•</span>
-            <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">{products.length} Items</div>
-            <span className="text-slate-300 dark:text-slate-700">•</span>
-            <div className="flex items-center gap-1 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-              <Zap className="w-3.5 h-3.5 text-orange-500 animate-bounce" />
-              Explorer Choice
-            </div>
-            <span className="text-slate-300 dark:text-slate-700">•</span>
-            <span className="text-xs font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">{seller.campus || "CAMPUS STORE"}</span>
           </div>
         </div>
       </div>
 
-      <div className="flex items-center gap-3">
-      </div>
+      {hasAnyPublicContact(sellerPublicContact) && (
+        <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center gap-2.5">
+          <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mr-1">
+            Public Contact:
+          </span>
+          {sellerPublicContact.phone && (
+            <a
+              href={`tel:${sellerPublicContact.phone.replace(/\s+/g, "")}`}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 transition-all"
+            >
+              <Phone className="w-3.5 h-3.5 text-emerald-600" />
+              <span>{sellerPublicContact.phone}</span>
+            </a>
+          )}
+          {sellerPublicContact.whatsapp && (
+            <a
+              href={normalizeWhatsAppUrl(sellerPublicContact.whatsapp)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 border border-emerald-200/80 dark:border-emerald-800/50 transition-all"
+            >
+              <MessageCircle className="w-3.5 h-3.5" />
+              <span>WhatsApp: {sellerPublicContact.whatsapp}</span>
+            </a>
+          )}
+          {sellerPublicContact.email && (
+            <a
+              href={`mailto:${sellerPublicContact.email}`}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 border border-blue-200/80 dark:border-blue-800/50 transition-all"
+            >
+              <Mail className="w-3.5 h-3.5" />
+              <span>{sellerPublicContact.email}</span>
+            </a>
+          )}
+          {sellerPublicContact.instagram && (
+            <a
+              href={normalizeUrl(sellerPublicContact.instagram, "https://instagram.com/")}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-pink-50 dark:bg-pink-950/30 text-pink-700 dark:text-pink-300 hover:bg-pink-100 border border-pink-200/80 dark:border-pink-800/50 transition-all"
+            >
+              <Instagram className="w-3.5 h-3.5" />
+              <span>{sellerPublicContact.instagram}</span>
+            </a>
+          )}
+          {sellerPublicContact.twitter && (
+            <a
+              href={normalizeUrl(sellerPublicContact.twitter, "https://x.com/")}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-200 border border-slate-200 dark:border-slate-700 transition-all"
+            >
+              <AtSign className="w-3.5 h-3.5" />
+              <span>{sellerPublicContact.twitter}</span>
+            </a>
+          )}
+          {sellerPublicContact.tiktok && (
+            <a
+              href={normalizeTikTokUrl(sellerPublicContact.tiktok)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-purple-50 dark:bg-purple-950/30 text-purple-700 dark:text-purple-300 hover:bg-purple-100 border border-purple-200/80 dark:border-purple-800/50 transition-all"
+            >
+              <Globe className="w-3.5 h-3.5" />
+              <span>{sellerPublicContact.tiktok}</span>
+            </a>
+          )}
+          {(sellerPublicContact.facebook || sellerPublicContact.website || sellerPublicContact.other) && (
+            <span className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-orange-50 dark:bg-orange-950/30 text-orange-700 dark:text-orange-300 border border-orange-200/80 dark:border-orange-800/50">
+              <Globe className="w-3.5 h-3.5" />
+              <span>{sellerPublicContact.website || sellerPublicContact.facebook || sellerPublicContact.other}</span>
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 

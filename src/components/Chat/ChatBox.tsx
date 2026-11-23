@@ -10,7 +10,8 @@ import {
   updateDoc,
   doc,
   getDoc,
-  deleteDoc
+  deleteDoc,
+  limit
 } from 'firebase/firestore';
 import { 
   Send, User, ShieldAlert, Loader2, ArrowLeft, MessageCircle, Pencil, Trash2, Check, X, Pin,
@@ -26,7 +27,7 @@ import {
   hasSensitiveContent 
 } from '../../lib/contentFilter';
 import { logBlockedAttempt } from '../../lib/moderationLogger';
-import { handleFirestoreError, OperationType } from '../../lib/firebase-errors';
+import { handleFirestoreError, handleListenerError, isFirestoreQuotaError, notifyFirestoreQuotaExceeded, OperationType } from '../../lib/firebase-errors';
 import { cn } from '../../lib/utils';
 
 interface Message {
@@ -148,6 +149,12 @@ export default function ChatBox({ chatId, recipientId, recipientName, onBack }: 
       if (snap.exists()) {
         setCurrentUserData(snap.data());
       }
+    }, (error) => {
+      if (isFirestoreQuotaError(error)) {
+        notifyFirestoreQuotaExceeded(`users/${uid}`);
+        return;
+      }
+      console.warn('ChatBox user subscription notice:', error);
     });
     return () => unsub();
   }, []);
@@ -371,7 +378,8 @@ export default function ChatBox({ chatId, recipientId, recipientName, onBack }: 
 
     const q = query(
       collection(db, 'chats', chatId, 'messages'),
-      orderBy('createdAt', 'asc')
+      orderBy('createdAt', 'asc'),
+      limit(150)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -389,7 +397,7 @@ export default function ChatBox({ chatId, recipientId, recipientName, onBack }: 
         }
       }, 100);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, `chats/${chatId}/messages`);
+      handleListenerError(error, OperationType.LIST, `chats/${chatId}/messages`, () => setLoading(false));
     });
 
     return () => unsubscribe();

@@ -92,7 +92,6 @@ export function isLogisticsCompanyProfileComplete(company: LogisticsPartnerLike 
   
   const name = String(company.companyName || "").trim();
   const phone = String(company.phoneNumber || "").replace(/[^0-9]/g, "");
-  const rc = String(company.rcNumber || "").trim();
   const office = String(company.officeAddress || "").trim();
   const vehicles = Array.isArray(company.vehicleTypes) ? company.vehicleTypes : [];
   const campuses = Array.isArray(company.coveredCampuses) ? company.coveredCampuses : [];
@@ -102,17 +101,15 @@ export function isLogisticsCompanyProfileComplete(company: LogisticsPartnerLike 
   const bankName = String(company.bankName || company.bankDetails?.bankName || "").trim();
   const accountNumber = String(company.accountNumber || company.bankDetails?.accountNumber || "").replace(/[^0-9]/g, "");
 
-  const hasName = name.length >= 2;
+  const hasName = name.length >= 2 && name.toLowerCase() !== "logistics partner";
   const hasPhone = phone.length >= 7;
-  // A realistic RC number is not a placeholder
-  const hasRc = rc.length >= 3 && !rc.toUpperCase().startsWith("RC-00") && rc.toUpperCase() !== "RC-PENDING";
   const hasOffice = office.length >= 3 && office !== "Main Campus Office";
   const hasVehicles = vehicles.length > 0;
   const hasCampuses = campuses.length > 0;
   const hasBasePrice = basePrice > 0;
   const hasBank = bankName.length >= 2 && accountNumber.length >= 7;
 
-  return hasName && hasPhone && hasRc && hasOffice && hasVehicles && hasCampuses && hasBasePrice && hasBank;
+  return hasName && hasPhone && hasOffice && hasVehicles && hasCampuses && hasBasePrice && hasBank;
 }
 
 /**
@@ -123,7 +120,6 @@ export function getLogisticsCompanyProfileChecklist(company: LogisticsPartnerLik
     return [
       { id: "name", label: "Business Name", complete: false },
       { id: "phone", label: "Contact Phone Number", complete: false },
-      { id: "rc", label: "CAC / RC Registration Number", complete: false },
       { id: "office", label: "Physical Dispatch Office Address", complete: false },
       { id: "vehicles", label: "Fleet / Vehicle Types Configured", complete: false },
       { id: "campuses", label: "Covered Campus Zones Selected", complete: false },
@@ -134,7 +130,6 @@ export function getLogisticsCompanyProfileChecklist(company: LogisticsPartnerLik
 
   const name = String(company.companyName || "").trim();
   const phone = String(company.phoneNumber || "").replace(/[^0-9]/g, "");
-  const rc = String(company.rcNumber || "").trim();
   const office = String(company.officeAddress || "").trim();
   const vehicles = Array.isArray(company.vehicleTypes) ? company.vehicleTypes : [];
   const campuses = Array.isArray(company.coveredCampuses) ? company.coveredCampuses : [];
@@ -143,9 +138,8 @@ export function getLogisticsCompanyProfileChecklist(company: LogisticsPartnerLik
   const accountNumber = String(company.accountNumber || company.bankDetails?.accountNumber || "").replace(/[^0-9]/g, "");
 
   return [
-    { id: "name", label: "Business Name", complete: name.length >= 2 },
+    { id: "name", label: "Business Name", complete: name.length >= 2 && name.toLowerCase() !== "logistics partner" },
     { id: "phone", label: "Contact Phone Number", complete: phone.length >= 7 },
-    { id: "rc", label: "CAC / RC Registration Number", complete: rc.length >= 3 && !rc.toUpperCase().startsWith("RC-00") && rc.toUpperCase() !== "RC-PENDING" },
     { id: "office", label: "Physical Dispatch Office Address", complete: office.length >= 3 && office !== "Main Campus Office" },
     { id: "vehicles", label: "Fleet / Vehicle Types Configured", complete: vehicles.length > 0 },
     { id: "campuses", label: "Covered Campus Zones Selected", complete: campuses.length > 0 },

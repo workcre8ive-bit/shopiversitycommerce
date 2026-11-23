@@ -16,7 +16,7 @@ import {
   limit,
   increment
 } from "firebase/firestore";
-import { Product, Order, UserProfile } from "../types";
+import { Product, Order, UserProfile, Notification as AppNotification } from "../types";
 import { NIGERIAN_CAMPUSES } from "../constants/campuses";
 import LiveRiderTrackingModal from "./LiveRiderTrackingModal";
 import SalesAnalytics from "./SalesAnalytics";
@@ -87,7 +87,10 @@ import {
   Tag,
   Navigation,
   KeyRound,
-  Copy
+  Copy,
+  Mail,
+  AtSign,
+  FileText
 } from "lucide-react";
 import { 
   BarChart, 
@@ -105,14 +108,27 @@ import {
 
 import { motion, AnimatePresence } from "motion/react";
 import { cn, getOrderSellerHandoverPin } from "../lib/utils";
-import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
+import { handleFirestoreError, handleListenerError, isFirestoreQuotaError, notifyFirestoreQuotaExceeded, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
+import {
+  getCachedUserProfile,
+  getCachedSellerOrders,
+  setCachedSellerOrders,
+  getCachedSellerProducts,
+  setCachedSellerProducts,
+  getCachedSellerPayouts,
+  setCachedSellerPayouts,
+  getCachedSellerAnalytics,
+  setCachedSellerAnalytics,
+  getCachedNotifications,
+  setCachedNotifications
+} from "../lib/profileCache";
+import { cleanPublicContact } from "../lib/publicContact";
 import { compressImage } from "../lib/imageUtils";
 import { NIGERIAN_STATES, STATE_CITIES, NIGERIAN_LGAS, CITY_STREETS, POPULAR_SCHOOL_PICKUP_LOCATIONS, formatAvailability } from "../constants/locations";
 import { getSchoolsByState, findSchoolByName } from "../constants/schools";
 import ProfileSettings from "./ProfileSettings";
 import StorefrontSettingsTab from "./StorefrontSettingsTab";
 import ReceiptModal from "./ReceiptModal";
-import { scanPublicFieldsForContactInfo, isUserProductSuspended, getRemainingSuspensionTime } from "../lib/contentFilter";
 
 
 interface SellerDashboardProps {
@@ -123,6 +139,8 @@ interface SellerDashboardProps {
   initialProductType?: "good" | "service";
   initialEditingProduct?: any;
   onClearEditingProduct?: () => void;
+  userProfile?: UserProfile | null;
+  appNotifications?: AppNotification[];
 }
 
 export default function SellerDashboard({ 
@@ -132,7 +150,9 @@ export default function SellerDashboard({
   initialSubTab = "overview", 
   initialProductType = "good",
   initialEditingProduct,
-  onClearEditingProduct
+  onClearEditingProduct,
+  userProfile,
+  appNotifications
 }: SellerDashboardProps) {
   const [activeSubTab, setActiveSubTab] = React.useState(initialSubTab);
 
@@ -140,14 +160,31 @@ export default function SellerDashboard({
     setActiveSubTab(initialSubTab);
   }, [initialSubTab]);
 
-  const [orders, setOrders] = React.useState<Order[]>([]);
-  const [products, setProducts] = React.useState<Product[]>([]);
-  const [payouts, setPayouts] = React.useState<any[]>([]);
-  const [analytics, setAnalytics] = React.useState<any[]>([]);
-  const [notifications, setNotifications] = React.useState<Notification[]>([]);
-  const [loading, setLoading] = React.useState(true);
-  const [currentUser, setCurrentUser] = React.useState<UserProfile | null>(null);
+  const initialUid = userProfile?.uid || auth.currentUser?.uid;
+  const [orders, setOrders] = React.useState<Order[]>(() => getCachedSellerOrders<Order>(initialUid));
+  const [products, setProducts] = React.useState<Product[]>(() => getCachedSellerProducts(initialUid));
+  const [payouts, setPayouts] = React.useState<any[]>(() => getCachedSellerPayouts(initialUid));
+  const [analytics, setAnalytics] = React.useState<any[]>(() => getCachedSellerAnalytics(initialUid));
+  const [notifications, setNotifications] = React.useState<AppNotification[]>(() =>
+    appNotifications ? appNotifications.slice(0, 5) : getCachedNotifications<AppNotification>(initialUid).slice(0, 5)
+  );
+  const [loading, setLoading] = React.useState(() => getCachedSellerProducts(initialUid).length === 0);
+  const [currentUser, setCurrentUser] = React.useState<UserProfile | null>(
+    () => userProfile || getCachedUserProfile(initialUid)
+  );
   const [editingProduct, setEditingProduct] = React.useState<Product | null>(initialEditingProduct || null);
+
+  React.useEffect(() => {
+    if (userProfile !== undefined) {
+      setCurrentUser(userProfile);
+    }
+  }, [userProfile]);
+
+  React.useEffect(() => {
+    if (appNotifications !== undefined) {
+      setNotifications(appNotifications.slice(0, 5));
+    }
+  }, [appNotifications]);
 
   React.useEffect(() => {
     if (initialEditingProduct) {
@@ -168,7 +205,11 @@ export default function SellerDashboard({
   const [clearingOrders, setClearingOrders] = React.useState(false);
   const [restoringProduct, setRestoringProduct] = React.useState<string | null>(null);
   const [showCompleteProfile, setShowCompleteProfile] = React.useState(false);
-  const [productActiveType, setProductActiveType] = React.useState<"all" | "good" | "service" | "event">("all");
+  const [productActiveType, setProductActiveType] = React.useState<"all" | "good" | "service" | "drafts" | "event">("all");
+  const [draftToDelete, setDraftToDelete] = React.useState<string | null>(null);
+  const [draftDeleteLoading, setDraftDeleteLoading] = React.useState(false);
+
+  const isDraftProduct = React.useCallback((p: any) => p?.isDraft === true || p?.status === "draft", []);
 
   // Inert stubs for deactivated offline receipt modal
   const setShowOfflineReceiptGenerator = (val: boolean) => {};
@@ -220,25 +261,46 @@ export default function SellerDashboard({
   }, []);
 
   React.useEffect(() => {
-    if (!auth.currentUser) return;
+    const uid = userProfile?.uid || auth.currentUser?.uid;
+    if (!uid) {
+      setLoading(false);
+      return;
+    }
 
-    // Fetch user profile
-    const unsubscribeUser = onSnapshot(doc(db, "users", auth.currentUser.uid), (snapshot) => {
-      if (snapshot.exists()) setCurrentUser(snapshot.data() as UserProfile);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, `users/${auth.currentUser?.uid}`);
-    });
+    // Hydrate cached data immediately so quota limits or slow networks never blank out the dashboard
+    const cachedOrders = getCachedSellerOrders<Order>(uid);
+    if (cachedOrders.length > 0) setOrders(cachedOrders);
+    const cachedProducts = getCachedSellerProducts(uid);
+    if (cachedProducts.length > 0) {
+      setProducts(cachedProducts);
+      setLoading(false);
+    }
+    const cachedPayouts = getCachedSellerPayouts(uid);
+    if (cachedPayouts.length > 0) setPayouts(cachedPayouts);
+    const cachedAnalytics = getCachedSellerAnalytics(uid);
+    if (cachedAnalytics.length > 0) setAnalytics(cachedAnalytics);
 
-    // Listen to seller's orders
+    // Only subscribe to users/{uid} if App.tsx didn't already pass userProfile
+    const unsubscribeUser = userProfile === undefined
+      ? onSnapshot(doc(db, "users", uid), (snapshot) => {
+          if (snapshot.exists()) setCurrentUser(snapshot.data() as UserProfile);
+        }, (error) => {
+          handleListenerError(error, OperationType.GET, `users/${uid}`);
+        })
+      : () => {};
+
+    // Listen to seller's orders (bounded to reduce daily reads)
     const ordersQ = query(
       collection(db, "orders"),
-      where("sellerId", "==", auth.currentUser.uid)
+      where("sellerId", "==", uid),
+      limit(100)
     );
 
-    // Listen to seller's products
+    // Listen to seller's products (bounded to reduce daily reads)
     const productsQ = query(
       collection(db, "products"),
-      where("sellerId", "==", auth.currentUser.uid)
+      where("sellerId", "==", uid),
+      limit(100)
     );
 
     const unsubscribeOrders = onSnapshot(ordersQ, (snapshot) => {
@@ -249,8 +311,9 @@ export default function SellerDashboard({
         .filter((o: any) => !o.hiddenFromSeller)
         .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()) as Order[];
       setOrders(ordersData);
+      setCachedSellerOrders(uid, ordersData);
     }, (error) => {
-      handleFirestoreError(error, OperationType.GET, "orders");
+      handleListenerError(error, OperationType.GET, "orders", () => setLoading(false));
     });
 
     const unsubscribeProducts = onSnapshot(productsQ, (snapshot) => {
@@ -260,15 +323,17 @@ export default function SellerDashboard({
       })).values())
       .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       setProducts(productsData);
+      setCachedSellerProducts(uid, productsData);
       setLoading(false);
     }, (error) => {
-      handleFirestoreError(error, OperationType.GET, "products");
+      handleListenerError(error, OperationType.GET, "products", () => setLoading(false));
     });
 
-    // Listen to seller's analytics
+    // Listen to seller's analytics (bounded)
     const analyticsQ = query(
       collection(db, "analytics"),
-      where("sellerId", "==", auth.currentUser.uid)
+      where("sellerId", "==", uid),
+      limit(100)
     );
 
     const unsubscribeAnalytics = onSnapshot(analyticsQ, (snapshot) => {
@@ -278,15 +343,21 @@ export default function SellerDashboard({
       })).values())
         .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       setAnalytics(analyticsData);
+      setCachedSellerAnalytics(uid, analyticsData);
     }, (error) => {
-      console.error("Analytics fetch error:", error);
+      if (isFirestoreQuotaError(error)) {
+        notifyFirestoreQuotaExceeded("analytics");
+        return;
+      }
+      console.warn("Analytics fetch notice:", error);
     });
 
-    // Listen to payout requests
+    // Listen to payout requests (bounded)
     const payoutsQ = query(
       collection(db, "payoutRequests"),
-      where("sellerId", "==", auth.currentUser.uid),
-      orderBy("createdAt", "desc")
+      where("sellerId", "==", uid),
+      orderBy("createdAt", "desc"),
+      limit(50)
     );
 
     const unsubscribePayouts = onSnapshot(payoutsQ, (snapshot) => {
@@ -295,27 +366,41 @@ export default function SellerDashboard({
         return [d.id, d];
       })).values());
       setPayouts(payoutsData);
+      setCachedSellerPayouts(uid, payoutsData);
     }, (error) => {
-      console.error("Payouts fetch error:", error);
+      if (isFirestoreQuotaError(error)) {
+        notifyFirestoreQuotaExceeded("payoutRequests");
+        return;
+      }
+      console.warn("Payouts fetch notice:", error);
     });
 
-    // Listen to seller notifications
-    const notificationsQ = query(
-      collection(db, "notifications"),
-      where("userId", "==", auth.currentUser.uid),
-      orderBy("createdAt", "desc"),
-      limit(5)
-    );
-
-    const unsubscribeNotifications = onSnapshot(notificationsQ, (snapshot) => {
-      const data = Array.from(new Map(snapshot.docs.map(doc => {
-        const d = { id: doc.id, ...doc.data() };
-        return [d.id, d];
-      })).values()) as any[];
-      setNotifications(data);
-    }, (error) => {
-      console.error("Seller notifications fetch error:", error);
-    });
+    // Reuse notifications passed from App.tsx when available to avoid duplicate listener reads
+    const unsubscribeNotifications = appNotifications === undefined
+      ? onSnapshot(
+          query(
+            collection(db, "notifications"),
+            where("userId", "==", uid),
+            orderBy("createdAt", "desc"),
+            limit(5)
+          ),
+          (snapshot) => {
+            const data = Array.from(new Map(snapshot.docs.map(doc => {
+              const d = { id: doc.id, ...doc.data() } as AppNotification;
+              return [d.id, d];
+            })).values());
+            setNotifications(data);
+            setCachedNotifications(uid, data);
+          },
+          (error) => {
+            if (isFirestoreQuotaError(error)) {
+              notifyFirestoreQuotaExceeded("notifications");
+              return;
+            }
+            console.warn("Seller notifications fetch notice:", error);
+          }
+        )
+      : () => {};
 
     return () => {
       unsubscribeUser();
@@ -325,7 +410,7 @@ export default function SellerDashboard({
       unsubscribePayouts();
       unsubscribeNotifications();
     };
-  }, [auth.currentUser?.uid]);
+  }, [auth.currentUser?.uid, userProfile === undefined, appNotifications === undefined]);
 
   const handleMarkNotifRead = async (id: string, e?: React.MouseEvent | React.TouchEvent) => {
     if (e) {
@@ -375,7 +460,8 @@ export default function SellerDashboard({
   const [requestingPayout, setRequestingPayout] = React.useState(false);
 
   const stats = React.useMemo(() => {
-    const activeProds = products.filter(p => !p.isDeleted);
+    const activeProds = products.filter(p => !p.isDeleted && !isDraftProduct(p));
+    const draftProds = products.filter(p => !p.isDeleted && isDraftProduct(p));
     // Include completed, acquired (tickets), and delivered in earnings
     const completed = orders.filter(o => o.status === "completed" || o.status === "acquired" || o.status === "delivered");
     const pending = orders.filter(o => o.status === "pending" || o.status === "Pending Seller Acceptance" || o.status === "accepted" || o.status === "out_for_delivery" || o.status === "declined_by_logistics");
@@ -403,9 +489,10 @@ export default function SellerDashboard({
       withdrawnAmount,
       pendingCount: pending.length,
       activeProducts: activeProds.length,
+      draftCount: draftProds.length,
       completedCount: completed.length
     };
-  }, [orders, products, payouts]);
+  }, [orders, products, payouts, isDraftProduct]);
 
 
   const [currentTime, setCurrentTime] = React.useState(Date.now());
@@ -706,6 +793,20 @@ export default function SellerDashboard({
     setActiveSubTab("add-product");
   };
 
+  const confirmDeleteDraft = async () => {
+    if (!draftToDelete) return;
+    setDraftDeleteLoading(true);
+    try {
+      await deleteDoc(doc(db, "products", draftToDelete));
+      setDraftToDelete(null);
+    } catch (error: any) {
+      console.error("Error deleting draft:", error);
+      handleFirestoreError(error, OperationType.DELETE, `products/${draftToDelete}`);
+    } finally {
+      setDraftDeleteLoading(false);
+    }
+  };
+
   const handleRefillStock = async (productId: string, newQty: number) => {
     try {
       await updateDoc(doc(db, "products", productId), {
@@ -865,6 +966,7 @@ export default function SellerDashboard({
         <button 
           onClick={() => {
             setActiveSubTab("overview");
+            setEditingProduct(null);
             if (onClearEditingProduct) {
               onClearEditingProduct();
             }
@@ -877,6 +979,42 @@ export default function SellerDashboard({
       ) : null}
 
       <AnimatePresence mode="wait">
+        {draftToDelete && (
+          <div key="delete-draft-modal-overlay" className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+            <motion.div
+              key="delete-draft-modal-content"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 max-w-sm w-full shadow-2xl border border-slate-100 dark:border-slate-800"
+            >
+              <div className="w-16 h-16 bg-red-50 dark:bg-red-900/20 rounded-2xl flex items-center justify-center text-red-600 dark:text-red-400 mx-auto mb-6">
+                <Trash2 className="w-8 h-8" />
+              </div>
+              <h3 className="text-xl font-bold text-slate-900 dark:text-white text-center mb-2">Delete Draft?</h3>
+              <p className="text-sm text-slate-500 dark:text-slate-400 text-center mb-8">
+                This unfinished draft will be permanently removed from your drafts.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setDraftToDelete(null)}
+                  disabled={draftDeleteLoading}
+                  className="flex-1 py-4 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl font-bold text-sm hover:bg-slate-100 dark:hover:bg-slate-700 transition-all disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmDeleteDraft}
+                  disabled={draftDeleteLoading}
+                  className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-bold text-sm hover:bg-red-700 transition-all shadow-lg flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {draftDeleteLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Delete Draft"}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
         {productToDelete && !showPermanentDeleteConfirm && (
           <div key="delete-modal-overlay" className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
             <motion.div 
@@ -1047,6 +1185,7 @@ export default function SellerDashboard({
                   { id: "analytics", label: "Sales Analytics", icon: TrendingUp, desc: "Revenue & period trends", color: "from-blue-600 to-indigo-600" },
                   { id: "add-product", label: "List Item", icon: Plus, desc: "Publish new good/service", color: "from-orange-500 to-amber-500" },
                   { id: "my-products", label: "My Products", icon: Package, desc: "Edit & update catalogs", color: "from-purple-500 to-indigo-500" },
+                  { id: "drafts", label: stats.draftCount > 0 ? `Drafts (${stats.draftCount})` : "Drafts", icon: FileText, desc: "Finish or delete drafts", color: "from-amber-500 to-orange-600" },
                   { id: "orders", label: "Customer Orders", icon: ShoppingBag, desc: "Track sales & escrow", color: "from-blue-500 to-teal-500" },
                   { id: "payouts", label: "Withdrawals", icon: Wallet, desc: "Request payout of earnings", color: "from-emerald-500 to-green-500" },
                   ...(currentUser?.state !== "Logistics Partner" ? [{ id: "storefront", label: "Storefront View", icon: Store, desc: "See your public catalog", color: "from-pink-500 to-rose-500" }] : []),
@@ -1066,6 +1205,12 @@ export default function SellerDashboard({
                         } else if (item.id === "storefront") {
                           const event = new CustomEvent('view-seller-store', { detail: currentUser?.uid });
                           window.dispatchEvent(event);
+                        } else if (item.id === "drafts") {
+                          setProductActiveType("drafts");
+                          setActiveSubTab("my-products");
+                        } else if (item.id === "add-product") {
+                          setEditingProduct(null);
+                          setActiveSubTab("add-product");
                         } else {
                           setActiveSubTab(item.id);
                         }
@@ -1082,6 +1227,34 @@ export default function SellerDashboard({
                 })}
               </div>
             </div>
+
+            {stats.draftCount > 0 && (
+              <div className="bg-amber-50/80 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/50 rounded-3xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div className="flex items-center gap-3.5">
+                  <div className="w-11 h-11 rounded-2xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-sm">
+                    <FileText className="w-5 h-5" />
+                  </div>
+                  <div className="text-left">
+                    <h4 className="text-sm font-black text-amber-950 dark:text-amber-100">
+                      You have {stats.draftCount} unpublished product {stats.draftCount === 1 ? "draft" : "drafts"}
+                    </h4>
+                    <p className="text-xs text-amber-800 dark:text-amber-300 font-medium">
+                      Unfinished listings stay saved privately in Drafts until you finish & publish or delete them.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProductActiveType("drafts");
+                    setActiveSubTab("my-products");
+                  }}
+                  className="px-5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black uppercase tracking-wider shadow-sm transition-all cursor-pointer shrink-0 border-none"
+                >
+                  Open Drafts ({stats.draftCount})
+                </button>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 gap-8">
               {/* Recent Orders Preview */}
@@ -1128,10 +1301,13 @@ export default function SellerDashboard({
               <div>
                 <DashboardCard 
                   title="My Listings" 
-                  count={products.filter(p => !p.isDeleted).length}
+                  count={products.filter(p => !p.isDeleted && !isDraftProduct(p)).length}
                   action={
                     <button 
-                      onClick={() => setActiveSubTab("my-products")}
+                      onClick={() => {
+                        setProductActiveType("all");
+                        setActiveSubTab("my-products");
+                      }}
                       className="text-[11px] font-black text-indigo-650 dark:text-indigo-400 hover:text-indigo-700 hover:underline uppercase tracking-widest cursor-pointer bg-transparent border-none p-0"
                     >
                       View All
@@ -1139,10 +1315,10 @@ export default function SellerDashboard({
                   }
                 >
                   <div className="space-y-4">
-                    {products.filter(p => !p.isDeleted).length === 0 ? (
-                      <EmptyState icon={Package} message="No products listed" />
+                    {products.filter(p => !p.isDeleted && !isDraftProduct(p)).length === 0 ? (
+                      <EmptyState icon={Package} message="No published products listed" />
                     ) : (
-                      products.filter(p => !p.isDeleted).slice(0, 3).map((product, pIdx) => (
+                      products.filter(p => !p.isDeleted && !isDraftProduct(p)).slice(0, 3).map((product, pIdx) => (
                         <ProductRow 
                           key={`recent-prod-${product.id || pIdx}-${pIdx}`} 
                           product={product} 
@@ -1152,12 +1328,15 @@ export default function SellerDashboard({
                         />
                       ))
                     )}
-                    {products.filter(p => !p.isDeleted).length > 3 && (
+                    {products.filter(p => !p.isDeleted && !isDraftProduct(p)).length > 3 && (
                       <button 
-                        onClick={() => setActiveSubTab("my-products")}
+                        onClick={() => {
+                          setProductActiveType("all");
+                          setActiveSubTab("my-products");
+                        }}
                         className="w-full mt-4 h-11 border border-slate-100 dark:border-slate-800/80 hover:bg-slate-50 dark:hover:bg-slate-800/60 rounded-xl text-xs font-bold text-slate-500 dark:text-zinc-400 shadow-sm transition-colors cursor-pointer"
                       >
-                        Show More Listings (+{products.filter(p => !p.isDeleted).length - 3})
+                        Show More Listings (+{products.filter(p => !p.isDeleted && !isDraftProduct(p)).length - 3})
                       </button>
                     )}
                   </div>
@@ -1280,9 +1459,20 @@ export default function SellerDashboard({
           >
             <AddProductForm 
               onSuccess={() => {
+                setProductActiveType("all");
                 setActiveSubTab("my-products");
                 setEditingProduct(null);
-              }} 
+              }}
+              onDraftSaved={() => {
+                setProductActiveType("drafts");
+                setActiveSubTab("my-products");
+                setEditingProduct(null);
+              }}
+              onDraftDiscarded={() => {
+                setProductActiveType("drafts");
+                setActiveSubTab("my-products");
+                setEditingProduct(null);
+              }}
               currentUser={currentUser} 
               editingProduct={editingProduct}
               initialType={initialProductType}
@@ -1303,7 +1493,8 @@ export default function SellerDashboard({
                 {[
                   { id: "all", label: "All Items", icon: LayoutGrid },
                   { id: "good", label: "Goods", icon: Package },
-                  { id: "service", label: "Services", icon: Sparkles }
+                  { id: "service", label: "Services", icon: Sparkles },
+                  { id: "drafts", label: stats.draftCount > 0 ? `Drafts (${stats.draftCount})` : "Drafts", icon: FileText }
                 ].map((tab, idx) => (
                   <button key={`tab-${tab.id}-${idx}`}
                     onClick={() => setProductActiveType(tab.id as any)}
@@ -1320,8 +1511,11 @@ export default function SellerDashboard({
                 ))}
               </div>
               <button 
-                onClick={() => setActiveSubTab("add-product")}
-                className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg shadow-indigo-100 dark:shadow-none shrink-0"
+                onClick={() => {
+                  setEditingProduct(null);
+                  setActiveSubTab("add-product");
+                }}
+                className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg shadow-indigo-100 dark:shadow-none shrink-0 cursor-pointer"
               >
                 <Plus className="w-4 h-4" />
                 Add New
@@ -1329,37 +1523,49 @@ export default function SellerDashboard({
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-              {products.filter(p => {
-                const isDeleted = p.isDeleted;
-                if (isDeleted) return false;
-                if (productActiveType === "all") return true;
-                if (productActiveType === "good") return p.type === "good";
-                if (productActiveType === "service") return p.type === "service";
-                return true;
-              }).length === 0 ? (
-                <div className="col-span-full py-20 text-center bg-white dark:bg-slate-900 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 transition-colors">
-                  <Package className="w-16 h-16 text-slate-200 dark:text-slate-800 mx-auto mb-4" />
-                  <h3 className="text-xl font-bold text-slate-900 dark:text-white">No items found</h3>
-                  <p className="text-sm text-slate-500">Try changing the category or list a new item.</p>
-                </div>
-              ) : (
-                products.filter(p => {
-                  const isDeleted = p.isDeleted;
-                  if (isDeleted) return false;
+              {(() => {
+                const visibleProducts = products.filter(p => {
+                  if (p.isDeleted) return false;
+                  const draft = isDraftProduct(p);
+                  if (productActiveType === "drafts") return draft;
+                  if (draft) return false;
                   if (productActiveType === "all") return true;
                   if (productActiveType === "good") return p.type === "good";
                   if (productActiveType === "service") return p.type === "service";
                   return true;
-                }).map((product, pIdx) => (
+                });
+
+                if (visibleProducts.length === 0) {
+                  return (
+                    <div className="col-span-full py-20 text-center bg-white dark:bg-slate-900 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 transition-colors">
+                      {productActiveType === "drafts" ? (
+                        <>
+                          <FileText className="w-16 h-16 text-slate-200 dark:text-slate-800 mx-auto mb-4" />
+                          <h3 className="text-xl font-bold text-slate-900 dark:text-white">No drafts saved</h3>
+                          <p className="text-sm text-slate-500">Unfinished product listings you save or leave before publishing will appear here.</p>
+                        </>
+                      ) : (
+                        <>
+                          <Package className="w-16 h-16 text-slate-200 dark:text-slate-800 mx-auto mb-4" />
+                          <h3 className="text-xl font-bold text-slate-900 dark:text-white">No items found</h3>
+                          <p className="text-sm text-slate-500">Try changing the category or list a new item.</p>
+                        </>
+                      )}
+                    </div>
+                  );
+                }
+
+                return visibleProducts.map((product, pIdx) => (
                   <ProductGridItem 
                     key={`grid-${product.id || pIdx}-${pIdx}`} 
                     product={product} 
-                    onDelete={deleteProduct} 
+                    onDelete={deleteProduct}
+                    onDeleteDraft={(id: string) => setDraftToDelete(id)}
                     onEdit={handleEdit} 
                     onRefillStock={handleRefillStock}
                   />
-                ))
-              )}
+                ));
+              })()}
             </div>
           </motion.div>
         )}
@@ -1379,7 +1585,7 @@ export default function SellerDashboard({
               </div>
             </div>
 
-            {products.filter(p => p.isDeleted).length === 0 ? (
+            {products.filter(p => p.isDeleted && !isDraftProduct(p)).length === 0 ? (
               <div className="py-20 text-center bg-white dark:bg-slate-900 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 transition-colors">
                 <Clock className="w-16 h-16 text-slate-200 dark:text-slate-800 mx-auto mb-4" />
                 <h3 className="text-xl font-bold text-slate-900 dark:text-white">Trash is empty</h3>
@@ -1387,7 +1593,7 @@ export default function SellerDashboard({
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                {products.filter(p => p.isDeleted).map((product, pIdx) => (
+                {products.filter(p => p.isDeleted && !isDraftProduct(p)).map((product, pIdx) => (
                   <ProductGridItem 
                     key={`trash-${product.id || pIdx}-${pIdx}`} 
                     product={product} 
@@ -2026,7 +2232,7 @@ export default function SellerDashboard({
 
                 <div className="mt-6 flex items-center justify-center gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
                   <AlertCircle className="w-3 h-3" />
-                  Required for listings & verification
+                  Optional — helps unlock verification badge
                 </div>
               </div>
             </motion.div>
@@ -2153,9 +2359,13 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
       alert("You cannot dispatch this order to a registered logistics partner until you accept the order. Please accept the order first.");
       return;
     }
+    const logisticsPrice = Number(partner.baseDeliveryPrice) || 0;
+    if (logisticsPrice <= 0) {
+      alert("This logistics partner has not configured their delivery fee yet. Please choose another partner or contact them first.");
+      return;
+    }
     setIsHiring(true);
     try {
-      const logisticsPrice = Number(partner.baseDeliveryPrice) || 500;
       const logisticsTimeline = "To be confirmed by courier upon acceptance";
 
       const deliveryPayload = {
@@ -3440,7 +3650,9 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                             <div className="text-right shrink-0 flex sm:flex-col items-center sm:items-end justify-between sm:justify-center gap-2 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-200 dark:border-slate-700">
                               <div>
                                 <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block">Courier Fee</span>
-                                <strong className="text-base font-black text-slate-900 dark:text-white block">₦{(partner.baseDeliveryPrice || 500).toLocaleString()}</strong>
+                                <strong className="text-base font-black text-slate-900 dark:text-white block">
+                                  {Number(partner.baseDeliveryPrice) > 0 ? `₦${Number(partner.baseDeliveryPrice).toLocaleString()}` : "Not set"}
+                                </strong>
                               </div>
                               <button
                                 type="button"
@@ -3670,8 +3882,10 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
   );
 }
 
-function ProductRow({ product, onDelete, onEdit, onRestore, onRefillStock, isRestoring, isDeletedView }: any) {
-  const isOutOfStock = product.type === "good" && (product.stock <= 0 || product.status === "inactive");
+function ProductRow({ product, onDelete, onDeleteDraft, onEdit, onRestore, onRefillStock, isRestoring, isDeletedView }: any) {
+  const isDraft = product.isDraft === true || product.status === "draft";
+  const isOutOfStock = !isDraft && product.type === "good" && (product.stock <= 0 || product.status === "inactive");
+  const displayName = product.name?.trim() || "Untitled Draft";
   const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
   const outTime = product.outOfStockAt ? new Date(product.outOfStockAt).getTime() : Date.now();
   const expiresAt = outTime + THREE_DAYS_MS;
@@ -3684,22 +3898,33 @@ function ProductRow({ product, onDelete, onEdit, onRestore, onRefillStock, isRes
   return (
     <div className={cn(
       "p-3.5 rounded-2xl border transition-all gap-3 min-w-0 flex flex-col sm:flex-row sm:items-center justify-between",
-      isOutOfStock 
-        ? "border-amber-200 dark:border-amber-900/50 bg-amber-50/20 dark:bg-amber-950/10" 
-        : "border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-800/30 hover:bg-slate-100/50 dark:hover:bg-slate-800/50"
+      isDraft
+        ? "border-amber-200 dark:border-amber-900/50 bg-amber-50/30 dark:bg-amber-950/10"
+        : isOutOfStock 
+          ? "border-amber-200 dark:border-amber-900/50 bg-amber-50/20 dark:bg-amber-950/10" 
+          : "border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-800/30 hover:bg-slate-100/50 dark:hover:bg-slate-800/50"
     )}>
       <div className="flex items-center gap-3 min-w-0 flex-1">
-        <div className="w-11 h-11 rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 shrink-0 border border-slate-200/60 dark:border-slate-700/60">
-          <img 
-            src={product.imageUrl || `https://picsum.photos/seed/${product.id}/100/100`} 
-            alt={product.name}
-            className="w-full h-full object-cover"
-            referrerPolicy="no-referrer"
-          />
+        <div className="w-11 h-11 rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 shrink-0 border border-slate-200/60 dark:border-slate-700/60 flex items-center justify-center">
+          {product.imageUrl ? (
+            <img 
+              src={product.imageUrl} 
+              alt={displayName}
+              className="w-full h-full object-cover"
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <FileText className="w-5 h-5 text-amber-500" />
+          )}
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <p className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate">{product.name}</p>
+            <p className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate">{displayName}</p>
+            {isDraft && !isDeletedView && (
+              <span className="text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500 text-white shrink-0">
+                Draft
+              </span>
+            )}
             {isOutOfStock && !isDeletedView && (
               <span className={cn(
                 "text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded",
@@ -3711,15 +3936,15 @@ function ProductRow({ product, onDelete, onEdit, onRestore, onRefillStock, isRes
           </div>
           <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
             <span className="text-xs font-black text-indigo-600 dark:text-indigo-400">
-              ₦{product.price.toLocaleString()}
+              ₦{(Number(product.price) || 0).toLocaleString()}
             </span>
             {product.type === "service" && product.pricingType && product.pricingType !== "fixed" && (
               <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">/ {product.pricingType}</span>
             )}
             <span className="text-[9px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md shrink-0">
-              {product.category}
+              {product.category || (product.type === "service" ? "Service" : "Electronics")}
             </span>
-            {product.type === "good" && product.category !== "Food & Drinks" && (
+            {!isDraft && product.type === "good" && product.category !== "Food & Drinks" && (
               <span className={cn(
                 "text-[9px] font-bold shrink-0",
                 product.stock <= 0 ? "text-red-500 font-black" : "text-slate-500 dark:text-slate-400"
@@ -3743,7 +3968,7 @@ function ProductRow({ product, onDelete, onEdit, onRestore, onRefillStock, isRes
           <button
             type="button"
             onClick={() => {
-              const qtyStr = window.prompt(`Enter refill quantity for ${product.name}:`, "5");
+              const qtyStr = window.prompt(`Enter refill quantity for ${displayName}:`, "5");
               if (qtyStr) {
                 const val = parseInt(qtyStr, 10);
                 if (!isNaN(val) && val > 0) onRefillStock(product.id, val);
@@ -3777,15 +4002,21 @@ function ProductRow({ product, onDelete, onEdit, onRestore, onRefillStock, isRes
           <>
             <button 
               onClick={() => onEdit(product)}
-              className="p-2 text-slate-400 dark:text-slate-500 hover:text-indigo-600 transition-all"
-              title="Edit Product"
+              className={cn(
+                "transition-all cursor-pointer",
+                isDraft
+                  ? "px-2.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-[10px] font-black uppercase tracking-wider flex items-center gap-1 border-none"
+                  : "p-2 text-slate-400 dark:text-slate-500 hover:text-indigo-600"
+              )}
+              title={isDraft ? "Finish & Publish Draft" : "Edit Product"}
             >
-              <Edit2 className="w-4 h-4" />
+              <Edit2 className={isDraft ? "w-3 h-3" : "w-4 h-4"} />
+              {isDraft && <span>Finish</span>}
             </button>
             <button 
-              onClick={() => onDelete(product.id)}
-              className="p-2 text-slate-400 dark:text-slate-500 hover:text-red-600 transition-all"
-              title="Move to Trash"
+              onClick={() => (isDraft && onDeleteDraft ? onDeleteDraft(product.id) : onDelete(product.id))}
+              className="p-2 text-slate-400 dark:text-slate-500 hover:text-red-600 transition-all cursor-pointer"
+              title={isDraft ? "Delete Draft" : "Move to Trash"}
             >
               <Trash2 className="w-4 h-4" />
             </button>
@@ -3796,8 +4027,10 @@ function ProductRow({ product, onDelete, onEdit, onRestore, onRefillStock, isRes
   );
 }
 
-function ProductGridItem({ product, onDelete, onEdit, onRestore, onRefillStock, isRestoring, isDeletedView }: any) {
-  const isOutOfStock = product.type === "good" && (product.stock <= 0 || product.status === "inactive");
+function ProductGridItem({ product, onDelete, onDeleteDraft, onEdit, onRestore, onRefillStock, isRestoring, isDeletedView }: any) {
+  const isDraft = product.isDraft === true || product.status === "draft";
+  const isOutOfStock = !isDraft && product.type === "good" && (product.stock <= 0 || product.status === "inactive");
+  const displayName = product.name?.trim() || "Untitled Draft";
   const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
   const outTime = product.outOfStockAt ? new Date(product.outOfStockAt).getTime() : Date.now();
   const expiresAt = outTime + THREE_DAYS_MS;
@@ -3810,17 +4043,44 @@ function ProductGridItem({ product, onDelete, onEdit, onRestore, onRefillStock, 
   return (
     <div className={cn(
       "bg-white dark:bg-slate-900 rounded-[2rem] border overflow-hidden group shadow-sm hover:shadow-xl transition-all flex flex-col justify-between",
-      isOutOfStock ? "border-amber-200 dark:border-amber-900/60" : "border-slate-100 dark:border-slate-800",
+      isDraft
+        ? "border-amber-300 dark:border-amber-800/70"
+        : isOutOfStock
+          ? "border-amber-200 dark:border-amber-900/60"
+          : "border-slate-100 dark:border-slate-800",
       isDeletedView && "opacity-80 grayscale-[0.5] hover:grayscale-0 hover:opacity-100"
     )}>
       <div>
-        <div className="aspect-square relative overflow-hidden">
-          <img 
-            src={product.imageUrl || `https://picsum.photos/seed/${product.id}/400/400`} 
-            alt={product.name}
-            className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
-            referrerPolicy="no-referrer"
-          />
+        <div className="aspect-square relative overflow-hidden bg-slate-100 dark:bg-slate-800">
+          {product.imageUrl ? (
+            <img 
+              src={product.imageUrl} 
+              alt={displayName}
+              className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+              referrerPolicy="no-referrer"
+            />
+          ) : isDraft ? (
+            <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-slate-900 text-amber-600 dark:text-amber-400 p-6 text-center">
+              <FileText className="w-12 h-12 mb-2 opacity-80" />
+              <span className="text-[11px] font-black uppercase tracking-widest">Unfinished Draft</span>
+              <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400 mt-1">Add photos & publish when ready</span>
+            </div>
+          ) : (
+            <img 
+              src={`https://picsum.photos/seed/${product.id}/400/400`} 
+              alt={displayName}
+              className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+              referrerPolicy="no-referrer"
+            />
+          )}
+          {isDraft && !isDeletedView && (
+            <div className="absolute top-4 left-4 z-10">
+              <span className="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider text-white bg-amber-500 shadow-md flex items-center gap-1">
+                <FileText className="w-3 h-3" />
+                <span>Draft • Private</span>
+              </span>
+            </div>
+          )}
           {isOutOfStock && !isDeletedView && (
             <div className="absolute top-4 left-4 z-10">
               <span className={cn(
@@ -3855,15 +4115,15 @@ function ProductGridItem({ product, onDelete, onEdit, onRestore, onRefillStock, 
               <>
                 <button 
                   onClick={() => onEdit(product)}
-                  className="w-10 h-10 bg-white dark:bg-slate-800 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-indigo-600 shadow-lg"
-                  title="Edit Product"
+                  className="w-10 h-10 bg-white dark:bg-slate-800 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-indigo-600 shadow-lg cursor-pointer"
+                  title={isDraft ? "Finish & Publish Draft" : "Edit Product"}
                 >
                   <Edit2 className="w-4 h-4" />
                 </button>
                 <button 
-                  onClick={() => onDelete(product.id)}
-                  className="w-10 h-10 bg-white dark:bg-slate-800 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-red-600 shadow-lg"
-                  title="Move to Trash"
+                  onClick={() => (isDraft && onDeleteDraft ? onDeleteDraft(product.id) : onDelete(product.id))}
+                  className="w-10 h-10 bg-white dark:bg-slate-800 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-red-600 shadow-lg cursor-pointer"
+                  title={isDraft ? "Delete Draft" : "Move to Trash"}
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -3886,13 +4146,13 @@ function ProductGridItem({ product, onDelete, onEdit, onRestore, onRefillStock, 
                 product.condition === "new" ? "bg-emerald-50 dark:bg-emerald-900/10 text-emerald-600" :
                 product.condition === "refurbished" ? "bg-blue-50 dark:bg-blue-900/10 text-blue-600" : "bg-amber-50 dark:bg-amber-900/10 text-amber-600"
               )}>
-                {product.condition}
+                {product.condition || "new"}
               </span>
               <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 dark:bg-indigo-900/10 px-2 py-1 rounded-lg uppercase tracking-wider">
-                {product.category}
+                {product.category || (product.type === "service" ? "Service" : "Electronics")}
               </span>
             </div>
-            {product.type === "good" && (
+            {!isDraft && product.type === "good" && (
               <span className={cn(
                 "text-xs font-bold",
                 product.stock <= 0 ? "text-red-500 font-black" : "text-slate-400 dark:text-slate-500"
@@ -3901,7 +4161,7 @@ function ProductGridItem({ product, onDelete, onEdit, onRestore, onRefillStock, 
               </span>
             )}
           </div>
-          <h5 className="font-bold text-slate-900 dark:text-white mb-1 line-clamp-1">{product.name}</h5>
+          <h5 className="font-bold text-slate-900 dark:text-white mb-1 line-clamp-1">{displayName}</h5>
           {product.deletedAt && isDeletedView && (
             <div className="flex items-center gap-1.5 mb-2 text-red-500">
               <Clock className="w-3 h-3" />
@@ -3910,15 +4170,21 @@ function ProductGridItem({ product, onDelete, onEdit, onRestore, onRefillStock, 
               </p>
             </div>
           )}
-          {!isDeletedView && product.serialNumber && (
+          {!isDeletedView && !isDraft && product.serialNumber && (
             <p className="text-[10px] font-mono text-slate-500 mb-2">SN: {product.serialNumber}</p>
           )}
           <div className="flex items-center gap-2">
-            <p className="text-lg font-black text-indigo-600">₦{product.price.toLocaleString()}</p>
+            <p className="text-lg font-black text-indigo-600">₦{(Number(product.price) || 0).toLocaleString()}</p>
             {product.type === "service" && product.pricingType && product.pricingType !== "fixed" && (
               <span className="text-[10px] font-bold text-slate-400 uppercase">/ {product.pricingType}</span>
             )}
           </div>
+
+          {isDraft && !isDeletedView && (
+            <div className="mt-3 p-3 rounded-xl border border-amber-200 dark:border-amber-900/40 bg-amber-50/70 dark:bg-amber-950/20 text-[11px] text-amber-800 dark:text-amber-300 font-medium">
+              Saved as draft and hidden from buyers. Tap <strong>Finish & Publish</strong> to go live or delete this draft.
+            </div>
+          )}
 
           {/* 3-day countdown & restock alert banner */}
           {isOutOfStock && !isDeletedView && (
@@ -3950,7 +4216,7 @@ function ProductGridItem({ product, onDelete, onEdit, onRestore, onRefillStock, 
               <button
                 type="button"
                 onClick={() => {
-                  const qtyStr = window.prompt(`Enter refill quantity for ${product.name}:`, "5");
+                  const qtyStr = window.prompt(`Enter refill quantity for ${displayName}:`, "5");
                   if (qtyStr) {
                     const val = parseInt(qtyStr, 10);
                     if (!isNaN(val) && val > 0) onRefillStock(product.id, val);
@@ -3965,15 +4231,20 @@ function ProductGridItem({ product, onDelete, onEdit, onRestore, onRefillStock, 
             <div className="flex gap-2">
               <button 
                 onClick={() => onEdit(product)}
-                className="flex-1 h-12 bg-indigo-600 hover:bg-indigo-750 text-white rounded-xl font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 border-none shadow-sm cursor-pointer"
+                className={cn(
+                  "flex-1 h-12 text-white rounded-xl font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 border-none shadow-sm cursor-pointer",
+                  isDraft
+                    ? "bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700"
+                    : "bg-indigo-600 hover:bg-indigo-750"
+                )}
               >
                 <Edit2 className="w-3.5 h-3.5" />
-                <span>Edit Listing</span>
+                <span>{isDraft ? "Finish & Publish" : "Edit Listing"}</span>
               </button>
               <button 
-                onClick={() => onDelete(product.id)}
+                onClick={() => (isDraft && onDeleteDraft ? onDeleteDraft(product.id) : onDelete(product.id))}
                 className="w-12 h-12 bg-red-50 dark:bg-red-950/20 text-red-600 dark:text-red-400 rounded-xl flex items-center justify-center hover:bg-red-100 dark:hover:bg-red-900/30 transition-all border-none cursor-pointer"
-                title="Delete Listing"
+                title={isDraft ? "Delete Draft" : "Delete Listing"}
               >
                 <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
               </button>
@@ -4106,15 +4377,62 @@ export function getDynamicFieldsForCategory(category: string): ServiceCategoryMa
   };
 }
 
-function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }: any) {
+function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser, editingProduct, initialType }: any) {
+  const isEditingExistingDraft = Boolean(
+    editingProduct && (editingProduct.isDraft === true || editingProduct.status === "draft")
+  );
+  const isEditingPublished = Boolean(editingProduct && !isEditingExistingDraft);
+  const activeDraftIdRef = React.useRef<string | null>(
+    isEditingExistingDraft ? (editingProduct?.id || null) : null
+  );
+  const draftCreatedAtRef = React.useRef<string>(
+    editingProduct?.createdAt || new Date().toISOString()
+  );
+  const draftSerialRef = React.useRef<string>(
+    editingProduct?.serialNumber ||
+      `SN-${Math.random().toString(36).substr(2, 9).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`
+  );
+  const isPublishedRef = React.useRef<boolean>(false);
+  const isDiscardedRef = React.useRef<boolean>(false);
+  const hasInteractedRef = React.useRef<boolean>(false);
+
   const [type, setType] = React.useState<"good" | "service">(editingProduct?.type || initialType || "good");
-  const [name, setName] = React.useState(editingProduct?.name || "");
+  const [name, setName] = React.useState(
+    editingProduct?.name === "Untitled Draft" ? "" : (editingProduct?.name || "")
+  );
   const [businessName, setBusinessName] = React.useState(editingProduct?.businessName || "");
   const [customServiceName, setCustomServiceName] = React.useState("");
   const [description, setDescription] = React.useState(editingProduct?.description || "");
-  const [price, setPrice] = React.useState(editingProduct?.price?.toString() || "");
+  const [price, setPrice] = React.useState(
+    editingProduct?.price !== undefined && editingProduct?.price !== null && Number(editingProduct.price) > 0
+      ? editingProduct.price.toString()
+      : (isEditingPublished && editingProduct?.price === 0 ? "0" : "")
+  );
   const [category, setCategory] = React.useState(editingProduct?.category || (initialType === "service" || (editingProduct?.type || initialType) === "service" ? "" : "Electronics"));
   const [stock, setStock] = React.useState(editingProduct?.stock?.toString() || "1");
+  const initialPublicContact = editingProduct?.publicContact || (!editingProduct ? (currentUser?.publicContact || currentUser?.storefrontSettings?.publicContact || {}) : {});
+  const [publicPhone, setPublicPhone] = React.useState<string>(initialPublicContact?.phone || "");
+  const [publicWhatsapp, setPublicWhatsapp] = React.useState<string>(initialPublicContact?.whatsapp || "");
+  const [publicEmail, setPublicEmail] = React.useState<string>(initialPublicContact?.email || "");
+  const [publicInstagram, setPublicInstagram] = React.useState<string>(initialPublicContact?.instagram || "");
+  const [publicTwitter, setPublicTwitter] = React.useState<string>(initialPublicContact?.twitter || "");
+  const [publicTiktok, setPublicTiktok] = React.useState<string>(initialPublicContact?.tiktok || "");
+  const [publicOther, setPublicOther] = React.useState<string>(initialPublicContact?.other || "");
+  const [savingDraft, setSavingDraft] = React.useState(false);
+
+  React.useEffect(() => {
+    const editingDraft = Boolean(
+      editingProduct && (editingProduct.isDraft === true || editingProduct.status === "draft")
+    );
+    activeDraftIdRef.current = editingDraft ? (editingProduct?.id || null) : null;
+    draftCreatedAtRef.current = editingProduct?.createdAt || new Date().toISOString();
+    if (editingProduct?.serialNumber) {
+      draftSerialRef.current = editingProduct.serialNumber;
+    }
+    isPublishedRef.current = false;
+    isDiscardedRef.current = false;
+    hasInteractedRef.current = false;
+  }, [editingProduct?.id]);
   const [pricingType, setPricingType] = React.useState<"fixed" | "hourly" | "project" | "daily">(editingProduct?.pricingType || "fixed");
   const [condition, setCondition] = React.useState<"new" | "refurbished" | "used">(editingProduct?.condition || "new");
   const [deliveryOptions, setDeliveryOptions] = React.useState({
@@ -4604,163 +4922,9 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!auth.currentUser) return;
-
-    // Check if seller is currently suspended from product listings (24h lockout)
-    const productLockStatus = isUserProductSuspended(currentUser);
-    if (productLockStatus.isSuspended) {
-      setError(`🚫 Product Listing Suspended: Your account is temporarily locked out from listing or editing products for ${productLockStatus.remainingText} due to 3 contact policy violations (sharing phone numbers, emails, or social media handles).`);
-      setLoading(false);
-      return;
-    }
-
-    if (auth.currentUser && !auth.currentUser.emailVerified) {
-      setError("Email Verification Required: Please verify your email address before listing products or services. Check your inbox for the verification link or resend it from the banner at the top.");
-      setLoading(false);
-      return;
-    }
-
-    // Moderation check: Scan all public fields, inquiries, descriptions, notes, and dynamic inputs for phone numbers, emails, or social media handles
-    const targetName = (isFoodAndDrinks || name === "Other") ? (customServiceName || name) : name;
-    const fieldsToScan: Record<string, string | null | undefined> = {
-      "Product Name": targetName,
-      "Description": description,
-      "Custom Service Name": customServiceName,
-      "Business Name": businessName,
-      "Subject / Course": subjectTaught,
-      "Tech Stack / Skills": techStack,
-      "Preferred Venue": preferredVenue,
-      "Preferred Time": preferredTime,
-      "Coverage Area": coverageArea,
-      "Rental Terms": rentalTerms,
-      "Portfolio URL": portfolioUrl,
-      "Collection Type": collectionType,
-      "Promo Code": promoCode,
-      "Menu Items": Array.isArray(menuItems) ? menuItems.map(m => `${m.name} ${m.description || ""}`).join(" ") : ""
-    };
-
-    const contactScan = scanPublicFieldsForContactInfo(fieldsToScan);
-    if (contactScan.isBlocked) {
-      setLoading(true);
-      setLoadingMessage("Checking compliance & contact safety guidelines...");
-      try {
-        const userDocRef = doc(db, "users", auth.currentUser.uid);
-        const userSnap = await getDoc(userDocRef);
-        const currentViolationCount = (userSnap.data()?.productViolationCount || 0) + 1;
-
-        // Log violation attempt for security and moderation
-        await addDoc(collection(db, "contact_moderation_logs"), {
-          userId: auth.currentUser.uid,
-          userName: currentUser?.displayName || auth.currentUser.displayName || "Seller",
-          userEmail: currentUser?.email || auth.currentUser.email || "",
-          context: "product_listing_creation",
-          reasons: contactScan.reason,
-          detectedTypes: contactScan.detectedTypes,
-          createdAt: new Date().toISOString()
-        }).catch(() => {});
-
-        if (currentViolationCount >= 3) {
-          const lockoutUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-          await updateDoc(userDocRef, {
-            productViolationCount: 0,
-            productSuspendedUntil: lockoutUntil,
-            strikeCount: increment(1)
-          });
-
-          await addDoc(collection(db, "notifications"), {
-            userId: auth.currentUser.uid,
-            title: "🚫 Product Listing Suspended for 24 Hours",
-            message: "You reached 3 strikes for attempting to include phone numbers, emails, or social media handles in product details. Your listing ability is suspended for 24 hours.",
-            type: "security",
-            read: false,
-            createdAt: new Date().toISOString()
-          }).catch(() => {});
-
-          setError(`🚫 Product Listing Access Blocked for 24 Hours: You reached 3 strikes for attempting to include phone numbers, emails, or social media handles in product details/inquiries. Your listing privileges are suspended for 24 hours.`);
-        } else {
-          await updateDoc(userDocRef, {
-            productViolationCount: currentViolationCount
-          });
-
-          setError(`⚠️ Strike ${currentViolationCount} of 3: Sharing phone numbers, emails, or social media handles in product details or inquiries is strictly prohibited. After 3 attempts, you will be locked out from listing products for 24 hours. (${contactScan.reason})`);
-        }
-      } catch (strikeErr) {
-        console.error("Strike tracking error:", strikeErr);
-        setError(`⚠️ Moderation Policy Violation: Contact info (phone numbers, emails, social handles) is prohibited in product details and inquiries.`);
-      } finally {
-        setLoading(false);
-        setLoadingMessage(null);
-      }
-      return;
-    }
-
-    if (type === "service" && !category) {
-      setError("Please select a category for your service.");
-      setLoading(false);
-      return;
-    }
-
-    // Restriction: Seller must have completed their profile
-    const isProfileComplete = !!currentUser?.schoolName && !!currentUser?.state && !!currentUser?.city && (currentUser?.role === "seller" || !!currentUser?.deliveryAddress);
-    if (!isProfileComplete) {
-      setError("Please complete your profile in Settings (School Name, State, City, and Delivery Address) before listing products.");
-      return;
-    }
-
-    if (deliveryOptions.delivery && logisticsType === "registered" && !selectedLogisticsCompanyId) {
-      setError("Please select a registered logistics partner from the options.");
-      return;
-    }
-
-    // At least one fulfillment method must be selected for goods or physical services
-    if (type === "good") {
-      if (!deliveryOptions.delivery && !deliveryOptions.pickup) {
-        setError("Please select at least one fulfillment option: Logistics Delivery or Campus Pickup.");
-        return;
-      }
-      if (deliveryOptions.pickup) {
-        if (!addrState) {
-          setError("Please select the State for campus pickup.");
-          return;
-        }
-        if (!resolvedPickupSchool) {
-          setError("Please select or enter the School / Campus for pickup.");
-          return;
-        }
-        if (!addrLga) {
-          setError("Please select the Local Government Area (LGA) for campus pickup.");
-          return;
-        }
-        const finalSchoolLoc = schoolLocationPreset === "✍️ Other / Custom School Location..." 
-          ? schoolLocationCustom.trim() 
-          : schoolLocationPreset;
-        if (!finalSchoolLoc) {
-          setError("Please select or enter the specific campus location for pickup (e.g., School Main Gate, SUB).");
-          return;
-        }
-        if (!schoolAddress.trim()) {
-          setError("Please enter the specific campus address/hall/department for pickup.");
-          return;
-        }
-        if (!pickupPolicyAccepted) {
-          setError("You must acknowledge and accept the Campus Pickup Safety & Liability Policy before listing this item.");
-          return;
-        }
-      }
-    }
-
-    const pNow = parseFloat(price);
-    const pBefore = parseFloat(priceBefore);
-    if (!isNaN(pBefore) && pBefore > 0 && !isNaN(pNow) && pBefore < pNow) {
-      setError(`Price Before (₦${priceBefore}) cannot be lower than Price Now (₦${price}). Original price must be higher than current price.`);
-      setLoading(false);
-      return;
-    }
-
-    const finalSchoolLocation = schoolLocationPreset === "✍️ Other / Custom School Location..." 
-      ? schoolLocationCustom.trim() 
+  const buildProductPayload = (asDraft: boolean, productId: string) => {
+    const finalSchoolLocation = schoolLocationPreset === "✍️ Other / Custom School Location..."
+      ? schoolLocationCustom.trim()
       : schoolLocationPreset;
 
     const computedPickupAddress = buildCompiledPickupAddress(
@@ -4771,15 +4935,343 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
       addrState
     );
 
-    let finalLocation = computedPickupAddress || location.trim() || currentUser?.campus || "";
-    
+    const finalLocation = computedPickupAddress || location.trim() || currentUser?.campus || "Campus / Remote";
+    const resolvedName = ((isFoodAndDrinks || name === "Other") ? (customServiceName || name) : name).trim();
+    const safeName = (asDraft ? (resolvedName || "Untitled Draft") : resolvedName).slice(0, 200);
+    const resolvedCategory = (category === "Other" ? (customCategory || "Other") : category) || (type === "service" ? "Other" : "Electronics");
+    const finalImages = isFoodAndDrinks
+      ? (images.length > 0 ? images : menuItems.map(m => m.imageUrl).filter(Boolean))
+      : images;
+
+    const computedServiceType = getComputedServiceType();
+    const cleanedPublicContact = cleanPublicContact({
+      phone: publicPhone,
+      whatsapp: publicWhatsapp,
+      email: publicEmail,
+      instagram: publicInstagram,
+      twitter: publicTwitter,
+      tiktok: publicTiktok,
+      other: publicOther
+    });
+
+    const fallbackImageUrl = asDraft
+      ? (finalImages[0] || "")
+      : ((type === "good" || isFoodAndDrinks || type === "service")
+          ? (finalImages[0] || `https://picsum.photos/seed/${(safeName || "listing").replace(/\s/g, "")}/400/400`)
+          : "");
+    const fallbackImageUrls = asDraft
+      ? finalImages
+      : ((type === "good" || isFoodAndDrinks || type === "service")
+          ? (finalImages.length > 0 ? finalImages : [`https://picsum.photos/seed/${(safeName || "listing").replace(/\s/g, "")}/400/400`])
+          : []);
+
+    const payload: any = {
+      id: productId,
+      type,
+      name: safeName,
+      businessName:
+        businessName.trim() ||
+        currentUser?.businessName ||
+        currentUser?.storefrontSettings?.businessName ||
+        currentUser?.displayName ||
+        "Campus Store",
+      description: (description || "").slice(0, 5000),
+      price: Math.max(0, parseFloat(price) || 0),
+      category: resolvedCategory,
+      stock: type === "service" ? 999999 : Math.max(0, parseInt(stock, 10) || 0),
+      initialStock: type === "service" ? 999999 : Math.max(0, parseInt(stock, 10) || 0),
+      condition,
+      isDraft: asDraft,
+      status: asDraft ? "draft" : "active",
+      isDeleted: false,
+      updatedAt: new Date().toISOString(),
+      publicContact: cleanedPublicContact || null,
+
+      // Dynamic Fields Metadata
+      subjectTaught: category === "Academic & Tutoring" ? subjectTaught : null,
+      subjectsWithPrices: category === "Academic & Tutoring" ? subjectsWithPrices : null,
+      certificateUrl: type === "service" ? (certificateUrl || null) : null,
+      pickupCoordinates: null,
+      deliveryOptions: type === "good" ? {
+        delivery: !!deliveryOptions.delivery,
+        pickup: !!deliveryOptions.pickup,
+        deliveryPrice: 0
+      } : (computedServiceType === "digital" ? {
+        delivery: false,
+        pickup: false,
+        deliveryPrice: 0
+      } : computedServiceType === "event" ? {
+        delivery: false,
+        pickup: true,
+        deliveryPrice: 0
+      } : {
+        delivery: !!deliveryOptions.delivery,
+        pickup: true,
+        deliveryPrice: 0
+      }),
+      // Structured Campus Pickup Fields
+      pickupState: addrState || null,
+      pickupLga: addrLga || null,
+      schoolAddress: schoolAddress.trim() || null,
+      schoolLocation: finalSchoolLocation || null,
+      pickupPolicyAccepted: !!pickupPolicyAccepted,
+      logisticsType,
+      logisticsCompanyId: logisticsType === "registered" ? selectedLogisticsCompanyId : null,
+      logisticsCompanyName: logisticsType === "registered" ? (allLogisticsCompanies.find(c => c.id === selectedLogisticsCompanyId)?.companyName || null) : null,
+      deliveryTime: Math.max(1, parseInt(deliveryTime, 10) || 1),
+      deliveryTimeUnit,
+      location: computedServiceType === "digital" ? "Online/Remote" : finalLocation,
+      imageUrl: fallbackImageUrl,
+      imageUrls: fallbackImageUrls,
+      menuItems: (isFoodAndDrinks || type === "service") ? menuItems : [],
+      sellerId: auth.currentUser?.uid || currentUser?.uid || "",
+      sellerName: currentUser?.displayName || auth.currentUser?.displayName || "Campus Seller",
+      sellerVerified: Boolean(currentUser?.isVerified),
+      createdAt: editingProduct?.createdAt || draftCreatedAtRef.current,
+      isHibernated: false,
+      serialNumber: editingProduct?.serialNumber || draftSerialRef.current,
+
+      // Discount, promo and custom inputs
+      discountPercent: parseFloat(discountPercent) || 0,
+      promoCode: promoCode.trim(),
+      priceBefore: parseFloat(priceBefore) || 0,
+      collectionType: collectionType.trim(),
+      businessAddress: manualBusinessAddress.trim(),
+      pickupSchool: resolvedPickupSchool || currentUser?.campus || finalSchoolLocation || null,
+
+      // Dynamic Specific Fields
+      digitalFormat: computedServiceType === "digital" ? digitalFormat : null,
+      portfolioUrl: computedServiceType === "digital" ? portfolioUrl : null,
+      eventRadius: computedServiceType === "event" ? eventRadius : null,
+      setupTime: computedServiceType === "event" ? setupTime : null,
+      includesEquipment: computedServiceType === "event" ? includesEquipment : null,
+      institutionName: computedServiceType === "academic" ? institutionName : null,
+      gradeOrQualification: computedServiceType === "academic" ? gradeOrQualification : null,
+      securityDeposit: computedServiceType === "rental" ? securityDeposit : null,
+      rentalDuration: computedServiceType === "rental" ? rentalDuration : null,
+      rentalDurationUnit: computedServiceType === "rental" ? rentalDurationUnit : null,
+      latePenalty: computedServiceType === "rental" ? latePenalty : null,
+      rentalTerms: computedServiceType === "rental" ? rentalTerms : null,
+
+      // Mapped Dynamic Fields configuration
+      techStack: category === "Tech & Digital" || category === "Web Development" ? techStack : null,
+      preferredTime: category === "Cleaning & Laundry" || category === "Home Cleaning" || category === "Home & Personal Care" ? preferredTime : null,
+      preferredVenue: category === "Home & Personal Care" ? preferredVenue : null,
+      laundryPreference: category === "Cleaning & Laundry" || category === "Home Cleaning" ? laundryPreference : null,
+      transitOption: category === "Logistics & Errands" ? transitOption : null,
+      coverageArea: category === "Logistics & Errands" ? coverageArea : null
+    };
+
+    if (type === "service") {
+      payload.pricingType = pricingType;
+    }
+
+    return payload;
+  };
+
+  const persistDraftDocument = async (redirectOnSuccess: boolean) => {
+    if (!auth.currentUser) return;
+    if (redirectOnSuccess) {
+      setSavingDraft(true);
+      setError(null);
+    }
+    try {
+      const targetId = activeDraftIdRef.current || (isEditingExistingDraft ? editingProduct.id : null) || doc(collection(db, "products")).id;
+      activeDraftIdRef.current = targetId;
+      const draftRef = doc(db, "products", targetId);
+      const draftData = buildProductPayload(true, targetId);
+      await setDoc(draftRef, draftData, { merge: true });
+      if (redirectOnSuccess) {
+        isPublishedRef.current = true; // prevent duplicate unmount save after manual save & leave
+        onDraftSaved?.();
+      }
+    } catch (err) {
+      console.warn("Failed to save draft:", err);
+      if (redirectOnSuccess) {
+        if (isFirestoreQuotaError(err)) {
+          notifyFirestoreQuotaExceeded(`products/${activeDraftIdRef.current || "draft"}`);
+        }
+        setError(getFirestoreErrorMessage(err) || "Could not save draft. Please try again.");
+      }
+    } finally {
+      if (redirectOnSuccess) {
+        setSavingDraft(false);
+      }
+    }
+  };
+
+  const handleSaveAsDraft = async () => {
+    await persistDraftDocument(true);
+  };
+
+  const handleDiscardDraft = async () => {
+    isDiscardedRef.current = true;
+    const targetId = activeDraftIdRef.current || (isEditingExistingDraft ? editingProduct?.id : null);
+    if (targetId && auth.currentUser) {
+      setSavingDraft(true);
+      try {
+        await deleteDoc(doc(db, "products", targetId));
+      } catch (err) {
+        console.error("Error deleting draft:", err);
+      } finally {
+        setSavingDraft(false);
+      }
+    }
+    onDraftDiscarded?.();
+  };
+
+  const latestAutoSaveFnRef = React.useRef<() => void>(() => {});
+  latestAutoSaveFnRef.current = () => {
+    if (!auth.currentUser || isEditingPublished || isPublishedRef.current || isDiscardedRef.current) {
+      return;
+    }
+    const hasMeaningfulContent = Boolean(
+      name.trim() ||
+      customServiceName.trim() ||
+      description.trim() ||
+      (parseFloat(price) > 0) ||
+      priceBefore.trim() ||
+      promoCode.trim() ||
+      collectionType.trim() ||
+      manualBusinessAddress.trim() ||
+      images.length > 0 ||
+      menuItems.length > 0 ||
+      subjectTaught.trim() ||
+      techStack.trim() ||
+      portfolioUrl.trim() ||
+      preferredTime.trim() ||
+      preferredVenue.trim() ||
+      coverageArea.trim() ||
+      institutionName.trim() ||
+      gradeOrQualification.trim() ||
+      rentalTerms.trim() ||
+      publicPhone.trim() ||
+      publicWhatsapp.trim() ||
+      publicEmail.trim() ||
+      publicInstagram.trim() ||
+      publicTwitter.trim() ||
+      publicTiktok.trim() ||
+      publicOther.trim()
+    );
+    if (!isEditingExistingDraft && (!hasInteractedRef.current || !hasMeaningfulContent)) {
+      return;
+    }
+    if (isEditingExistingDraft && !hasInteractedRef.current) {
+      return;
+    }
+    void persistDraftDocument(false);
+  };
+
+  React.useEffect(() => {
+    return () => {
+      latestAutoSaveFnRef.current?.();
+    };
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!auth.currentUser) return;
+
+    if (auth.currentUser && !auth.currentUser.emailVerified) {
+      setError("Email Verification Required: Please verify your email address before publishing products or services. You can still click 'Save as Draft' for now.");
+      setLoading(false);
+      return;
+    }
+
+    const targetName = ((isFoodAndDrinks || name === "Other") ? (customServiceName || name) : name).trim();
+    if (!targetName || targetName === "Other" || targetName === "Untitled Draft") {
+      setFormStep("details");
+      setError("Please enter a valid product or service name in Details before publishing.");
+      setLoading(false);
+      return;
+    }
+
+    if (!description.trim()) {
+      setFormStep("details");
+      setError("Please enter a description for your listing in Details before publishing.");
+      setLoading(false);
+      return;
+    }
+
+    if (type === "service" && !category) {
+      setFormStep("pricing");
+      setError("Please select a category for your service before publishing.");
+      setLoading(false);
+      return;
+    }
+
+    if (!isFoodAndDrinks && (!price.trim() || isNaN(parseFloat(price)) || parseFloat(price) < 0)) {
+      setFormStep("pricing");
+      setError("Please enter a valid selling price in Pricing before publishing.");
+      setLoading(false);
+      return;
+    }
+
+    if (deliveryOptions.delivery && logisticsType === "registered" && !selectedLogisticsCompanyId) {
+      setFormStep("logistics");
+      setError("Please select a registered logistics partner from the options.");
+      return;
+    }
+
+    // At least one fulfillment method must be selected for goods
+    if (type === "good") {
+      if (!deliveryOptions.delivery && !deliveryOptions.pickup) {
+        setFormStep("logistics");
+        setError("Please select at least one fulfillment option: Logistics Delivery or Campus Pickup.");
+        return;
+      }
+      if (deliveryOptions.pickup) {
+        if (!addrState) {
+          setFormStep("logistics");
+          setError("Please select the State for campus pickup.");
+          return;
+        }
+        if (!resolvedPickupSchool) {
+          setFormStep("logistics");
+          setError("Please select or enter the School / Campus for pickup.");
+          return;
+        }
+        if (!addrLga) {
+          setFormStep("logistics");
+          setError("Please select the Local Government Area (LGA) for campus pickup.");
+          return;
+        }
+        const finalSchoolLoc = schoolLocationPreset === "✍️ Other / Custom School Location..." 
+          ? schoolLocationCustom.trim() 
+          : schoolLocationPreset;
+        if (!finalSchoolLoc) {
+          setFormStep("logistics");
+          setError("Please select or enter the specific campus location for pickup (e.g., School Main Gate, SUB).");
+          return;
+        }
+        if (!schoolAddress.trim()) {
+          setFormStep("logistics");
+          setError("Please enter the specific campus address/hall/department for pickup.");
+          return;
+        }
+        if (!pickupPolicyAccepted) {
+          setFormStep("logistics");
+          setError("You must acknowledge and accept the Campus Pickup Safety & Liability Policy before publishing this item.");
+          return;
+        }
+      }
+    }
+
+    const pNow = parseFloat(price);
+    const pBefore = parseFloat(priceBefore);
+    if (!isNaN(pBefore) && pBefore > 0 && !isNaN(pNow) && pBefore < pNow) {
+      setFormStep("pricing");
+      setError(`Price Before (₦${priceBefore}) cannot be lower than Price Now (₦${price}). Original price must be higher than current price.`);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     setLoadingMessage("AI Verifying compliance & Google search matching...");
     setError(null);
     setSuccessMessage(null);
 
     try {
-      const targetName = (isFoodAndDrinks || name === "Other") ? (customServiceName || name) : name;
       const targetImage = images[0] || null;
 
       const valResponse = await fetch("/api/gemini/validate-product", {
@@ -4825,111 +5317,21 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
       console.warn("AI verification error, continuing gracefully:", valErr);
     }
 
-    setLoadingMessage("Saving listing to campus marketplace...");
+    setLoadingMessage("Publishing listing to campus marketplace...");
     try {
-      const productRef = editingProduct 
-        ? doc(db, "products", editingProduct.id)
-        : doc(collection(db, "products"));
-      
+      const targetId =
+        activeDraftIdRef.current ||
+        (editingProduct ? editingProduct.id : null) ||
+        doc(collection(db, "products")).id;
+      const productRef = doc(db, "products", targetId);
       const productId = productRef.id;
-
-      const finalImages = isFoodAndDrinks 
-        ? (images.length > 0 ? images : menuItems.map(m => m.imageUrl).filter(Boolean))
-        : images;
-
-      const computedServiceType = getComputedServiceType();
-      const productData: any = {
-        id: productId,
-        type,
-        name: (isFoodAndDrinks || name === "Other") ? (customServiceName || name) : name,
-        businessName: businessName || currentUser?.displayName || "Anonymous",
-        description,
-        price: parseFloat(price) || 0,
-        category: category === "Other" ? (customCategory || category) : category,
-        stock: type === "service" ? 999999 : (parseInt(stock) || 0),
-        initialStock: type === "service" ? 999999 : (parseInt(stock) || 0),
-        condition,
-        // Dynamic Fields Metadata
-        subjectTaught: category === "Academic & Tutoring" ? subjectTaught : null,
-        subjectsWithPrices: category === "Academic & Tutoring" ? subjectsWithPrices : null,
-        certificateUrl: type === "service" ? (certificateUrl || null) : null,
-        pickupCoordinates: null,
-        deliveryOptions: type === "good" ? {
-          delivery: !!deliveryOptions.delivery,
-          pickup: !!deliveryOptions.pickup,
-          deliveryPrice: 0 // Delivery price is set by logistics company
-        } : (computedServiceType === "digital" ? {
-          delivery: false,
-          pickup: false,
-          deliveryPrice: 0
-        } : computedServiceType === "event" ? {
-          delivery: false,
-          pickup: true,
-          deliveryPrice: 0
-        } : {
-          delivery: !!deliveryOptions.delivery,
-          pickup: true,
-          deliveryPrice: 0
-        }),
-        // Structured Campus Pickup Fields
-        pickupState: addrState || null,
-        pickupLga: addrLga || null,
-        schoolAddress: schoolAddress.trim() || null,
-        schoolLocation: finalSchoolLocation || null,
-        pickupPolicyAccepted: !!pickupPolicyAccepted,
-        logisticsType,
-        logisticsCompanyId: logisticsType === "registered" ? selectedLogisticsCompanyId : null,
-        logisticsCompanyName: logisticsType === "registered" ? (allLogisticsCompanies.find(c => c.id === selectedLogisticsCompanyId)?.companyName || null) : null,
-        deliveryTime: parseInt(deliveryTime) || 1,
-        deliveryTimeUnit,
-        location: computedServiceType === "digital" ? "Online/Remote" : finalLocation,
-        imageUrl: (type === "good" || isFoodAndDrinks || type === "service") ? (finalImages[0] || `https://picsum.photos/seed/${name.replace(/\s/g, '')}/400/400`) : "",
-        imageUrls: (type === "good" || isFoodAndDrinks || type === "service") ? (finalImages.length > 0 ? finalImages : [`https://picsum.photos/seed/${name.replace(/\s/g, '')}/400/400`]) : [],
-        menuItems: (isFoodAndDrinks || type === "service") ? menuItems : [],
-        sellerId: auth.currentUser.uid,
-        sellerName: currentUser?.displayName || auth.currentUser.displayName || "Anonymous",
-        sellerVerified: currentUser?.isVerified || false,
-        createdAt: editingProduct?.createdAt || new Date().toISOString(),
-        isHibernated: false,
-        serialNumber: editingProduct?.serialNumber || `SN-${Math.random().toString(36).substr(2, 9).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`,
-        
-        // Discount, promo and custom inputs
-        discountPercent: parseFloat(discountPercent) || 0,
-        promoCode: promoCode.trim(),
-        priceBefore: parseFloat(priceBefore) || 0,
-        collectionType: collectionType.trim(),
-        businessAddress: manualBusinessAddress.trim(),
-        pickupSchool: resolvedPickupSchool || currentUser?.campus || finalSchoolLocation || null,
-        
-        // Dynamic Specific Fields
-        digitalFormat: computedServiceType === "digital" ? digitalFormat : null,
-        portfolioUrl: computedServiceType === "digital" ? portfolioUrl : null,
-        eventRadius: computedServiceType === "event" ? eventRadius : null,
-        setupTime: computedServiceType === "event" ? setupTime : null,
-        includesEquipment: computedServiceType === "event" ? includesEquipment : null,
-        institutionName: computedServiceType === "academic" ? institutionName : null,
-        gradeOrQualification: computedServiceType === "academic" ? gradeOrQualification : null,
-        securityDeposit: computedServiceType === "rental" ? securityDeposit : null,
-        rentalDuration: computedServiceType === "rental" ? rentalDuration : null,
-        rentalDurationUnit: computedServiceType === "rental" ? rentalDurationUnit : null,
-        latePenalty: computedServiceType === "rental" ? latePenalty : null,
-        rentalTerms: computedServiceType === "rental" ? rentalTerms : null,
-        
-        // Mapped Dynamic Fields configuration
-        techStack: category === "Tech & Digital" || category === "Web Development" ? techStack : null,
-        preferredTime: category === "Cleaning & Laundry" || category === "Home Cleaning" || category === "Home & Personal Care" ? preferredTime : null,
-        preferredVenue: category === "Home & Personal Care" ? preferredVenue : null,
-        laundryPreference: category === "Cleaning & Laundry" || category === "Home Cleaning" ? laundryPreference : null,
-        transitOption: category === "Logistics & Errands" ? transitOption : null,
-        coverageArea: category === "Logistics & Errands" ? coverageArea : null
-      };
-
-      if (type === "service") {
-        productData.pricingType = pricingType;
-      }
+      const productData = buildProductPayload(false, productId);
 
       await setDoc(productRef, productData, { merge: true });
-      if (!editingProduct) {
+      isPublishedRef.current = true;
+      activeDraftIdRef.current = null;
+
+      if (!isEditingPublished) {
         void triggerTemplatedEmail({
           templateId: "seller_product_published",
           recipientEmail: currentUser?.email || auth.currentUser?.email,
@@ -4947,18 +5349,18 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
       }
       setLastCreatedProduct(productData);
       setNewProductId(productId);
-      setSuccessMessage("🎉 Congratulations! I have listed my product successfully.");
+      setSuccessMessage("🎉 Congratulations! Your listing is now live on the marketplace.");
     } catch (error) {
-      console.error("Submission Error:", error);
-      const errorMessage = handleFirestoreError(error, editingProduct ? OperationType.UPDATE : OperationType.CREATE, editingProduct ? `products/${editingProduct.id}` : "products");
-      setError(errorMessage);
+      console.warn("Submission error:", error);
+      if (isFirestoreQuotaError(error)) {
+        notifyFirestoreQuotaExceeded(editingProduct ? `products/${editingProduct.id}` : "products");
+      }
+      setError(getFirestoreErrorMessage(error));
     } finally {
       setLoading(false);
       setLoadingMessage(null);
     }
   };
-
-
 
   return (
     <div className="max-w-3xl mx-auto bg-gradient-to-b from-white to-slate-50/50 dark:from-zinc-950 dark:to-zinc-900/50 rounded-3xl border border-slate-200 dark:border-zinc-800 p-6 sm:p-10 shadow-2xl transition-all relative overflow-hidden">
@@ -4966,45 +5368,50 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
       <div className="absolute top-0 right-0 w-48 h-48 bg-purple-500/5 dark:bg-purple-500/10 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute bottom-0 left-0 w-48 h-48 bg-indigo-500/5 dark:bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
 
-      <div className="relative z-10 flex items-center justify-between border-b border-slate-100 dark:border-zinc-800 pb-6 mb-8">
+      <div className="relative z-10 flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 dark:border-zinc-800 pb-6 mb-8">
         <div>
-          <h3 className="text-2xl sm:text-3xl font-black tracking-tight text-slate-900 dark:text-white flex items-center gap-2.5">
-            <span className="bg-gradient-to-r from-purple-600 to-indigo-600 bg-clip-text text-transparent">
-              {editingProduct ? "Refine Your Listing" : "List on Campus Storefront"}
-            </span>
-          </h3>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h3 className="text-2xl sm:text-3xl font-black tracking-tight text-slate-900 dark:text-white flex items-center gap-2.5">
+              <span className="bg-gradient-to-r from-purple-600 to-indigo-600 bg-clip-text text-transparent">
+                {isEditingExistingDraft ? "Finish Draft Listing" : editingProduct ? "Refine Your Listing" : "List on Campus Storefront"}
+              </span>
+            </h3>
+            {isEditingExistingDraft && (
+              <span className="px-2.5 py-1 bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300 rounded-full text-[10px] font-black uppercase tracking-widest">
+                Draft
+              </span>
+            )}
+          </div>
           <p className="text-slate-400 dark:text-zinc-500 text-xs mt-1.5 font-bold uppercase tracking-wider block">
-            ⭐ Reach thousands of students with escrow protection
+            ⭐ Reach thousands of students • Unfinished listings auto-save to Drafts
           </p>
         </div>
-        <div className="w-12 h-12 bg-purple-50 dark:bg-purple-950/30 rounded-2xl flex items-center justify-center text-purple-600 dark:text-purple-400 font-extrabold shrink-0 shadow-inner">
-          🚀
+        <div className="flex items-center gap-2 shrink-0">
+          {!isEditingPublished && (
+            <button
+              type="button"
+              onClick={handleSaveAsDraft}
+              disabled={savingDraft || loading}
+              className="px-4 py-2.5 bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/30 dark:hover:bg-amber-950/50 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60 rounded-xl text-xs font-black uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+            >
+              {savingDraft ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+              <span>Save Draft</span>
+            </button>
+          )}
+          <div className="w-12 h-12 bg-purple-50 dark:bg-purple-950/30 rounded-2xl flex items-center justify-center text-purple-600 dark:text-purple-400 font-extrabold shrink-0 shadow-inner">
+            🚀
+          </div>
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-8 relative z-10">
-        {(() => {
-          const productLock = isUserProductSuspended(currentUser);
-          if (productLock.isSuspended) {
-            return (
-              <div className="p-5 bg-gradient-to-r from-red-50 to-orange-50 dark:from-red-950/40 dark:to-orange-950/30 border-2 border-red-300 dark:border-red-800 rounded-3xl text-red-700 dark:text-red-300 space-y-2">
-                <div className="flex items-center gap-2.5">
-                  <ShieldAlert className="w-5 h-5 text-red-600 shrink-0" />
-                  <h4 className="text-sm font-black uppercase tracking-wider">Product Listing Suspended (24-Hour Moderation Lockout)</h4>
-                </div>
-                <p className="text-xs font-semibold text-red-600 dark:text-red-300">
-                  Your account received 3 strikes for attempting to share off-platform contact information (phone numbers, emails, or social media handles) in product details or inquiries.
-                </p>
-                <div className="flex items-center gap-2 pt-1 font-mono text-xs font-bold text-red-800 dark:text-red-200">
-                  <Clock className="w-4 h-4" />
-                  <span>Time remaining until unlock: {productLock.remainingText}</span>
-                </div>
-              </div>
-            );
-          }
-          return null;
-        })()}
-
+      <form
+        onSubmit={handleSubmit}
+        noValidate
+        onChangeCapture={() => {
+          hasInteractedRef.current = true;
+        }}
+        className="space-y-8 relative z-10"
+      >
         {error && (
           <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/30 rounded-2xl text-red-600 dark:text-red-400 text-xs font-bold">
             {error}
@@ -5159,6 +5566,11 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                       setDescription("");
                       setPrice("");
                       setStock("1");
+                      activeDraftIdRef.current = null;
+                      isPublishedRef.current = false;
+                      isDiscardedRef.current = false;
+                      hasInteractedRef.current = false;
+                      draftCreatedAtRef.current = new Date().toISOString();
                       setCategory(type === "service" ? "" : "Electronics");
                       setPricingType("fixed");
                       setCondition("new");
@@ -5470,13 +5882,133 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
             <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Description</label>
           </div>
           <textarea 
-            required
             rows={4}
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             className="w-full p-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-indigo-500 outline-none transition-all resize-none text-slate-900 dark:text-white placeholder:text-slate-400"
-            placeholder="Describe your product in detail..."
+            placeholder="Describe your product in detail (you can also mention contact details, socials, or order notes)..."
           />
+        </div>
+
+        {/* Public Seller Contact & Social Handles */}
+        <div className="p-5 sm:p-6 bg-indigo-50/40 dark:bg-indigo-950/20 border border-indigo-200/70 dark:border-indigo-900/50 rounded-3xl space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h4 className="text-xs font-black uppercase tracking-wider text-indigo-700 dark:text-indigo-300 flex items-center gap-2">
+                <Phone className="w-4 h-4" />
+                Public Seller Contact & Social Media (Visible to Everyone)
+              </h4>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                Optional. Any phone number, WhatsApp, email, or social handle you add here will show publicly on this listing.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                hasInteractedRef.current = true;
+                const storeContact = currentUser?.publicContact || currentUser?.storefrontSettings?.publicContact || {};
+                if (!publicPhone) setPublicPhone(storeContact.phone || currentUser?.businessPhoneNumber || currentUser?.phoneNumber || "");
+                if (!publicWhatsapp) setPublicWhatsapp(storeContact.whatsapp || "");
+                if (!publicEmail) setPublicEmail(storeContact.email || currentUser?.email || "");
+                if (!publicInstagram) setPublicInstagram(storeContact.instagram || "");
+                if (!publicTwitter) setPublicTwitter(storeContact.twitter || "");
+                if (!publicTiktok) setPublicTiktok(storeContact.tiktok || "");
+                if (!publicOther) setPublicOther(storeContact.other || "");
+              }}
+              className="px-3 py-1.5 bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-800 rounded-xl text-[10px] font-black uppercase tracking-wider text-indigo-600 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 transition-all cursor-pointer"
+            >
+              Use Account / Store Contact
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            <div className="space-y-1">
+              <label className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest ml-1 flex items-center gap-1">
+                <Phone className="w-3 h-3" /> Public Phone Number
+              </label>
+              <input
+                type="tel"
+                value={publicPhone}
+                onChange={(e) => setPublicPhone(e.target.value)}
+                placeholder="e.g. +234 801 234 5678"
+                className="w-full h-11 px-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest ml-1 flex items-center gap-1">
+                <MessageCircle className="w-3 h-3" /> Public WhatsApp
+              </label>
+              <input
+                type="text"
+                value={publicWhatsapp}
+                onChange={(e) => setPublicWhatsapp(e.target.value)}
+                placeholder="e.g. 2348012345678 or wa.me/..."
+                className="w-full h-11 px-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest ml-1 flex items-center gap-1">
+                <Mail className="w-3 h-3" /> Public Email
+              </label>
+              <input
+                type="email"
+                value={publicEmail}
+                onChange={(e) => setPublicEmail(e.target.value)}
+                placeholder="e.g. orders@myshop.com"
+                className="w-full h-11 px-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest ml-1 flex items-center gap-1">
+                <Instagram className="w-3 h-3" /> Instagram Handle / Link
+              </label>
+              <input
+                type="text"
+                value={publicInstagram}
+                onChange={(e) => setPublicInstagram(e.target.value)}
+                placeholder="e.g. @campusstore_ng"
+                className="w-full h-11 px-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest ml-1 flex items-center gap-1">
+                <AtSign className="w-3 h-3" /> X (Twitter) Handle
+              </label>
+              <input
+                type="text"
+                value={publicTwitter}
+                onChange={(e) => setPublicTwitter(e.target.value)}
+                placeholder="e.g. @campusstore"
+                className="w-full h-11 px-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest ml-1 flex items-center gap-1">
+                <Globe className="w-3 h-3" /> TikTok / Other Social or Website
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="text"
+                  value={publicTiktok}
+                  onChange={(e) => setPublicTiktok(e.target.value)}
+                  placeholder="TikTok @..."
+                  className="w-full h-11 px-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white outline-none focus:border-indigo-500"
+                />
+                <input
+                  type="text"
+                  value={publicOther}
+                  onChange={(e) => setPublicOther(e.target.value)}
+                  placeholder="Facebook / Link"
+                  className="w-full h-11 px-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white outline-none focus:border-indigo-500"
+                />
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -5814,7 +6346,7 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                             <option value="">Standard Campus Courier Fleet</option>
                             {filteredLogisticsCompanies.map(c => (
                               <option key={c.id} value={c.id}>
-                                {c.companyName} ({c.baseDeliveryPrice ? `₦${c.baseDeliveryPrice.toLocaleString()}` : "Standard rate"})
+                                {c.companyName} ({Number(c.baseDeliveryPrice) > 0 ? `₦${Number(c.baseDeliveryPrice).toLocaleString()}` : "Fee not set"})
                               </option>
                             ))}
                           </select>
@@ -6451,7 +6983,33 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
         </div>
 
         {/* Foot Navigation / Submit Button */}
-        <div className="flex gap-4 pt-4 border-t border-slate-100 dark:border-zinc-800">
+        <div className="flex flex-col sm:flex-row gap-3 pt-4 border-t border-slate-100 dark:border-zinc-800">
+          {!isEditingPublished && (
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleSaveAsDraft}
+                disabled={savingDraft || loading}
+                className="h-14 px-5 bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/30 dark:hover:bg-amber-950/50 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60 rounded-2xl font-black text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                {savingDraft ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                <span>Save as Draft</span>
+              </button>
+              {isEditingExistingDraft && (
+                <button
+                  type="button"
+                  onClick={handleDiscardDraft}
+                  disabled={savingDraft || loading}
+                  className="h-14 px-4 bg-red-50 hover:bg-red-100 dark:bg-red-950/30 dark:hover:bg-red-950/50 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/40 rounded-2xl font-black text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  title="Delete Draft"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span className="hidden sm:inline">Delete</span>
+                </button>
+              )}
+            </div>
+          )}
+
           {formStep !== "details" && (
             <button 
               type="button"
@@ -6491,10 +7049,10 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
               </div>
 
               <motion.button 
-                whileHover={{ scale: isUserProductSuspended(currentUser).isSuspended ? 1 : 1.02, boxShadow: "0px 10px 30px rgba(249, 115, 22, 0.35)" }}
-                whileTap={{ scale: isUserProductSuspended(currentUser).isSuspended ? 1 : 0.98 }}
+                whileHover={{ scale: 1.02, boxShadow: "0px 10px 30px rgba(249, 115, 22, 0.35)" }}
+                whileTap={{ scale: 0.98 }}
                 type="submit"
-                disabled={loading || isUserProductSuspended(currentUser).isSuspended}
+                disabled={loading || savingDraft}
                 className="w-full h-14 bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 text-white rounded-2xl font-black text-xs sm:text-sm uppercase tracking-widest transition-all flex items-center justify-center gap-2.5 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer border-none outline-none focus-visible:ring-2 focus-visible:ring-[#ff6b00]"
               >
               {loading ? (
@@ -6504,10 +7062,8 @@ function AddProductForm({ onSuccess, currentUser, editingProduct, initialType }:
                     {loadingMessage || "Publishing..."}
                   </span>
                 </div>
-              ) : isUserProductSuspended(currentUser).isSuspended ? (
-                `Locked for ${isUserProductSuspended(currentUser).remainingText}`
               ) : (
-                editingProduct ? "Update Listing" : "Publish Product"
+                isEditingExistingDraft ? "Finish & Publish" : editingProduct ? "Update Listing" : "Publish Product"
               )}
             </motion.button>
           </div>

@@ -1,18 +1,25 @@
 import React from "react";
 import { Product, Review, UserProfile } from "../types";
-import { X, ArrowLeft, Star, ShoppingCart, Truck, MapPin, Send, MessageSquare, Clock, User as UserIcon, ShieldCheck, ShieldAlert, Shield, CheckCircle, CheckCircle2, ShoppingBag, Sparkles, Layout, Minus, Plus, Hash, Trash2, RotateCcw, CalendarCheck, Store, ExternalLink, Loader2, Edit2, Tag, ChevronLeft, ChevronRight, Maximize2, Share2, Heart } from "lucide-react";
+import { X, ArrowLeft, Star, ShoppingCart, Truck, MapPin, Send, MessageSquare, Clock, User as UserIcon, ShieldCheck, ShieldAlert, Shield, CheckCircle, CheckCircle2, ShoppingBag, Sparkles, Layout, Minus, Plus, Hash, Trash2, RotateCcw, CalendarCheck, Store, ExternalLink, Loader2, Edit2, Tag, ChevronLeft, ChevronRight, Maximize2, Share2, Heart, Phone, Mail, Instagram, Globe, MessageCircle, AtSign, Copy, Check } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { auth, db } from "../firebase";
-import { collection, query, where, orderBy, onSnapshot, addDoc, doc, getDoc, setDoc, getDocs, updateDoc, deleteDoc } from "firebase/firestore";
+import { collection, query, where, orderBy, onSnapshot, addDoc, doc, getDoc, setDoc, getDocs, updateDoc, deleteDoc, limit } from "firebase/firestore";
 import { usePaystackPayment } from "../hooks/usePaystackPayment";
 import { getSyncPaystackPublicKey } from "../utils/paystackConfig";
 import { toggleWishlist, isProductInWishlist, WISHLIST_UPDATED_EVENT } from "../utils/wishlist";
 
 import { cn, generateSixDigitPin } from "../lib/utils";
+import {
+  mergeSellerPublicContact,
+  hasAnyPublicContact,
+  normalizeUrl,
+  normalizeWhatsAppUrl,
+  normalizeTikTokUrl
+} from "../lib/publicContact";
 import ReportModal from "./ReportModal";
 import ReviewSuccessModal from "./ReviewSuccessModal";
 import { AlertTriangle } from "lucide-react";
-import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
+import { handleFirestoreError, handleListenerError, OperationType } from "../lib/firebase-errors";
 import VendorVerificationBadge from "./VendorVerificationBadge";
 import { notifyOrderPlaced, triggerTemplatedEmail } from "../utils/orderEmailNotifications";
 import { checkCanDeleteProduct, cancelUnacceptedPendingOrdersBeforeDelete } from "../utils/deletionGuards";
@@ -682,7 +689,8 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
     const q = query(
       collection(db, "reviews"),
       where("productId", "==", product.id),
-      orderBy("createdAt", "desc")
+      orderBy("createdAt", "desc"),
+      limit(50)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -692,7 +700,7 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
       })) as Review[];
       setReviews(reviewsData);
     }, (error) => {
-      handleFirestoreError(error, OperationType.GET, "reviews");
+      handleListenerError(error, OperationType.GET, "reviews");
     });
 
     return () => unsubscribe();
@@ -810,15 +818,16 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
 
   const sellerStatus = getVerificationStatus(sellerProfile);
 
-  if (product.isDeleted && currentUser?.uid !== product.sellerId) {
+  if ((product.isDeleted || product.isDraft || product.status === "draft") && currentUser?.uid !== product.sellerId) {
+    const isDraftItem = product.isDraft || product.status === "draft";
     if (isPageMode) {
       return (
         <div className="w-full max-w-lg mx-auto px-4 py-12 text-center">
           <div className="w-24 h-24 bg-slate-100 dark:bg-zinc-850 rounded-[2rem] flex items-center justify-center mx-auto mb-6">
             <Trash2 className="w-12 h-12 text-slate-400" />
           </div>
-          <h3 className="text-2xl font-bold text-slate-900 dark:text-white mb-2 font-sans">Listing Removed</h3>
-          <p className="text-slate-500 dark:text-slate-400 mb-8 font-sans">This product or service has been deleted by the vendor and is no longer available.</p>
+          <h3 className="text-2xl font-bold text-slate-900 dark:text-white mb-2 font-sans">{isDraftItem ? "Listing Not Published" : "Listing Removed"}</h3>
+          <p className="text-slate-500 dark:text-slate-400 mb-8 font-sans">{isDraftItem ? "This product is still saved as a draft by the vendor and is not public yet." : "This product or service has been deleted by the vendor and is no longer available."}</p>
           <button
             onClick={onClose}
             className="px-8 py-3 bg-[#ff6b00] hover:bg-orange-600 text-white rounded-xl font-bold hover:shadow-lg transition-all active:scale-95 cursor-pointer"
@@ -848,8 +857,8 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
               <div className="w-20 h-20 bg-slate-100 dark:bg-slate-800 rounded-[2rem] flex items-center justify-center mx-auto mb-6">
                 <Trash2 className="w-10 h-10 text-slate-400" />
               </div>
-              <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Listing Removed</h3>
-              <p className="text-slate-500 dark:text-slate-400 mb-8">This product or service has been deleted by the vendor and is no longer available.</p>
+              <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">{isDraftItem ? "Listing Not Published" : "Listing Removed"}</h3>
+              <p className="text-slate-500 dark:text-slate-400 mb-8">{isDraftItem ? "This product is still saved as a draft by the vendor and is not public yet." : "This product or service has been deleted by the vendor and is no longer available."}</p>
               <button
                 onClick={onClose}
                 className="w-full py-4 bg-slate-900 dark:bg-indigo-600 text-white rounded-2xl font-bold hover:shadow-lg transition-all"
@@ -1266,6 +1275,96 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                     )}
                   </div>
                 </div>
+
+                {(() => {
+                  const publicContact = mergeSellerPublicContact(product.publicContact, sellerProfile);
+                  if (!hasAnyPublicContact(publicContact)) return null;
+                  return (
+                    <div className="p-5 bg-slate-50 dark:bg-slate-800/40 rounded-[2rem] border border-slate-200/80 dark:border-slate-700/80 space-y-3 mb-8">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <Globe className="w-4 h-4 text-[#ff6b00]" />
+                          <h4 className="text-[11px] font-black text-slate-800 dark:text-slate-200 uppercase tracking-widest">
+                            Seller Public Contact & Socials
+                          </h4>
+                        </div>
+                        <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-orange-100 dark:bg-orange-950/40 text-orange-700 dark:text-orange-300 uppercase tracking-wider">
+                          Public
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {publicContact.phone && (
+                          <a
+                            href={`tel:${publicContact.phone.replace(/\s+/g, "")}`}
+                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:border-emerald-400 transition-all shadow-xs"
+                          >
+                            <Phone className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>{publicContact.phone}</span>
+                          </a>
+                        )}
+                        {publicContact.whatsapp && (
+                          <a
+                            href={normalizeWhatsAppUrl(publicContact.whatsapp)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800/50 hover:bg-emerald-100 transition-all"
+                          >
+                            <MessageCircle className="w-3.5 h-3.5" />
+                            <span>WhatsApp: {publicContact.whatsapp}</span>
+                          </a>
+                        )}
+                        {publicContact.email && (
+                          <a
+                            href={`mailto:${publicContact.email}`}
+                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 border border-blue-200/80 dark:border-blue-800/50 hover:bg-blue-100 transition-all"
+                          >
+                            <Mail className="w-3.5 h-3.5" />
+                            <span>{publicContact.email}</span>
+                          </a>
+                        )}
+                        {publicContact.instagram && (
+                          <a
+                            href={normalizeUrl(publicContact.instagram, "https://instagram.com/")}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-pink-50 dark:bg-pink-950/30 text-pink-700 dark:text-pink-300 border border-pink-200/80 dark:border-pink-800/50 hover:bg-pink-100 transition-all"
+                          >
+                            <Instagram className="w-3.5 h-3.5" />
+                            <span>{publicContact.instagram}</span>
+                          </a>
+                        )}
+                        {publicContact.twitter && (
+                          <a
+                            href={normalizeUrl(publicContact.twitter, "https://x.com/")}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-900 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:bg-slate-200 transition-all"
+                          >
+                            <AtSign className="w-3.5 h-3.5" />
+                            <span>{publicContact.twitter}</span>
+                          </a>
+                        )}
+                        {publicContact.tiktok && (
+                          <a
+                            href={normalizeTikTokUrl(publicContact.tiktok)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-purple-50 dark:bg-purple-950/30 text-purple-700 dark:text-purple-300 border border-purple-200/80 dark:border-purple-800/50 hover:bg-purple-100 transition-all"
+                          >
+                            <Globe className="w-3.5 h-3.5" />
+                            <span>{publicContact.tiktok}</span>
+                          </a>
+                        )}
+                        {(publicContact.facebook || publicContact.website || publicContact.other) && (
+                          <span className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-orange-50 dark:bg-orange-950/30 text-orange-700 dark:text-orange-300 border border-orange-200/80 dark:border-orange-800/50">
+                            <Globe className="w-3.5 h-3.5" />
+                            <span>{publicContact.website || publicContact.facebook || publicContact.other}</span>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {product.category !== "Food & Drinks" && (() => {
                   const savedAmount = product.priceBefore && product.priceBefore > product.price

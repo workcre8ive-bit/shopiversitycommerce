@@ -175,7 +175,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
                   onClose();
                 }}
                 className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center border border-white/30 shadow-xl overflow-hidden hover:scale-105 active:scale-95 transition-all cursor-pointer border-none outline-none group touch-manipulation"
-                title="View Profile Settings"
+                title={(user?.state === "Logistics Partner" || user?.role === "logistics") ? "View Company Fleet Profile" : "View Profile Settings"}
               >
                 {user?.photoURL ? (
                   <img src={user.photoURL} alt="" className="w-full h-full object-cover" />
@@ -212,7 +212,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
                 onClose();
               }}
               className="relative z-10 text-left hover:opacity-90 transition-opacity cursor-pointer border-none outline-none group touch-manipulation block w-full bg-transparent p-0"
-              title="View Profile Settings"
+              title={(user?.state === "Logistics Partner" || user?.role === "logistics") ? "View Company Fleet Profile" : "View Profile Settings"}
             >
               <p className="text-white/80 text-[10px] font-extrabold uppercase tracking-widest flex items-center gap-1">
                 <span>{(user?.state === "Logistics Partner" || user?.role === "logistics") ? "Logistics Partner Account" : (activeRole === "buyer" ? "Customer Account" : "Vendor Account")}</span>

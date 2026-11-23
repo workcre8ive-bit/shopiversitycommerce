@@ -1,8 +1,9 @@
 import React from "react";
 import { Product } from "../types";
-import { ShoppingCart, Tag, User as UserIcon, Package, AlertTriangle, Truck, MapPin, Star, Layout, Zap, Globe, Store, MessageSquare, Trash2, ChevronLeft, ChevronRight, Heart } from "lucide-react";
+import { ShoppingCart, Tag, User as UserIcon, Package, AlertTriangle, Truck, MapPin, Star, Layout, Zap, Globe, Store, MessageSquare, Trash2, ChevronLeft, ChevronRight, Heart, Phone } from "lucide-react";
 import { motion } from "motion/react";
 import { cn } from "../lib/utils";
+import { mergeSellerPublicContact } from "../lib/publicContact";
 import ReportModal from "./ReportModal";
 import ProductDetail from "./ProductDetail";
 import { db } from "../firebase";
@@ -189,6 +190,18 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                   </span>
                 )}
               </div>
+
+              {(() => {
+                const pc = mergeSellerPublicContact(product.publicContact, sellerProfile);
+                const primaryLabel = pc.phone || pc.whatsapp || pc.instagram || pc.email || pc.twitter || pc.tiktok || pc.other;
+                if (!primaryLabel) return null;
+                return (
+                  <div className="mb-2.5 inline-flex items-center gap-1.5 text-[10px] font-bold text-slate-600 dark:text-zinc-300 bg-slate-50 dark:bg-zinc-800/80 border border-slate-200/70 dark:border-zinc-700/70 px-2 py-1 rounded-lg max-w-full truncate">
+                    <Phone className="w-3 h-3 text-emerald-600 shrink-0" />
+                    <span className="truncate">{primaryLabel}</span>
+                  </div>
+                );
+              })()}
 
               {/* Pricing and Action bottom block */}
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between mt-auto pt-3 border-t border-slate-100 dark:border-zinc-800">

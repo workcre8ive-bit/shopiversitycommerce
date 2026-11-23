@@ -17,7 +17,8 @@ import {
   Layers
 } from "lucide-react";
 import { db } from "../firebase";
-import { collection, query, where, onSnapshot } from "firebase/firestore";
+import { collection, query, where, onSnapshot, limit } from "firebase/firestore";
+import { isFirestoreQuotaError, notifyFirestoreQuotaExceeded } from "../lib/firebase-errors";
 
 interface OrderAuditTrailModalProps {
   order: Order | null;
@@ -42,7 +43,8 @@ export default function OrderAuditTrailModal({
     // Subscribe to real-time events for this order
     const q = query(
       collection(db, "order_events"),
-      where("orderId", "==", order.id)
+      where("orderId", "==", order.id),
+      limit(50)
     );
 
     const unsubscribe = onSnapshot(
@@ -171,7 +173,11 @@ export default function OrderAuditTrailModal({
         setLoading(false);
       },
       (err) => {
-        console.error("Audit log error:", err);
+        if (isFirestoreQuotaError(err)) {
+          notifyFirestoreQuotaExceeded("order_events");
+        } else {
+          console.warn("Audit log notice:", err);
+        }
         setLoading(false);
       }
     );

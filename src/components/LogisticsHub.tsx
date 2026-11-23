@@ -1,6 +1,6 @@
 import React from "react";
 import { auth, db, googleProvider } from "../firebase";
-import { handleFirestoreError, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
+import { handleFirestoreError, isFirestoreQuotaError, notifyFirestoreQuotaExceeded, OperationType, getFirestoreErrorMessage } from "../lib/firebase-errors";
 import { cn, getOrderDeliveryPin, getOrderSellerHandoverPin, cleanPinInput } from "../lib/utils";
 import Logo from "./Logo";
 import AuthErrorModal, { AuthErrorModalProps } from "./AuthErrorModal";
@@ -25,7 +25,8 @@ import {
   where, 
   getDocs, 
   onSnapshot,
-  addDoc
+  addDoc,
+  limit
 } from "firebase/firestore";
 import { 
   Truck, 
@@ -134,10 +135,12 @@ interface DeliveryJob {
 
 export default function LogisticsHub({ 
   onBackToMarket,
-  onNavigateToAuth
+  onNavigateToAuth,
+  initialDashboardTab
 }: { 
   onBackToMarket: () => void;
   onNavigateToAuth?: (mode?: "login" | "signup") => void;
+  initialDashboardTab?: "available-jobs" | "active-deliveries" | "history" | "profile";
 }) {
   const [view, setView] = React.useState<"splash" | "login" | "signup" | "verify" | "dashboard">("splash");
   const [loading, setLoading] = React.useState(false);
@@ -376,7 +379,7 @@ export default function LogisticsHub({
   const [officeAddress, setOfficeAddress] = React.useState("");
   const [selectedVehicles, setSelectedVehicles] = React.useState<string[]>([]);
   const [selectedCampuses, setSelectedCampuses] = React.useState<string[]>([]);
-  const [basePrice, setBasePrice] = React.useState(500);
+  const [basePrice, setBasePrice] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [confirmPassword, setConfirmPassword] = React.useState("");
 
@@ -453,7 +456,13 @@ export default function LogisticsHub({
   }, [resendCooldown]);
 
   // Dashboard Tab state
-  const [activeTab, setActiveTab] = React.useState<"available-jobs" | "active-deliveries" | "history" | "profile">("available-jobs");
+  const [activeTab, setActiveTab] = React.useState<"available-jobs" | "active-deliveries" | "history" | "profile">(initialDashboardTab || "available-jobs");
+
+  React.useEffect(() => {
+    if (initialDashboardTab) {
+      setActiveTab(initialDashboardTab);
+    }
+  }, [initialDashboardTab]);
 
   // Profile editing states
   const [isEditingProfile, setIsEditingProfile] = React.useState(false);
@@ -462,7 +471,7 @@ export default function LogisticsHub({
   const [editPhoneNumber, setEditPhoneNumber] = React.useState("");
   const [editWhatsappNumber, setEditWhatsappNumber] = React.useState("");
   const [editOfficeAddress, setEditOfficeAddress] = React.useState("");
-  const [editBaseDeliveryPrice, setEditBaseDeliveryPrice] = React.useState(500);
+  const [editBaseDeliveryPrice, setEditBaseDeliveryPrice] = React.useState("");
   const [editOperatingHours, setEditOperatingHours] = React.useState("8:00 AM - 8:00 PM");
   const [editDescription, setEditDescription] = React.useState("");
   const [editSelectedVehicles, setEditSelectedVehicles] = React.useState<string[]>([]);
@@ -582,10 +591,14 @@ export default function LogisticsHub({
       setEditPhoneNumber(companyProfile.phoneNumber || "");
       setEditWhatsappNumber(companyProfile.whatsappNumber || "");
       setEditOfficeAddress(companyProfile.officeAddress || "");
-      setEditBaseDeliveryPrice(companyProfile.baseDeliveryPrice || 500);
+      setEditBaseDeliveryPrice(
+        companyProfile.baseDeliveryPrice && Number(companyProfile.baseDeliveryPrice) > 0
+          ? String(companyProfile.baseDeliveryPrice)
+          : ""
+      );
       setEditOperatingHours(companyProfile.operatingHours || "8:00 AM - 8:00 PM");
       setEditDescription(companyProfile.description || "");
-      setEditSelectedVehicles(companyProfile.vehicleTypes && companyProfile.vehicleTypes.length > 0 ? companyProfile.vehicleTypes : ["Bike / Motorcycle"]);
+      setEditSelectedVehicles(Array.isArray(companyProfile.vehicleTypes) ? companyProfile.vehicleTypes : []);
       setEditSelectedCampuses(companyProfile.coveredCampuses || []);
       setEditBankName(companyProfile.bankName || "");
       setEditAccountNumber(companyProfile.accountNumber || "");
@@ -632,6 +645,10 @@ export default function LogisticsHub({
             } else {
               setCompanyProfile(data);
               setView("dashboard");
+              if (!isLogisticsCompanyProfileComplete(data)) {
+                setActiveTab("profile");
+                setIsEditingProfile(true);
+              }
             }
           }
         } catch (err: any) {
@@ -671,21 +688,26 @@ export default function LogisticsHub({
 
     let deliveriesMap = new Map<string, DeliveryJob>();
 
-    // 1. Subscribe to logistics_deliveries collection
-    const unsubscribeDeliveries = onSnapshot(collection(db, "logistics_deliveries"), (snapshot) => {
+    // 1. Subscribe to logistics_deliveries collection (bounded)
+    const unsubscribeDeliveries = onSnapshot(query(collection(db, "logistics_deliveries"), limit(100)), (snapshot) => {
       snapshot.forEach((d) => {
         const data = d.data();
         deliveriesMap.set(d.id, { id: d.id, ...data } as DeliveryJob);
       });
       setAllDeliveries(Array.from(deliveriesMap.values()));
     }, (error) => {
-      console.error("Logistics deliveries subscription failed:", error);
+      if (isFirestoreQuotaError(error)) {
+        notifyFirestoreQuotaExceeded("logistics_deliveries");
+        return;
+      }
+      console.warn("Logistics deliveries subscription notice:", error);
     });
 
-    // 2. Also subscribe to orders where deliveryType == 'delivery' to catch all dispatches
+    // 2. Also subscribe to orders where deliveryType == 'delivery' to catch all dispatches (bounded)
     const qOrders = query(
       collection(db, "orders"),
-      where("deliveryType", "==", "delivery")
+      where("deliveryType", "==", "delivery"),
+      limit(100)
     );
 
     const unsubscribeOrders = onSnapshot(qOrders, (snapshot) => {
@@ -726,7 +748,7 @@ export default function LogisticsHub({
             status: mappedStatus,
             logisticsId: ord.logisticsId,
             logisticsName: ord.logisticsName,
-            deliveryPrice: ord.deliveryFee || ord.logisticsDeliveryPrice || ord.deliveryPrice || companyProfile.baseDeliveryPrice || 500,
+            deliveryPrice: Number(ord.deliveryFee || ord.logisticsDeliveryPrice || ord.deliveryPrice || companyProfile.baseDeliveryPrice || 0),
             createdAt: ord.createdAt || new Date().toISOString(),
             updatedAt: ord.updatedAt || new Date().toISOString()
           };
@@ -1091,28 +1113,30 @@ export default function LogisticsHub({
       return;
     }
 
-    // 3. Create/Register new company profile using Google account details or filled form inputs
+    // 3. Create/Register new company profile using Google account details or filled form inputs (never assume delivery fees or CAC/RC numbers)
     const profile: LogisticsCompany = {
       id: user.uid,
-      companyName: companyName.trim() || user.displayName || "Logistics Partner",
-      rcNumber: rcNumber.trim() || `RC-${user.uid.slice(0, 8).toUpperCase()}`,
+      companyName: companyName.trim() || user.displayName || "",
+      rcNumber: rcNumber.trim(),
       email: cleanGoogleEmail || user.email || "",
       phoneNumber: phoneNumber.trim() || user.phoneNumber || "",
-      officeAddress: officeAddress.trim() || "Main Campus Office",
-      vehicleTypes: selectedVehicles.length > 0 ? selectedVehicles : ["Bike / Motorcycle"],
-      coveredCampuses: selectedCampuses.length > 0 ? selectedCampuses : ["University Main Campus"],
-      baseDeliveryPrice: Number(basePrice) > 0 ? Number(basePrice) : 500,
+      officeAddress: officeAddress.trim(),
+      vehicleTypes: selectedVehicles,
+      coveredCampuses: selectedCampuses,
+      baseDeliveryPrice: Number(basePrice) > 0 ? Number(basePrice) : 0,
       isVerified: false, // 6-digit email OTP verification required via Brevo
       isActive: true,
       createdAt: new Date().toISOString()
     };
 
+    const isProfileComplete = isLogisticsCompanyProfileComplete(profile);
+
     await Promise.all([
       setDoc(doc(db, "logistics_companies", user.uid), profile, { merge: true }),
       setDoc(doc(db, "users", user.uid), {
         uid: user.uid,
-        displayName: profile.companyName,
-        username: profile.companyName.toLowerCase().replace(/[^a-z0-9]/g, "") + "_logistics",
+        displayName: profile.companyName || user.displayName || "Logistics Account",
+        username: ((profile.companyName || cleanGoogleEmail.split("@")[0] || "logistics").toLowerCase().replace(/[^a-z0-9]/g, "") || "logistics") + "_logistics",
         email: cleanGoogleEmail || user.email,
         phoneNumber: profile.phoneNumber,
         role: "logistics",
@@ -1124,7 +1148,7 @@ export default function LogisticsHub({
         location: profile.officeAddress,
         deliveryAddress: profile.officeAddress,
         state: "Logistics Partner",
-        profileCompleted: true,
+        profileCompleted: isProfileComplete,
         authProvider: "google",
         isGoogleAccount: true,
         hasPassword: false
@@ -1355,13 +1379,15 @@ export default function LogisticsHub({
     setSuccessMsg("");
 
     if (!companyName.trim()) return setError("Company Name is required.");
-    if (!rcNumber.trim()) return setError("RC / Registration Number is required.");
     if (!email.trim()) return setError("Email address is required.");
     if (!phoneNumber.trim()) return setError("Phone number is required.");
     if (!officeAddress.trim()) return setError("Physical office address is required.");
     if (selectedVehicles.length === 0) return setError("Please select at least one vehicle type.");
     if (selectedCampuses.length === 0) return setError("Please select at least one campus you cover.");
-    if (basePrice <= 0) return setError("Please enter a valid base delivery fee.");
+    const parsedBasePrice = Number(basePrice);
+    if (!basePrice.trim() || isNaN(parsedBasePrice) || parsedBasePrice <= 0) {
+      return setError("Please enter your base delivery fee.");
+    }
     const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#^()_+\-=\[\]{};':"\\|,.<>\/?]).{6,}$/;
     if (!passwordRegex.test(password)) {
       return setError("Password must be at least 6 characters long and contain at least one uppercase letter, one lowercase letter, one number, and one special character.");
@@ -1601,21 +1627,24 @@ export default function LogisticsHub({
       } catch {}
 
       const baseComp = existingStoredProfile || companyProfile;
+      const parsedFormPrice = Number(basePrice);
       const profile: LogisticsCompany = {
         ...(existingStoredProfile || {}),
         id: user.uid,
-        companyName: companyName.trim() || baseComp?.companyName || user.displayName || "Logistics Partner",
-        rcNumber: rcNumber.trim() || baseComp?.rcNumber || `RC-${user.uid.slice(0, 8).toUpperCase()}`,
+        companyName: companyName.trim() || baseComp?.companyName || user.displayName || "",
+        rcNumber: rcNumber.trim() || baseComp?.rcNumber || "",
         email: cleanEmail,
         phoneNumber: phoneNumber.trim() || baseComp?.phoneNumber || "",
-        officeAddress: officeAddress.trim() || baseComp?.officeAddress || "Main Campus Office",
-        vehicleTypes: selectedVehicles.length > 0 ? selectedVehicles : (baseComp?.vehicleTypes || ["Bike / Motorcycle"]),
-        coveredCampuses: selectedCampuses.length > 0 ? selectedCampuses : (baseComp?.coveredCampuses || ["University Main Campus"]),
-        baseDeliveryPrice: Number(basePrice) > 0 ? Number(basePrice) : (baseComp?.baseDeliveryPrice || 500),
+        officeAddress: officeAddress.trim() || baseComp?.officeAddress || "",
+        vehicleTypes: selectedVehicles.length > 0 ? selectedVehicles : (baseComp?.vehicleTypes || []),
+        coveredCampuses: selectedCampuses.length > 0 ? selectedCampuses : (baseComp?.coveredCampuses || []),
+        baseDeliveryPrice: parsedFormPrice > 0 ? parsedFormPrice : (Number(baseComp?.baseDeliveryPrice) > 0 ? Number(baseComp?.baseDeliveryPrice) : 0),
         isVerified: true,
         isActive: true,
         createdAt: baseComp?.createdAt || new Date().toISOString()
       };
+
+      const isProfileComplete = isLogisticsCompanyProfileComplete(profile);
 
       // Set profile immediately so listeners know user is a logistics company
       setCompanyProfile(profile);
@@ -1625,8 +1654,8 @@ export default function LogisticsHub({
         setDoc(doc(db, "logistics_companies", user.uid), profile, { merge: true }),
         setDoc(doc(db, "users", user.uid), {
           uid: user.uid,
-          displayName: profile.companyName,
-          username: profile.companyName.toLowerCase().replace(/[^a-z0-9]/g, "") + "_logistics",
+          displayName: profile.companyName || user.displayName || "Logistics Account",
+          username: ((profile.companyName || cleanEmail.split("@")[0] || "logistics").toLowerCase().replace(/[^a-z0-9]/g, "") || "logistics") + "_logistics",
           email: cleanEmail,
           phoneNumber: profile.phoneNumber || "",
           role: "logistics",
@@ -1638,7 +1667,7 @@ export default function LogisticsHub({
           location: profile.officeAddress,
           deliveryAddress: profile.officeAddress,
           state: "Logistics Partner",
-          profileCompleted: true,
+          profileCompleted: isProfileComplete,
           authProvider: isGoogleUser ? "google" : "password",
           isGoogleAccount: isGoogleUser,
           hasPassword: !isGoogleUser
@@ -1648,19 +1677,27 @@ export default function LogisticsHub({
         sessionStorage.removeItem(`shopiversity_logistics_otp_sent_${cleanEmail}`);
       }
 
-      setSuccessMsg("Logistics company account created and verified successfully! Welcome to your Logistics Hub.");
+      setSuccessMsg(
+        isProfileComplete
+          ? "Logistics company account created and verified successfully! Welcome to your Logistics Hub."
+          : "Email verified! Please complete your Company Fleet Profile details (including your delivery fee) below."
+      );
       void triggerTemplatedEmail({
         templateId: "logistics_welcome",
         recipientEmail: cleanEmail,
         recipientUserId: user.uid,
         recipientRole: "logistics",
         variables: {
-          courier_name: profile.companyName,
-          campus_name: profile.coveredCampuses.join(", ") || "University Main Campus"
+          courier_name: profile.companyName || "Logistics Partner",
+          campus_name: profile.coveredCampuses.join(", ") || "University Campus"
         },
         idempotencyKey: `logistics_welcome_${user.uid}`
       });
       setView("dashboard");
+      if (!isProfileComplete) {
+        setActiveTab("profile");
+        setIsEditingProfile(true);
+      }
       
       // Clear forms
       setCompanyName("");
@@ -1670,6 +1707,7 @@ export default function LogisticsHub({
       setOfficeAddress("");
       setSelectedVehicles([]);
       setSelectedCampuses([]);
+      setBasePrice("");
       setPassword("");
       setConfirmPassword("");
     } catch (err: any) {
@@ -1698,9 +1736,9 @@ export default function LogisticsHub({
                   email: cleanEmail,
                   phoneNumber: phoneNumber.trim(),
                   officeAddress: officeAddress.trim(),
-                  vehicleTypes: selectedVehicles.length > 0 ? selectedVehicles : ["Bike / Motorcycle"],
-                  coveredCampuses: selectedCampuses.length > 0 ? selectedCampuses : ["University Main Campus"],
-                  baseDeliveryPrice: Number(basePrice) > 0 ? Number(basePrice) : 500,
+                  vehicleTypes: selectedVehicles,
+                  coveredCampuses: selectedCampuses,
+                  baseDeliveryPrice: Number(basePrice) > 0 ? Number(basePrice) : 0,
                   isVerified: true,
                   isActive: true,
                   createdAt: new Date().toISOString()
@@ -1708,7 +1746,7 @@ export default function LogisticsHub({
                 await setDoc(doc(db, "logistics_companies", retryCred.user.uid), profile);
                 setCompanyProfile(profile);
                 setView("dashboard");
-                setActiveTab("overview");
+                setActiveTab(isLogisticsCompanyProfileComplete(profile) ? "available-jobs" : "profile");
                 return;
               }
             }
@@ -1742,7 +1780,7 @@ export default function LogisticsHub({
     if (!companyProfile) return;
 
     if (!isLogisticsCompanyProfileComplete(companyProfile)) {
-      setError("Your company profile is incomplete. Please configure your CAC/RC registration, office address, vehicle fleet, covered campuses, base price, and settlement bank details before accepting delivery gigs.");
+      setError("Your company profile is incomplete. Please configure your business name, phone number, office address, vehicle fleet, covered campuses, base delivery fee, and settlement bank details before accepting delivery gigs.");
       setActiveTab("profile");
       setIsEditingProfile(true);
       return;
@@ -1752,7 +1790,7 @@ export default function LogisticsHub({
     setError("");
     try {
       const timeline = customEta?.trim() || "1-2 Hours (Confirmed upon Acceptance)";
-      const courierPrice = companyProfile.baseDeliveryPrice || 500;
+      const courierPrice = Number(companyProfile.baseDeliveryPrice) || 0;
 
       // Find job from list
       const jobItem = allDeliveries.find(j => j.id === jobId || j.orderId === jobId);
@@ -2261,6 +2299,12 @@ export default function LogisticsHub({
       return;
     }
 
+    const parsedEditPrice = Number(editBaseDeliveryPrice);
+    if (!editBaseDeliveryPrice.trim() || isNaN(parsedEditPrice) || parsedEditPrice <= 0) {
+      setError("Please enter your base delivery fee (greater than 0).");
+      return;
+    }
+
     setSavingProfile(true);
     setError("");
     setProfileSuccessMsg("");
@@ -2273,7 +2317,7 @@ export default function LogisticsHub({
         phoneNumber: editPhoneNumber.trim(),
         whatsappNumber: editWhatsappNumber.trim(),
         officeAddress: editOfficeAddress.trim(),
-        baseDeliveryPrice: Number(editBaseDeliveryPrice) || 500,
+        baseDeliveryPrice: parsedEditPrice,
         operatingHours: editOperatingHours.trim() || "8:00 AM - 8:00 PM",
         description: editDescription.trim(),
         vehicleTypes: editSelectedVehicles,
@@ -2702,15 +2746,14 @@ export default function LogisticsHub({
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider ml-1">Business RC / CAC Number</label>
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider ml-1">Business RC / CAC Number (Optional)</label>
                   <div className="relative">
                     <ShieldCheck className="absolute left-4 top-4 w-5 h-5 text-slate-400" />
                     <input
                       type="text"
-                      required
                       value={rcNumber}
                       onChange={(e) => setRcNumber(e.target.value)}
-                      placeholder="e.g. RC1234567"
+                      placeholder="Optional (e.g. RC1234567)"
                       className="w-full h-13 pl-12 pr-4 bg-slate-50 dark:bg-zinc-800/60 border border-slate-200 dark:border-zinc-850 rounded-2xl outline-none focus:border-orange-500 text-sm font-medium"
                     />
                   </div>
@@ -2774,9 +2817,10 @@ export default function LogisticsHub({
                     <input
                       type="number"
                       required
+                      min={1}
                       value={basePrice}
-                      onChange={(e) => setBasePrice(Number(e.target.value))}
-                      placeholder="e.g. 500"
+                      onChange={(e) => setBasePrice(e.target.value)}
+                      placeholder="Enter your base delivery fee (e.g. 500)"
                       className="w-full h-13 pl-12 pr-4 bg-slate-50 dark:bg-zinc-800/60 border border-slate-200 dark:border-zinc-850 rounded-2xl outline-none focus:border-orange-500 text-sm font-medium"
                     />
                   </div>
@@ -3269,8 +3313,8 @@ export default function LogisticsHub({
                         </div>
 
                         <div className="space-y-1">
-                          <span className="text-[10px] font-bold text-slate-400 uppercase">Business CAC / RC number</span>
-                          <p className="text-sm font-bold text-slate-700 dark:text-zinc-300">{companyProfile.rcNumber || "Not specified"}</p>
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">Business CAC / RC Number (Optional)</span>
+                          <p className="text-sm font-bold text-slate-700 dark:text-zinc-300">{companyProfile.rcNumber || "Not provided (Optional)"}</p>
                         </div>
 
                         <div className="space-y-1">
@@ -3292,12 +3336,16 @@ export default function LogisticsHub({
 
                         <div className="space-y-1">
                           <span className="text-[10px] font-bold text-slate-400 uppercase">Office Hub Address</span>
-                          <p className="text-sm font-bold text-slate-700 dark:text-zinc-300">{companyProfile.officeAddress}</p>
+                          <p className="text-sm font-bold text-slate-700 dark:text-zinc-300">{companyProfile.officeAddress || "Not set"}</p>
                         </div>
 
                         <div className="space-y-1">
                           <span className="text-[10px] font-bold text-slate-400 uppercase">Default Base Delivery Price</span>
-                          <p className="text-base font-black text-orange-600">₦{companyProfile.baseDeliveryPrice.toLocaleString()}</p>
+                          <p className="text-base font-black text-orange-600">
+                            {Number(companyProfile.baseDeliveryPrice) > 0
+                              ? `₦${Number(companyProfile.baseDeliveryPrice).toLocaleString()}`
+                              : "Not set — click Edit to enter your delivery fee"}
+                          </p>
                         </div>
 
                         <div className="space-y-1">
@@ -3371,12 +3419,12 @@ export default function LogisticsHub({
                         </div>
 
                         <div className="space-y-1">
-                          <label className="text-xs font-bold text-slate-700 dark:text-zinc-300">Business CAC / RC Number</label>
+                          <label className="text-xs font-bold text-slate-700 dark:text-zinc-300">Business CAC / RC Number (Optional)</label>
                           <input
                             type="text"
                             value={editRcNumber}
                             onChange={(e) => setEditRcNumber(e.target.value)}
-                            placeholder="RC-12345678"
+                            placeholder="Optional (e.g. RC-12345678)"
                             className="w-full h-11 px-3.5 bg-slate-50 dark:bg-zinc-800/80 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs outline-none focus:border-orange-500"
                           />
                         </div>
@@ -3417,14 +3465,14 @@ export default function LogisticsHub({
                         </div>
 
                         <div className="space-y-1">
-                          <label className="text-xs font-bold text-slate-700 dark:text-zinc-300">Base Delivery Fare (₦) *</label>
+                          <label className="text-xs font-bold text-slate-700 dark:text-zinc-300">Base Delivery Fee (₦) *</label>
                           <input
                             type="number"
                             required
-                            min={100}
-                            step={50}
+                            min={1}
+                            placeholder="Enter your base delivery fee (e.g. 500)"
                             value={editBaseDeliveryPrice}
-                            onChange={(e) => setEditBaseDeliveryPrice(Number(e.target.value))}
+                            onChange={(e) => setEditBaseDeliveryPrice(e.target.value)}
                             className="w-full h-11 px-3.5 bg-slate-50 dark:bg-zinc-800/80 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs outline-none focus:border-orange-500"
                           />
                         </div>

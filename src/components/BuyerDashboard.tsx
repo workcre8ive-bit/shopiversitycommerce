@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/utils";
-import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
+import { handleFirestoreError, isFirestoreQuotaError, notifyFirestoreQuotaExceeded, OperationType } from "../lib/firebase-errors";
 import DashboardSlideshow from "./DashboardSlideshow";
 import { removeFromWishlist } from "../utils/wishlist";
 
@@ -66,7 +66,8 @@ export default function BuyerDashboard({ user, setActiveTab, onBack, initialSect
 
     const wishlistQuery = query(
       collection(db, "wishlists"),
-      where("userId", "==", user.uid)
+      where("userId", "==", user.uid),
+      limit(60)
     );
 
     const unsubscribeWishlist = onSnapshot(wishlistQuery, (snapshot) => {
@@ -76,7 +77,11 @@ export default function BuyerDashboard({ user, setActiveTab, onBack, initialSect
       setWishlistItems(items);
       setWishlistLoading(false);
     }, (error) => {
-      console.warn("Dashboard wishlist fetch notice:", error);
+      if (isFirestoreQuotaError(error)) {
+        notifyFirestoreQuotaExceeded("wishlists");
+      } else {
+        console.warn("Dashboard wishlist fetch notice:", error);
+      }
       setWishlistLoading(false);
     });
 
@@ -90,7 +95,8 @@ export default function BuyerDashboard({ user, setActiveTab, onBack, initialSect
     const ordersQuery = query(
       collection(db, "orders"),
       where("buyerId", "==", user.uid),
-      orderBy("createdAt", "desc")
+      orderBy("createdAt", "desc"),
+      limit(60)
     );
 
     const unsubscribeOrders = onSnapshot(ordersQuery, (snapshot) => {
@@ -106,7 +112,11 @@ export default function BuyerDashboard({ user, setActiveTab, onBack, initialSect
         completedOrders: orders.filter(o => o.status === "completed").length
       });
     }, (error) => {
-      console.error("Dashboard orders fetch failed:", error);
+      if (isFirestoreQuotaError(error)) {
+        notifyFirestoreQuotaExceeded("orders");
+        return;
+      }
+      console.warn("Dashboard orders fetch notice:", error);
     });
 
     const historyQuery = query(
@@ -123,7 +133,11 @@ export default function BuyerDashboard({ user, setActiveTab, onBack, initialSect
       })).values());
       setRecentHistory(history);
     }, (error) => {
-      console.error("Dashboard history fetch failed:", error);
+      if (isFirestoreQuotaError(error)) {
+        notifyFirestoreQuotaExceeded("product_history");
+        return;
+      }
+      console.warn("Dashboard history fetch notice:", error);
     });
 
     const notificationsQuery = query(
@@ -140,7 +154,11 @@ export default function BuyerDashboard({ user, setActiveTab, onBack, initialSect
       })).values());
       setNotifications(data);
     }, (error) => {
-      console.error("Dashboard notification query failed:", error);
+      if (isFirestoreQuotaError(error)) {
+        notifyFirestoreQuotaExceeded("notifications");
+        return;
+      }
+      console.warn("Dashboard notification query notice:", error);
     });
 
     return () => {
@@ -260,6 +278,10 @@ export default function BuyerDashboard({ user, setActiveTab, onBack, initialSect
       });
       setOrderToDelete(null);
     } catch (error) {
+      if (isFirestoreQuotaError(error)) {
+        notifyFirestoreQuotaExceeded(`orders/${orderToDelete}`);
+        return;
+      }
       handleFirestoreError(error, OperationType.UPDATE, `orders/${orderToDelete}`);
     } finally {
       setDeleting(false);
