@@ -68,9 +68,9 @@ Product ID:  ${order.uniqueProductId || order.productId || "N/A"}
              [Term 9.3: Mandated Unique Code Verified]
 Date/Time:   ${new Date(order.createdAt).toLocaleString()}
              [Term 2.1: 72hr Protection Window Active]
-Fulfillment: ${(order.deliveryType || "pickup").toUpperCase()}
-             [Term 5.1: Subject to Campus Logistic SLA & Estimates]
-Payment:     ${(order.paymentStatus || "paid").toUpperCase()}
+Fulfillment: ${order.isOneDollar ? `${(order.deliveryType || "pickup").toUpperCase()} (VENDOR-MANAGED)` : (order.deliveryType || "pickup").toUpperCase()}
+             [${order.isOneDollar ? "One Dollar: Delivery arranged by vendor" : "Term 5.1: Subject to Campus Logistic SLA & Estimates"}]
+Payment:     ${(order.paymentStatus || "paid").toUpperCase()}${order.isOneDollar ? (order.escrowSelected === false ? " (DIRECT PAYMENT - NO ESCROW)" : " (ESCROW PROTECTED)") : ""}
              [Term 7.1: Transacted Securely via In-App Gateways]
 ${subDivider}
 BUYER:       ${order.buyerName}
@@ -79,15 +79,15 @@ SELLER:      ${order.sellerName || "Shopiversity Merchant"}
              [Term 8.2: Verified Campus Merchant Profile]
 ${subDivider}
 ITEM DESCRIPTION:
-Product:     ${order.productName}
-Quantity:    ${order.quantity} x
+Product:     ${order.productName}${order.isOneDollar ? ` [ONE DOLLAR ($${(order.usdPrice ?? 1).toFixed(2)} USD)]` : ""}
+${order.isOneDollar && order.exchangeRateUsdToNgn ? `Rate Locked: $1 USD = ₦${order.exchangeRateUsdToNgn.toLocaleString()} (${order.exchangeRateSource || "FX Rate"})\n` : ""}Quantity:    ${order.quantity} x
 Price:       ₦${order.totalPrice.toLocaleString()}
 
 ${subDivider}
 SUBTOTAL:    ₦${order.totalPrice.toLocaleString()}
 PLATFORM FEE: ₦0.00
 TOTAL PAID:  ₦${order.totalPrice.toLocaleString()}
-             [Term 1.2: Funds disbursed after fulfillment validation]
+             [${order.isOneDollar && order.escrowSelected === false ? "Direct Payment — No Escrow Hold" : "Term 1.2: Funds disbursed after fulfillment validation"}]
 
 ${divider}
    SECURITY DISCLOSURE: KEEP THIS OFFICIAL DIGITAL
@@ -218,10 +218,12 @@ ${divider}
                   <div className="space-y-0.5">
                     <div className="flex justify-between">
                       <span className="text-stone-500">FULFILLMENT:</span>
-                      <span className="font-bold uppercase text-stone-900">{order.deliveryType || "pickup"}</span>
+                      <span className="font-bold uppercase text-stone-900">
+                        {order.isOneDollar ? `${order.deliveryType || "pickup"} (Vendor-Managed)` : (order.deliveryType || "pickup")}
+                      </span>
                     </div>
                     <span className="text-[8px] text-indigo-600 block text-right font-sans font-bold uppercase tracking-wider">
-                      [Term 5.1/9.7] Subject to Campus Logistics SLA
+                      {order.isOneDollar ? "One Dollar: Delivery arranged directly by vendor" : "[Term 5.1/9.7] Subject to Campus Logistics SLA"}
                     </span>
                   </div>
 
@@ -267,9 +269,21 @@ ${divider}
                   </div>
                   <div className="space-y-1">
                     <div className="flex justify-between text-stone-950">
-                      <span className="font-sans font-black text-stone-900 text-xs">{order.productName}</span>
+                      <span className="font-sans font-black text-stone-900 text-xs">
+                        {order.productName}
+                        {order.isOneDollar && (
+                          <span className="ml-1.5 px-1.5 py-0.5 bg-[#ff6b00] text-white text-[8px] rounded uppercase">
+                            ${(order.usdPrice ?? 1).toFixed(2)} USD
+                          </span>
+                        )}
+                      </span>
                       <span className="font-bold text-stone-900">₦{order.totalPrice.toLocaleString()}</span>
                     </div>
+                    {order.isOneDollar && order.exchangeRateUsdToNgn && (
+                      <div className="text-[#ff6b00] font-sans text-[9px] font-bold">
+                        Locked FX Rate: $1 = ₦{order.exchangeRateUsdToNgn.toLocaleString()} ({order.exchangeRateSource || "FX Rate"})
+                      </div>
+                    )}
                     <div className="text-stone-500 font-mono text-[9px] flex justify-between">
                       <span>Quantity Ordered: {order.quantity}x</span>
                       <span>₦{order.totalPrice.toLocaleString()}</span>
@@ -300,11 +314,13 @@ ${divider}
                   <div className="text-[10px] text-stone-300 text-center">------------------------------------------------</div>
                   <div className="space-y-1">
                     <div className="flex justify-between font-black text-stone-950 text-sm">
-                      <span>TOTAL PAID Escrow</span>
+                      <span>{order.isOneDollar && order.escrowSelected === false ? "TOTAL PAID (Direct)" : "TOTAL PAID Escrow"}</span>
                       <span>₦{order.totalPrice.toLocaleString()}</span>
                     </div>
                     <span className="text-[8px] text-indigo-600 block text-right font-sans font-bold uppercase tracking-wider">
-                      [Term 1.2] Escrow released to seller after buyer confirms safety
+                      {order.isOneDollar && order.escrowSelected === false
+                        ? "Direct Payment Mode — No Escrow Hold Selected"
+                        : "[Term 1.2] Escrow released to seller after buyer confirms safety"}
                     </span>
                   </div>
                 </div>

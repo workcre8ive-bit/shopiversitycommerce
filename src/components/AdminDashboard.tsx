@@ -53,6 +53,7 @@ import AdminUserDetailModal from "./AdminUserDetailModal";
 import AdminAnalyticsCharts from "./AdminAnalyticsCharts";
 import AdminSecurityRenewalModal from "./AdminSecurityRenewalModal";
 import AdminEmailBrevoSettings from "./AdminEmailBrevoSettings";
+import AdminOneDollarTab from "./AdminOneDollarTab";
 import { triggerTemplatedEmail } from "../utils/orderEmailNotifications";
 import { cascadeDeleteUserAccount } from "../utils/accountCleanup";
 
@@ -62,7 +63,7 @@ interface AdminDashboardProps {
 }
 
 export default function AdminDashboard({ currentUser, onBack }: AdminDashboardProps) {
-  const [activeTab, setActiveTab] = useState<"analytics" | "users" | "products" | "payouts" | "reports" | "moderation" | "email">("analytics");
+  const [activeTab, setActiveTab] = useState<"analytics" | "users" | "products" | "one-dollar" | "payouts" | "reports" | "moderation" | "email">("analytics");
   
   // Real Firestore Collections State
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -586,6 +587,19 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
         >
           <Package className="w-4 h-4" />
           Products ({allProducts.length})
+        </button>
+
+        <button
+          onClick={() => setActiveTab("one-dollar")}
+          className={cn(
+            "px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer",
+            activeTab === "one-dollar"
+              ? "bg-[#ff6b00] text-white shadow-md shadow-orange-500/20"
+              : "bg-orange-50 dark:bg-orange-950/40 text-[#ff6b00] hover:bg-orange-100 dark:hover:bg-orange-950/60 border border-orange-200/60 dark:border-orange-800/40"
+          )}
+        >
+          <DollarSign className="w-4 h-4" />
+          One Dollar ($1)
         </button>
 
         <button
@@ -1415,6 +1429,19 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
       {/* TAB 7: BREVO EMAIL ENGINE & TRANSACTIONAL SETTINGS */}
       {activeTab === "email" && (
         <AdminEmailBrevoSettings />
+      )}
+
+      {/* TAB 8: ONE DOLLAR ADMINISTRATION */}
+      {activeTab === "one-dollar" && (
+        <AdminOneDollarTab
+          currentUser={currentUser}
+          users={users}
+          orders={orders}
+          onActionSuccess={(msg) => {
+            setActionSuccessMessage(msg);
+            setTimeout(() => setActionSuccessMessage(null), 3500);
+          }}
+        />
       )}
 
       {/* MODAL 1: BAN / SUSPEND ACCOUNT */}

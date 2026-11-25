@@ -137,6 +137,11 @@ service cloud.firestore {
              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isVerified', false) == true;
     }
 
+    function isNotOneDollarSuspended() {
+      return !exists(/databases/$(database)/documents/users/$(request.auth.uid)) ||
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('oneDollarSuspended', false) != true;
+    }
+
     // ===============================================================
     // Domain Validators
     // ===============================================================
@@ -189,6 +194,9 @@ service cloud.firestore {
              (!('userCode' in data) || data.userCode == null || data.userCode is string) &&
              (!('uniqueCode' in data) || data.uniqueCode == null || data.uniqueCode is string) &&
              (!('wishlistProductIds' in data) || data.wishlistProductIds == null || data.wishlistProductIds is list) &&
+             (!('oneDollarSuspended' in data) || data.oneDollarSuspended == null || data.oneDollarSuspended is bool) &&
+             (!('oneDollarSuspensionReason' in data) || data.oneDollarSuspensionReason == null || data.oneDollarSuspensionReason is string) &&
+             (!('oneDollarSuspendedAt' in data) || data.oneDollarSuspendedAt == null || data.oneDollarSuspendedAt is string) &&
              (!('updatedAt' in data) || data.updatedAt == null || data.updatedAt is string);
     }
 
@@ -265,7 +273,10 @@ service cloud.firestore {
         'deliveryOtp', 'pickupOtp', 'deliveryPin', 'sellerHandoverPin', 'sellerHandoverOtp', 
         'sellerHandoverVerified', 'sellerHandoverVerifiedAt', 'handoverVerified', 'handoverVerifiedAt', 'paymentReceipt',
         'completedAt', 'payoutStatus', 'deliveryAttemptStatus', 'courierHandedOver', 'courierHandedOverAt',
-        'productHandedOver', 'productHandedOverAt'
+        'productHandedOver', 'productHandedOverAt',
+        // One Dollar fields
+        'isOneDollar', 'oneDollarListingId', 'usdPrice', 'exchangeRateUsdToNgn',
+        'exchangeRateSource', 'exchangeRateUpdatedAt', 'escrowSelected', 'deliveryHandledBy'
       ]) &&
              data.buyerId is string &&
              (!('buyerName' in data) || data.buyerName is string) &&
@@ -280,12 +291,20 @@ service cloud.firestore {
              (!('sellerEarnings' in data) || data.sellerEarnings is number) &&
              (!('paymentStatus' in data) || data.paymentStatus in ['pending', 'paid', 'failed']) &&
              (!('paymentReference' in data) || data.paymentReference is string) &&
-             (!('escrowStatus' in data) || data.escrowStatus in ['held', 'released', 'refunded']) &&
+             (!('escrowStatus' in data) || data.escrowStatus in ['held', 'released', 'refunded', 'not_applicable']) &&
              (!('disputeStatus' in data) || data.disputeStatus in ['none', 'active', 'focused', 'resolved', 'rejected', 'seller_responded']) &&
              data.deliveryType in ['delivery', 'pickup'] &&
              data.paymentMethod in ['online', 'pod', 'physical'] &&
              data.status is string &&
              isValidDateString(data.createdAt) &&
+             (!('isOneDollar' in data) || data.isOneDollar is bool) &&
+             (!('oneDollarListingId' in data) || data.oneDollarListingId is string) &&
+             (!('usdPrice' in data) || (data.usdPrice is number && data.usdPrice > 0 && data.usdPrice <= 1)) &&
+             (!('exchangeRateUsdToNgn' in data) || (data.exchangeRateUsdToNgn is number && data.exchangeRateUsdToNgn > 0)) &&
+             (!('exchangeRateSource' in data) || data.exchangeRateSource is string) &&
+             (!('exchangeRateUpdatedAt' in data) || data.exchangeRateUpdatedAt is string) &&
+             (!('escrowSelected' in data) || data.escrowSelected is bool) &&
+             (!('deliveryHandledBy' in data) || data.deliveryHandledBy in ['vendor', 'logistics']) &&
              (!('acceptedAt' in data) || data.acceptedAt == null || isValidDateString(data.acceptedAt)) &&
              (!('deliveredAt' in data) || data.deliveredAt == null || isValidDateString(data.deliveredAt)) &&
              (!('cancelledAt' in data) || data.cancelledAt == null || isValidDateString(data.cancelledAt)) &&
@@ -415,6 +434,34 @@ service cloud.firestore {
              (!('mode' in data) || data.mode in ['support', 'feedback']) &&
              (!('medium' in data) || data.medium in ['email', 'whatsapp']) &&
              isValidDateString(data.createdAt);
+    }
+
+    function isValidOneDollarListing(data) {
+      return data.productId is string && data.productId.size() > 0 && data.productId.size() <= 128 &&
+             data.sellerId is string && data.sellerId.size() > 0 && data.sellerId.size() <= 128 &&
+             data.sellerName is string && data.sellerName.size() > 0 && data.sellerName.size() <= 150 &&
+             data.productName is string && data.productName.size() > 0 && data.productName.size() <= 200 &&
+             data.description is string && data.description.size() <= 5000 &&
+             data.category is string && data.category.size() > 0 && data.category.size() <= 100 &&
+             data.condition in ['new', 'refurbished', 'used'] &&
+             data.usdPrice is number && data.usdPrice > 0 && data.usdPrice <= 1 &&
+             data.stock is number && data.stock >= 0 &&
+             data.status in ['pending_approval', 'approved', 'rejected', 'deactivated'] &&
+             data.isActive is bool &&
+             isValidDateString(data.createdAt) &&
+             isValidDateString(data.updatedAt) &&
+             (!('storeName' in data) || data.storeName == null || (data.storeName is string && data.storeName.size() <= 200)) &&
+             (!('sellerVerified' in data) || data.sellerVerified == null || data.sellerVerified is bool) &&
+             (!('imageUrl' in data) || data.imageUrl == null || data.imageUrl is string) &&
+             (!('imageUrls' in data) || data.imageUrls == null || data.imageUrls is list) &&
+             (!('campus' in data) || data.campus == null || (data.campus is string && data.campus.size() <= 200)) &&
+             (!('location' in data) || data.location == null || (data.location is string && data.location.size() <= 300)) &&
+             (!('deliveryNotice' in data) || data.deliveryNotice == null || (data.deliveryNotice is string && data.deliveryNotice.size() <= 500)) &&
+             (!('rejectionReason' in data) || data.rejectionReason == null || (data.rejectionReason is string && data.rejectionReason.size() <= 500)) &&
+             (!('approvedAt' in data) || data.approvedAt == null || isValidDateString(data.approvedAt)) &&
+             (!('approvedBy' in data) || data.approvedBy == null || (data.approvedBy is string && data.approvedBy.size() <= 128)) &&
+             (!('rejectedAt' in data) || data.rejectedAt == null || isValidDateString(data.rejectedAt)) &&
+             (!('publicContact' in data) || data.publicContact == null || data.publicContact is map);
     }
 
     // ===============================================================
@@ -620,6 +667,55 @@ service cloud.firestore {
       allow get, list: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdminEmail());
       allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
       allow update, delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    match /oneDollarListings/{listingId} {
+      allow get: if isAdmin() ||
+                    (isAuthenticated() && resource.data.sellerId == request.auth.uid) ||
+                    (resource.data.status == 'approved' && resource.data.isActive == true);
+      allow list: if isAdminEmail() ||
+                     (isAuthenticated() && resource.data.sellerId == request.auth.uid) ||
+                     (resource.data.status == 'approved' && resource.data.isActive == true);
+      allow create: if (isSeller() || isAdmin()) &&
+                      !isSuspended() &&
+                      isNotOneDollarSuspended() &&
+                      isValidOneDollarListing(request.resource.data) &&
+                      request.resource.data.sellerId == request.auth.uid &&
+                      request.resource.data.status == 'pending_approval' &&
+                      request.resource.data.isActive == false &&
+                      exists(/databases/$(database)/documents/products/$(request.resource.data.productId)) &&
+                      get(/databases/$(database)/documents/products/$(request.resource.data.productId)).data.sellerId == request.auth.uid;
+      allow update: if isAuthenticated() &&
+                      !isSuspended() &&
+                      isValidOneDollarListing(request.resource.data) && (
+                        isAdmin() ||
+                        (
+                          resource.data.sellerId == request.auth.uid &&
+                          isNotOneDollarSuspended() &&
+                          areImmutableFieldsUnchanged(['sellerId', 'productId', 'createdAt', 'approvedAt', 'approvedBy']) &&
+                          (
+                            (
+                              request.resource.data.usdPrice == resource.data.usdPrice &&
+                              (
+                                (request.resource.data.status == resource.data.status && (request.resource.data.status == 'approved' || request.resource.data.isActive == false)) ||
+                                (request.resource.data.status == 'deactivated' && request.resource.data.isActive == false) ||
+                                (resource.data.status in ['deactivated', 'rejected'] && request.resource.data.status == 'pending_approval' && request.resource.data.isActive == false)
+                              )
+                            ) ||
+                            (
+                              request.resource.data.status == 'pending_approval' &&
+                              request.resource.data.isActive == false
+                            )
+                          )
+                        ) ||
+                        (
+                          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'updatedAt']) &&
+                          request.resource.data.stock is number &&
+                          request.resource.data.stock >= 0 &&
+                          request.resource.data.stock <= resource.data.stock
+                        )
+                      );
+      allow delete: if isAdmin() || (isAuthenticated() && resource.data.sellerId == request.auth.uid);
     }
 
     match /test/{testId} {

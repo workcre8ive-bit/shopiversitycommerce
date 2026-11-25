@@ -301,9 +301,10 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
   const handleMarkAsDelivered = async (order: Order, bypassCountdown = false) => {
     if (!auth.currentUser) return;
     
-    // Strict restriction: buyers can only confirm order when delivered
+    // Strict restriction: buyers can only confirm order when delivered (or dispatched by vendor for One Dollar)
     const effectiveStatus = getEffectiveStatus(order);
-    if (order.deliveryType === "delivery" && effectiveStatus !== "delivered") {
+    const canConfirmOneDollar = order.isOneDollar && (effectiveStatus === "out_for_delivery" || effectiveStatus === "delivered" || effectiveStatus === "ready_for_pickup");
+    if (order.deliveryType === "delivery" && effectiveStatus !== "delivered" && !canConfirmOneDollar) {
       alert("Order can only be confirmed once it has reached the Delivered stage.");
       return;
     }
@@ -391,9 +392,10 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
     if (e) e.preventDefault();
     if (!verifyingOrder) return;
 
-    // Strict restriction: buyers can only confirm order when delivered or ready for pickup
+    // Strict restriction: buyers can only confirm order when delivered, ready for pickup, or vendor-dispatched (One Dollar)
     const effectiveStatus = getEffectiveStatus(verifyingOrder);
-    if (verifyingOrder.deliveryType === "delivery" && effectiveStatus !== "delivered") {
+    const canConfirmOneDollar = verifyingOrder.isOneDollar && (effectiveStatus === "out_for_delivery" || effectiveStatus === "delivered" || effectiveStatus === "ready_for_pickup");
+    if (verifyingOrder.deliveryType === "delivery" && effectiveStatus !== "delivered" && !canConfirmOneDollar) {
       setVerificationError("Order can only be confirmed once it has been delivered by the courier.");
       return;
     }
@@ -426,14 +428,14 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
         setProductIdInput("");
         triggerPaystackPayment(orderToTrigger);
       } else {
-        // Next stage: Order Completed (Escrow Funds Released to Vendor)
+        // Next stage: Order Completed (Escrow Funds Released to Vendor if Escrow selected)
         const updatePayload: any = {
           status: "completed",
           buyerDeliveryConfirmed: true,
           buyerDeliveryConfirmedAt: now,
           deliveredAt: now,
           completedAt: now,
-          escrowStatus: "released",
+          escrowStatus: verifyingOrder.escrowSelected === false ? "not_applicable" : "released",
           paymentStatus: "paid",
           deliveryAttemptStatus: "success",
           updatedAt: now
@@ -584,7 +586,8 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
         status: "completed",
         deliveredAt: new Date().toISOString(),
         completedAt: new Date().toISOString(),
-        payoutStatus: "escrow",
+        payoutStatus: order.escrowSelected === false ? "released" : "escrow",
+        escrowStatus: order.escrowSelected === false ? "not_applicable" : "released",
         paymentStatus: "paid",
         serialNumber: serialNumber || "N/A"
       };
@@ -940,10 +943,12 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
         };
       case "out_for_delivery":
         return {
-          title: isPickup ? "Ready at Station" : "Out For Delivery",
+          title: isPickup ? "Ready at Station" : (order.isOneDollar ? "Dispatched by Vendor" : "Out For Delivery"),
           subtitle: isPickup 
             ? "Package ready at designated pickup point."
-            : "Rider has arrived at your doorstep! Share your 6-digit Delivery PIN with the courier."
+            : order.isOneDollar
+              ? "Vendor marked this One Dollar order as dispatched. Confirm delivery once received."
+              : "Rider has arrived at your doorstep! Share your 6-digit Delivery PIN with the courier."
         };
       case "delivered":
         return {
@@ -1283,15 +1288,41 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
                       />
                     </div>
                     <div>
-                      <h5 className="font-bold text-slate-900 dark:text-white mb-1 text-lg">{order.productName}</h5>
+                      <div className="flex flex-wrap items-center gap-2 mb-1">
+                        <h5 className="font-bold text-slate-900 dark:text-white text-lg">{order.productName}</h5>
+                        {order.isOneDollar && (
+                          <span className="px-2 py-0.5 rounded bg-[#ff6b00] text-white text-[10px] font-black uppercase tracking-wider tabular-nums">
+                            One Dollar (${(order.usdPrice ?? 1).toFixed(2)})
+                          </span>
+                        )}
+                        {order.isOneDollar && (
+                          <span className={cn(
+                            "px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border",
+                            order.escrowSelected === false
+                              ? "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700"
+                              : "bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800"
+                          )}>
+                            {order.escrowSelected === false ? "Direct Pay (No Escrow)" : "Escrow Protected"}
+                          </span>
+                        )}
+                      </div>
                       <div className="flex flex-wrap items-center gap-3 mb-2">
                         <p className="text-sm text-slate-500 dark:text-slate-400">
                           Quantity: <span className="font-bold text-slate-900 dark:text-white">{order.quantity}</span>
                         </p>
-                        <div className="flex items-center gap-2">
-                          <p className="text-lg font-black text-indigo-600">₦{order.totalPrice.toLocaleString()}</p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-lg font-black text-indigo-600 tabular-nums">₦{order.totalPrice.toLocaleString()}</p>
+                          {order.isOneDollar && order.exchangeRateUsdToNgn && (
+                            <span className="text-[10px] font-bold text-[#ff6b00] bg-orange-50 dark:bg-orange-950/30 px-2 py-0.5 rounded-md border border-orange-200/70 dark:border-orange-900/40 tabular-nums">
+                              ${(order.usdPrice ?? 1).toFixed(2)} USD @ ₦{order.exchangeRateUsdToNgn.toLocaleString()}/$1
+                            </span>
+                          )}
                           {order.deliveryType === "delivery" && (
-                            order.deliveryFee && order.deliveryFee > 0 ? (
+                            order.isOneDollar ? (
+                              <span className="text-[10px] font-bold text-amber-800 dark:text-amber-300 bg-amber-100 dark:bg-amber-950/40 px-2 py-0.5 rounded-full">
+                                Vendor-Managed Delivery
+                              </span>
+                            ) : order.deliveryFee && order.deliveryFee > 0 ? (
                               <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full">
                                 Includes ₦{order.deliveryFee.toLocaleString()} Delivery
                               </span>
@@ -1391,10 +1422,16 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
                     </div>
                     <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl">
                       <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-1 text-center sm:text-left">
-                        {order.deliveryType === "pickup" ? "Expected Pickup" : "Courier Delivery Timeline"}
+                        {order.isOneDollar
+                          ? "Vendor Delivery"
+                          : (order.deliveryType === "pickup" ? "Expected Pickup" : "Courier Delivery Timeline")}
                       </p>
                       <div className="text-sm font-bold text-slate-700 dark:text-slate-300 text-center sm:text-left">
-                        {order.deliveryType === "pickup" ? (
+                        {order.isOneDollar ? (
+                          <span className="text-[#ff6b00] font-bold text-xs">
+                            Handled directly by vendor (No Shopiversity courier assigned)
+                          </span>
+                        ) : order.deliveryType === "pickup" ? (
                           order.deliveryTime ? `${order.deliveryTime} ${Number(order.deliveryTime) === 1 ? (order.deliveryTimeUnit?.toLowerCase().startsWith('hour') ? 'hour' : order.deliveryTimeUnit?.toLowerCase().startsWith('week') ? 'week' : 'day') : (order.deliveryTimeUnit || 'days')}` : "Ready after merchant confirmation"
                         ) : (
                           // Delivery Order: Hide timeline until logistics service accepts
@@ -1694,6 +1731,83 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
                                         ● Active Stage
                                       </span>
                                     )}
+                                  </div>
+                                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                                    {step.desc}
+                                  </p>
+                                </div>
+                              </div>
+                            );
+                          });
+                        }
+
+                        if (order.isOneDollar) {
+                          const isVendorAccepted = (order.status !== "pending" && order.status !== "Pending Seller Acceptance") || Boolean(order.acceptedAt);
+                          const isVendorDispatched = isVendorAccepted && (effectiveStatus === "out_for_delivery" || effectiveStatus === "delivered" || effectiveStatus === "completed" || Boolean(order.outForDeliveryAt));
+                          const isBuyerConfirmed = isVendorDispatched && (Boolean(order.buyerDeliveryConfirmed) || effectiveStatus === "completed");
+
+                          let oneDollarActive = 0;
+                          if (isBuyerConfirmed) oneDollarActive = 3;
+                          else if (isVendorDispatched) oneDollarActive = 2;
+                          else if (isVendorAccepted) oneDollarActive = 1;
+
+                          const oneDollarSteps = [
+                            {
+                              key: "vendor_accepted",
+                              label: "Vendor Accepted Order",
+                              desc: "Vendor confirmed your $1 order & prepares direct fulfillment",
+                              actor: "Vendor",
+                              icon: CheckCircle,
+                              isCompleted: isVendorAccepted,
+                              isActive: oneDollarActive === 0 && !isVendorAccepted
+                            },
+                            {
+                              key: "vendor_dispatched",
+                              label: "Dispatched by Vendor",
+                              desc: "Vendor arranged direct delivery (no Shopiversity courier assigned)",
+                              actor: "Vendor Delivery",
+                              icon: Truck,
+                              isCompleted: isVendorDispatched,
+                              isActive: oneDollarActive === 1
+                            },
+                            {
+                              key: "delivered_confirmed",
+                              label: order.escrowSelected === false ? "Delivered & Completed" : "Delivered & Escrow Released",
+                              desc: order.escrowSelected === false
+                                ? "Order marked received by buyer"
+                                : "Buyer confirmed receipt • Escrow released to vendor",
+                              actor: "Buyer",
+                              icon: Package,
+                              isCompleted: isBuyerConfirmed,
+                              isActive: oneDollarActive === 2
+                            }
+                          ];
+
+                          return oneDollarSteps.map((step, index) => {
+                            const stepColor = step.isCompleted
+                              ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
+                              : "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500";
+
+                            return (
+                              <div key={`one-dollar-step-${step.key}-${index}`} className="flex items-start gap-4">
+                                <div className={cn(
+                                  "w-8 h-8 rounded-full flex items-center justify-center z-10 shrink-0 transition-all duration-300",
+                                  stepColor,
+                                  step.isActive && "ring-4 ring-orange-100 dark:ring-orange-900/40 scale-110"
+                                )}>
+                                  <step.icon className={cn("w-4 h-4", step.isActive && "animate-pulse")} />
+                                </div>
+                                <div className="flex flex-col min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className={cn(
+                                      "text-xs font-bold transition-colors",
+                                      step.isCompleted ? "text-slate-900 dark:text-white" : "text-slate-400 dark:text-slate-500"
+                                    )}>
+                                      {step.label}
+                                    </span>
+                                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-orange-50 dark:bg-orange-950/30 text-[#ff6b00] uppercase tracking-wider">
+                                      {step.actor}
+                                    </span>
                                   </div>
                                   <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
                                     {step.desc}
@@ -2206,19 +2320,23 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
                             Pay via Paystack (₦{order.totalPrice.toLocaleString()})
                           </button>
                         </div>
-                      ) : effectiveStatus === "delivered" ? (
+                      ) : (effectiveStatus === "delivered" || (order.isOneDollar && order.deliveryType === "delivery" && effectiveStatus === "out_for_delivery")) ? (
                         <div className="space-y-3 animate-in fade-in">
                           <div className="p-4 bg-emerald-50 dark:bg-emerald-950/25 border-2 border-emerald-300 dark:border-emerald-800 rounded-2xl space-y-2">
                             <div className="flex items-center gap-2">
                               <CheckCircle className="w-5 h-5 text-emerald-600" />
                               <span className="text-xs font-black text-emerald-900 dark:text-emerald-200 uppercase tracking-wide">
-                                Package Handover Verified by Courier!
+                                {order.isOneDollar ? "Vendor Dispatched One Dollar Order" : "Package Handover Verified by Courier!"}
                               </span>
                             </div>
                             <p className="text-xs text-emerald-800 dark:text-emerald-300 leading-relaxed font-medium">
                               {order.paymentMethod === "pod" && order.paymentStatus !== "paid"
                                 ? "Package received! Please complete your Paystack payment to finalize settlement and release vendor balance."
-                                : "The courier has verified delivery and handed over your package. Please inspect your items and click below to confirm receipt and release escrow funds to the seller and courier."}
+                                : order.isOneDollar
+                                  ? (order.escrowSelected === false
+                                      ? "Once you receive your One Dollar item from the vendor, click below to confirm receipt."
+                                      : "Once you receive and inspect your One Dollar item from the vendor, click below to confirm receipt and release escrow payment.")
+                                  : "The courier has verified delivery and handed over your package. Please inspect your items and click below to confirm receipt and release escrow funds to the seller and courier."}
                             </p>
                           </div>
 
@@ -2247,7 +2365,9 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
                               ) : (
                                 <CheckCircle className="w-4 h-4" />
                               )}
-                              Confirm Delivery & Release Escrow
+                              {order.isOneDollar && order.escrowSelected === false
+                                ? "Confirm Order Received"
+                                : "Confirm Delivery & Release Escrow"}
                             </button>
                           )}
                         </div>
@@ -2630,7 +2750,11 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
               <div className="p-3 bg-emerald-50/80 dark:bg-emerald-950/30 border border-emerald-200/70 dark:border-emerald-900/50 rounded-xl mb-4 flex items-start gap-2">
                 <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
                 <p className="text-[11px] text-emerald-800 dark:text-emerald-300 font-medium leading-relaxed">
-                  Confirming delivery finalizes your order and releases escrow payment to the merchant and courier.
+                  {verifyingOrder.isOneDollar
+                    ? (verifyingOrder.escrowSelected === false
+                        ? "Confirming delivery marks this One Dollar order as complete."
+                        : "Confirming delivery finalizes your One Dollar order and releases escrow payment to the merchant.")
+                    : "Confirming delivery finalizes your order and releases escrow payment to the merchant and courier."}
                 </p>
               </div>
 

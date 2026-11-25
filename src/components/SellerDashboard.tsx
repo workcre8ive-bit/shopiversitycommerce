@@ -129,6 +129,7 @@ import { getSchoolsByState, findSchoolByName } from "../constants/schools";
 import ProfileSettings from "./ProfileSettings";
 import StorefrontSettingsTab from "./StorefrontSettingsTab";
 import ReceiptModal from "./ReceiptModal";
+import SellerOneDollarPanel from "./SellerOneDollarPanel";
 
 
 interface SellerDashboardProps {
@@ -514,12 +515,19 @@ export default function SellerDashboard({
         updateData.acceptedAt = new Date().toISOString();
       } else if (status === "start_dispatch" || status === "out_for_delivery") {
         if (order.deliveryType === "delivery") {
-          // Delivery orders are dispatched and marked out for delivery exclusively by the logistics courier!
-          return;
+          if (!order.isOneDollar) {
+            // Standard delivery orders are dispatched and marked out for delivery exclusively by the logistics courier!
+            return;
+          }
+          // One Dollar delivery orders are handled directly by the vendor
+          updateData.status = "Out For Delivery";
+          updateData.outForDeliveryAt = new Date().toISOString();
+          updateData.acceptedAt = order.acceptedAt || new Date().toISOString();
+        } else {
+          updateData.status = "Out To Pickup Station";
+          updateData.acceptedAt = order.acceptedAt || new Date().toISOString();
+          updateData.countdownDuration = 120; // 120 seconds countdown
         }
-        updateData.status = "Out To Pickup Station";
-        updateData.acceptedAt = order.acceptedAt || new Date().toISOString();
-        updateData.countdownDuration = 120; // 120 seconds countdown
       }
       
       // Handle completion/payment logic
@@ -1184,6 +1192,7 @@ export default function SellerDashboard({
                  {[
                   { id: "analytics", label: "Sales Analytics", icon: TrendingUp, desc: "Revenue & period trends", color: "from-blue-600 to-indigo-600" },
                   { id: "add-product", label: "List Item", icon: Plus, desc: "Publish new good/service", color: "from-orange-500 to-amber-500" },
+                  { id: "one-dollar", label: "One Dollar ($1)", icon: DollarSign, desc: "List items at $1 & below", color: "from-orange-600 to-amber-500" },
                   { id: "my-products", label: "My Products", icon: Package, desc: "Edit & update catalogs", color: "from-purple-500 to-indigo-500" },
                   { id: "drafts", label: stats.draftCount > 0 ? `Drafts (${stats.draftCount})` : "Drafts", icon: FileText, desc: "Finish or delete drafts", color: "from-amber-500 to-orange-600" },
                   { id: "orders", label: "Customer Orders", icon: ShoppingBag, desc: "Track sales & escrow", color: "from-blue-500 to-teal-500" },
@@ -1806,6 +1815,22 @@ export default function SellerDashboard({
                   </table>
                </div>
             </div>
+          </motion.div>
+        )}
+
+        {activeSubTab === "one-dollar" && currentUser && (
+          <motion.div
+            key="seller-one-dollar"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+          >
+            <SellerOneDollarPanel
+              currentUser={currentUser}
+              products={products}
+              orders={orders}
+              onOpenOrdersTab={() => setActiveSubTab("orders")}
+            />
           </motion.div>
         )}
 
@@ -2707,6 +2732,11 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <p className="text-sm font-bold text-slate-900 dark:text-white break-words">{order.productName}</p>
+              {order.isOneDollar && (
+                <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded bg-[#ff6b00] text-white tabular-nums">
+                  One Dollar (${(order.usdPrice ?? 1).toFixed(2)})
+                </span>
+              )}
               {effectiveStatus === "accepted" && (
                 <span className="flex items-center gap-1 text-[10px] bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 border border-blue-200/60 dark:border-blue-800/50 px-2 py-0.5 rounded-full font-bold">
                   <CheckCircle className="w-3 h-3" />
@@ -2795,6 +2825,11 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
               {order.escrowStatus === "held" && (
                 <span className="text-[9px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wider bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200/60 dark:border-amber-800/50 flex items-center gap-1 shrink-0">
                   <ShieldCheck className="w-2.5 h-2.5" /> Escrow Held
+                </span>
+              )}
+              {order.isOneDollar && order.escrowSelected === false && (
+                <span className="text-[9px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wider bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200/60 dark:border-slate-700/60 shrink-0">
+                  Direct Pay (No Escrow)
                 </span>
               )}
             </div>
@@ -2894,13 +2929,37 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                   </span>
                 </div>
                 <p className="text-[11px] text-amber-800/90 dark:text-amber-300/90 leading-relaxed font-medium">
-                  Please click <strong>Accept Order</strong> below to accept this buyer's order. Once accepted, the Campus Logistics Hub will unlock so you can book a registered partner courier and finalize the delivery price.
+                  {order.isOneDollar ? (
+                    <>Click <strong>Accept Order</strong> below to accept this One Dollar order. Delivery is handled directly by you (no Shopiversity logistics partner is assigned).</>
+                  ) : (
+                    <>Please click <strong>Accept Order</strong> below to accept this buyer's order. Once accepted, the Campus Logistics Hub will unlock so you can book a registered partner courier and finalize the delivery price.</>
+                  )}
                 </p>
               </div>
             )}
 
-            {/* Consolidated Campus & Outsourced Logistics booking - Only accessible after order is accepted */}
-            {order.deliveryType === "delivery" && order.status !== "pending" && order.status !== "Pending Seller Acceptance" && effectiveStatus !== "completed" && (
+            {/* One Dollar Vendor-Managed Delivery Notice (replaces Campus Logistics Hub) */}
+            {order.isOneDollar && order.deliveryType === "delivery" && order.status !== "pending" && order.status !== "Pending Seller Acceptance" && effectiveStatus !== "completed" && (
+              <div className="mt-4 p-4 bg-orange-50/60 dark:bg-orange-950/20 rounded-2xl border border-orange-200/70 dark:border-orange-900/40 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-[#ff6b00] flex items-center gap-1.5">
+                    <Truck className="w-3.5 h-3.5" />
+                    One Dollar — Vendor-Managed Delivery
+                  </span>
+                  {order.exchangeRateUsdToNgn && (
+                    <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 tabular-nums">
+                      Locked: $1 = ₦{order.exchangeRateUsdToNgn.toLocaleString()}
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                  Shopiversity does not assign campus couriers for One Dollar items. Arrange delivery or meetup directly with the buyer and click <strong>Mark Dispatched by Vendor</strong> once sent.
+                </p>
+              </div>
+            )}
+
+            {/* Consolidated Campus & Outsourced Logistics booking - Only accessible after order is accepted (NEVER for One Dollar) */}
+            {!order.isOneDollar && order.deliveryType === "delivery" && order.status !== "pending" && order.status !== "Pending Seller Acceptance" && effectiveStatus !== "completed" && (
               <div className="mt-4 p-4 bg-slate-50 dark:bg-slate-900/40 rounded-2xl border border-slate-100 dark:border-slate-800 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5">
@@ -3347,20 +3406,32 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                     <CheckCircle className="w-3.5 h-3.5" />
                     Mark as Ready for Pickup
                   </button>
-                  <button 
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setShowCampusLogisticsModal(true);
-                      setDeliveryTab("registered");
-                    }}
-                    className="px-3.5 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs transition-all shadow-sm flex items-center gap-1.5 cursor-pointer active:scale-95"
-                    title="Send via a registered campus logistics courier"
-                  >
-                    <Truck className="w-3.5 h-3.5" />
-                    Send via Registered Logistics
-                  </button>
+                  {!order.isOneDollar && (
+                    <button 
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowCampusLogisticsModal(true);
+                        setDeliveryTab("registered");
+                      }}
+                      className="px-3.5 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs transition-all shadow-sm flex items-center gap-1.5 cursor-pointer active:scale-95"
+                      title="Send via a registered campus logistics courier"
+                    >
+                      <Truck className="w-3.5 h-3.5" />
+                      Send via Registered Logistics
+                    </button>
+                  )}
                 </div>
+              ) : order.isOneDollar ? (
+                <button
+                  type="button"
+                  onClick={() => onUpdate(order.id, "out_for_delivery")}
+                  className="px-4 py-2 bg-[#ff6b00] hover:bg-[#e56000] text-white rounded-xl font-bold text-xs transition-all shadow-lg flex items-center gap-2 cursor-pointer active:scale-95"
+                  title="Mark this One Dollar order as dispatched by you to the buyer"
+                >
+                  <Truck className="w-3.5 h-3.5" />
+                  Mark Dispatched by Vendor
+                </button>
               ) : (
                 /* Physical Delivery order */
                 (() => {

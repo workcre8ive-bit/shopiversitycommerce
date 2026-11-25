@@ -62,6 +62,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
 
   const navItems = !user ? [
     { id: "market", label: "Marketplace", icon: Store },
+    { id: "one-dollar", label: "One Dollar ($1)", icon: DollarSign },
     { id: "auth", label: "Sign In", icon: User },
     { id: "signup", label: "Sign Up", icon: UserPlus },
     { id: "search", label: "Search", icon: Search },
@@ -77,6 +78,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
     ...adminItem,
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "market", label: "Marketplace", icon: Store },
+    { id: "one-dollar", label: "One Dollar ($1)", icon: DollarSign },
     { id: "cart", label: "My Cart", icon: ShoppingCart },
     { id: "search", label: "Search", icon: Search },
     { id: "logistics", label: "Campus Logistics", icon: Truck },
@@ -90,6 +92,8 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
   ] : activeRole === "seller" ? [
     ...adminItem,
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { id: "one-dollar", label: "One Dollar ($1)", icon: DollarSign },
+    { id: "seller-one-dollar", label: "Manage One Dollar", icon: DollarSign },
     { id: "analytics", label: "Sales Analytics", icon: BarChart2 },
     { id: "search", label: "Search", icon: Search },
     { id: "logistics", label: "Campus Logistics", icon: Truck },
@@ -290,7 +294,7 @@ export default function Sidebar({ isOpen, onClose, activeTab, setActiveTab, role
                  if (activeRole === "seller" && item.id === "cart") {
                    return false;
                  }
-                 return ["market", "cart", "search", "dashboard", "add-product", "my-products", "storefront", "logistics"].includes(item.id);
+                 return ["market", "one-dollar", "seller-one-dollar", "cart", "search", "dashboard", "add-product", "my-products", "storefront", "logistics"].includes(item.id);
                }).map((item, idx) => (
                 <button
                   key={`nav-explore-${item.id}-${idx}`}

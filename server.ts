@@ -3546,6 +3546,269 @@ Return ONLY a JSON object:
     }
   });
 
+  // ===============================================================
+  // ONE DOLLAR ($1 USD -> NGN Daily Exchange Rate & Checkout Guard)
+  // ===============================================================
+  interface CachedOneDollarRate {
+    usdAmount: number;
+    rate: number;
+    oneDollarNgnPrice: number;
+    source: string;
+    updatedAt: string;
+    fetchedAtMs: number;
+    nextRefreshAt: string;
+  }
+
+  const ONE_DOLLAR_RATE_TTL_MS = 24 * 60 * 60 * 1000; // Daily refresh (24 hours)
+  const ONE_DOLLAR_RATE_CACHE_FILE = path.join("/tmp", "shopiversity_one_dollar_rate_cache.json");
+  let cachedOneDollarRate: CachedOneDollarRate | null = null;
+  let previousOneDollarRate: CachedOneDollarRate | null = null;
+
+  function loadPersistedOneDollarRate(): CachedOneDollarRate | null {
+    if (cachedOneDollarRate) return cachedOneDollarRate;
+    try {
+      if (fs.existsSync(ONE_DOLLAR_RATE_CACHE_FILE)) {
+        const raw = fs.readFileSync(ONE_DOLLAR_RATE_CACHE_FILE, "utf8");
+        const parsed = JSON.parse(raw) as CachedOneDollarRate;
+        if (parsed && typeof parsed.rate === "number" && parsed.rate > 0 && typeof parsed.oneDollarNgnPrice === "number") {
+          cachedOneDollarRate = parsed;
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.warn("[ONE DOLLAR RATE] Could not read persisted cache:", e);
+    }
+    return null;
+  }
+
+  function persistOneDollarRate(entry: CachedOneDollarRate) {
+    try {
+      fs.writeFileSync(ONE_DOLLAR_RATE_CACHE_FILE, JSON.stringify(entry), "utf8");
+    } catch (e) {
+      console.warn("[ONE DOLLAR RATE] Could not write persisted cache:", e);
+    }
+  }
+
+  async function fetchLiveUsdToNgnRate(forceRefresh = false): Promise<{ data: CachedOneDollarRate; cached: boolean; staleFallback: boolean }> {
+    const existing = loadPersistedOneDollarRate();
+    const now = Date.now();
+
+    if (!forceRefresh && existing && (now - existing.fetchedAtMs) < ONE_DOLLAR_RATE_TTL_MS) {
+      return { data: existing, cached: true, staleFallback: false };
+    }
+
+    // Attempt primary real exchange rate API: ExchangeRate-API (open.er-api.com)
+    let liveRate: number | null = null;
+    let liveSource = "";
+    let liveUpdatedAt = new Date(now).toISOString();
+
+    try {
+      const resp = await axios.get("https://open.er-api.com/v6/latest/USD", { timeout: 8000 });
+      const ngn = Number(resp.data?.rates?.NGN);
+      if (resp.data?.result === "success" && Number.isFinite(ngn) && ngn > 0) {
+        liveRate = ngn;
+        liveSource = "ExchangeRate-API (open.er-api.com)";
+        if (resp.data?.time_last_update_utc) {
+          const parsedDate = new Date(resp.data.time_last_update_utc);
+          if (!isNaN(parsedDate.getTime())) {
+            liveUpdatedAt = parsedDate.toISOString();
+          }
+        }
+      }
+    } catch (err: any) {
+      console.warn("[ONE DOLLAR RATE] Primary API (open.er-api.com) failed:", err?.message || err);
+    }
+
+    // Attempt secondary verified currency API if primary fails
+    if (!liveRate) {
+      try {
+        const resp2 = await axios.get("https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json", { timeout: 8000 });
+        const ngn2 = Number(resp2.data?.usd?.ngn);
+        if (Number.isFinite(ngn2) && ngn2 > 0) {
+          liveRate = ngn2;
+          liveSource = "Fawazahmed0 Currency API";
+          if (resp2.data?.date) {
+            const parsedDate2 = new Date(resp2.data.date);
+            if (!isNaN(parsedDate2.getTime())) {
+              liveUpdatedAt = parsedDate2.toISOString();
+            }
+          }
+        }
+      } catch (err2: any) {
+        console.warn("[ONE DOLLAR RATE] Secondary API failed:", err2?.message || err2);
+      }
+    }
+
+    if (liveRate && liveRate > 0) {
+      if (existing) {
+        previousOneDollarRate = existing;
+      }
+      const roundedNgn = Math.round(liveRate);
+      const nextRefreshAt = new Date(now + ONE_DOLLAR_RATE_TTL_MS).toISOString();
+      const freshEntry: CachedOneDollarRate = {
+        usdAmount: 1,
+        rate: Number(liveRate.toFixed(4)),
+        oneDollarNgnPrice: roundedNgn,
+        source: liveSource,
+        updatedAt: liveUpdatedAt,
+        fetchedAtMs: now,
+        nextRefreshAt
+      };
+      cachedOneDollarRate = freshEntry;
+      persistOneDollarRate(freshEntry);
+      return { data: freshEntry, cached: false, staleFallback: false };
+    }
+
+    // Fallback gracefully to last known real cached rate if external APIs are temporarily unreachable
+    if (existing) {
+      return { data: existing, cached: true, staleFallback: true };
+    }
+
+    throw new Error("Live USD to NGN exchange rate service is temporarily unavailable. Please retry shortly.");
+  }
+
+  app.get("/api/one-dollar/exchange-rate", async (req, res) => {
+    try {
+      const force = req.query.refresh === "true";
+      const result = await fetchLiveUsdToNgnRate(force);
+      return res.status(200).json({
+        success: true,
+        usdAmount: result.data.usdAmount,
+        rate: result.data.rate,
+        oneDollarNgnPrice: result.data.oneDollarNgnPrice,
+        source: result.data.source,
+        updatedAt: result.data.updatedAt,
+        nextRefreshAt: result.data.nextRefreshAt,
+        cached: result.cached,
+        staleFallback: result.staleFallback
+      });
+    } catch (error: any) {
+      return res.status(503).json({
+        success: false,
+        error: error?.message || "Unable to fetch daily USD to NGN exchange rate."
+      });
+    }
+  });
+
+  app.post("/api/one-dollar/validate-checkout", async (req, res) => {
+    try {
+      const { items, paymentReference, paymentMethod, totalCartAmountNgn } = req.body || {};
+      if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ success: false, error: "No One Dollar items provided for validation." });
+      }
+
+      const rateResult = await fetchLiveUsdToNgnRate(false);
+      const activeRate = rateResult.data;
+      const recentlyExpiredGrace =
+        previousOneDollarRate &&
+        (Date.now() - activeRate.fetchedAtMs) < 15 * 60 * 1000
+          ? previousOneDollarRate
+          : null;
+
+      let authoritativeOneDollarSubtotal = 0;
+      let resolvedRateForOrder = activeRate;
+      const validatedItems: Array<{ productId: string; usdPrice: number; unitPriceNgn: number; quantity: number }> = [];
+
+      for (const item of items) {
+        const qty = Number(item?.quantity);
+        if (!Number.isInteger(qty) || qty <= 0 || qty > 50) {
+          return res.status(400).json({ success: false, error: "Invalid One Dollar item quantity." });
+        }
+
+        const rawUsd = item?.usdPrice !== undefined && item?.usdPrice !== null ? Number(item.usdPrice) : 1;
+        const usdPrice = Math.round(rawUsd * 100) / 100;
+        if (!Number.isFinite(usdPrice) || usdPrice <= 0 || usdPrice > 1) {
+          return res.status(400).json({
+            success: false,
+            error: "One Dollar items must be priced between $0.01 and $1.00 USD."
+          });
+        }
+
+        const activeUnitNgn = usdPrice === 1
+          ? activeRate.oneDollarNgnPrice
+          : Math.max(1, Math.round(usdPrice * activeRate.rate));
+        const graceUnitNgn = recentlyExpiredGrace
+          ? (usdPrice === 1 ? recentlyExpiredGrace.oneDollarNgnPrice : Math.max(1, Math.round(usdPrice * recentlyExpiredGrace.rate)))
+          : null;
+
+        const clientUnitNgn = Number(item?.unitPriceNgn ?? item?.price);
+        const matchesActive = Math.abs(clientUnitNgn - activeUnitNgn) <= 2;
+        const matchesGrace = graceUnitNgn !== null && Math.abs(clientUnitNgn - graceUnitNgn) <= 2;
+
+        if (!matchesActive && !matchesGrace) {
+          return res.status(409).json({
+            success: false,
+            error: `Daily exchange rate updated (₦${activeRate.oneDollarNgnPrice.toLocaleString()} per $1.00 USD). Please refresh your cart total before paying.`,
+            latestRate: activeRate
+          });
+        }
+
+        let unitPriceNgn = activeUnitNgn;
+        if (!matchesActive && matchesGrace && recentlyExpiredGrace && graceUnitNgn !== null) {
+          resolvedRateForOrder = recentlyExpiredGrace;
+          unitPriceNgn = graceUnitNgn;
+        }
+        authoritativeOneDollarSubtotal += unitPriceNgn * qty;
+        validatedItems.push({
+          productId: String(item?.productId || ""),
+          usdPrice,
+          unitPriceNgn,
+          quantity: qty
+        });
+      }
+
+      if (paymentMethod === "online") {
+        if (!paymentReference || typeof paymentReference !== "string") {
+          return res.status(400).json({ success: false, error: "Payment reference is required for online One Dollar checkout." });
+        }
+        if (!PAYSTACK_SECRET_KEY) {
+          return res.status(500).json({ success: false, error: "Paystack secret key not configured" });
+        }
+
+        const verifyResp = await axios.get(
+          `https://api.paystack.co/transaction/verify/${encodeURIComponent(paymentReference)}`,
+          {
+            headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` },
+            timeout: 10000
+          }
+        );
+
+        const tx = verifyResp.data?.data;
+        const paidNaira = Number(tx?.amount || 0) / 100;
+        const expectedMinNgn = Number(totalCartAmountNgn) > authoritativeOneDollarSubtotal
+          ? Number(totalCartAmountNgn)
+          : authoritativeOneDollarSubtotal;
+
+        if (!tx || tx.status !== "success" || paidNaira + 2 < expectedMinNgn) {
+          return res.status(400).json({
+            success: false,
+            error: "Verified Paystack amount does not match the authoritative One Dollar total."
+          });
+        }
+      }
+
+      return res.status(200).json({
+        success: true,
+        authoritativeUnitNgn: resolvedRateForOrder.oneDollarNgnPrice,
+        authoritativeOneDollarSubtotal,
+        validatedItems,
+        rateSnapshot: {
+          usdAmount: 1,
+          rate: resolvedRateForOrder.rate,
+          oneDollarNgnPrice: resolvedRateForOrder.oneDollarNgnPrice,
+          source: resolvedRateForOrder.source,
+          updatedAt: resolvedRateForOrder.updatedAt
+        }
+      });
+    } catch (error: any) {
+      console.error("[ONE DOLLAR CHECKOUT VALIDATE] Error:", error?.response?.data || error?.message);
+      return res.status(500).json({
+        success: false,
+        error: error?.message || "Failed to validate One Dollar checkout."
+      });
+    }
+  });
+
 const FALLBACK_BANKS = [
     { name: "Access Bank", code: "044" },
     { name: "Access Bank (Diamond)", code: "063" },

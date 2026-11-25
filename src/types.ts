@@ -87,6 +87,49 @@ export interface UserProfile {
   authProvider?: string;
   isGoogleAccount?: boolean;
   hasPassword?: boolean;
+  oneDollarSuspended?: boolean;
+  oneDollarSuspensionReason?: string;
+  oneDollarSuspendedAt?: string;
+}
+
+export interface ExchangeRateSnapshot {
+  usdAmount: number;
+  rate: number;
+  oneDollarNgnPrice: number;
+  source: string;
+  updatedAt: string;
+  nextRefreshAt: string;
+  cached?: boolean;
+  staleFallback?: boolean;
+}
+
+export interface OneDollarListing {
+  id: string;
+  productId: string;
+  sellerId: string;
+  sellerName: string;
+  storeName?: string;
+  sellerVerified?: boolean;
+  productName: string;
+  description: string;
+  category: string;
+  condition: "new" | "refurbished" | "used";
+  imageUrl?: string;
+  imageUrls?: string[];
+  stock: number;
+  campus?: string;
+  location?: string;
+  usdPrice: number;
+  status: "pending_approval" | "approved" | "rejected" | "deactivated";
+  isActive: boolean;
+  deliveryNotice?: string;
+  rejectionReason?: string;
+  approvedAt?: string;
+  approvedBy?: string;
+  rejectedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  publicContact?: PublicContactInfo;
 }
 
 export interface WishlistItem {
@@ -225,9 +268,9 @@ export interface Order {
   measureAmount?: number;
   formResponses?: Record<string, string>;
   updatedAt?: string;
-  disputeStatus?: "none" | "active" | "seller_responded" | "resolved";
+  disputeStatus?: "none" | "active" | "seller_responded" | "resolved" | "rejected";
   disputedAt?: string;
-  escrowStatus?: "held" | "released" | "refunded";
+  escrowStatus?: "held" | "released" | "refunded" | "not_applicable";
   completedAt?: string;
   payoutStatus?: "escrow" | "processing" | "released" | "failed";
   payoutBypass48h?: boolean;
@@ -245,10 +288,19 @@ export interface Order {
   logisticsAssignedAt?: string;
   logisticsAcceptedAt?: string;
   logisticsTimeline?: string;
-  logisticsOfferStatus?: "pending" | "accepted" | "declined" | "completed";
+  logisticsOfferStatus?: "pending" | "accepted" | "declined" | "completed" | "not_booked";
   kwikRiderId?: string | null;
   kwikTrackingUrl?: string | null;
   confirmOrderPressed?: boolean;
+  // One Dollar fields
+  isOneDollar?: boolean;
+  oneDollarListingId?: string;
+  usdPrice?: number;
+  exchangeRateUsdToNgn?: number;
+  exchangeRateSource?: string;
+  exchangeRateUpdatedAt?: string;
+  escrowSelected?: boolean;
+  deliveryHandledBy?: "vendor" | "logistics";
   // Refund and dispute fields
   refundStatus?: "none" | "requested" | "under_review" | "approved" | "rejected" | "processing" | "completed";
   refundId?: string;
@@ -370,7 +422,7 @@ export interface OrderPaymentReceipt {
   deliveryType: "delivery" | "pickup";
   logisticsPartner?: string;
   verificationTimestamp: string;
-  escrowStatus: "held" | "released" | "refunded";
+  escrowStatus: "held" | "released" | "refunded" | "not_applicable";
   status: "verified" | "cleared";
 }
 
@@ -502,6 +554,12 @@ export interface CartItem {
   formResponses?: Record<string, string>;
   type?: "good" | "service";
   addedAt?: number;
+  isOneDollar?: boolean;
+  oneDollarListingId?: string;
+  usdPrice?: number;
+  exchangeRateUsdToNgn?: number;
+  exchangeRateSource?: string;
+  exchangeRateUpdatedAt?: string;
 }
 
 export interface EventPlan {

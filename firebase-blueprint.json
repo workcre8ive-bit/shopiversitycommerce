@@ -39,7 +39,10 @@
             "accountName": { "type": "string" }
           }
         },
-        "paystackConnected": { "type": "boolean" }
+        "paystackConnected": { "type": "boolean" },
+        "oneDollarSuspended": { "type": "boolean" },
+        "oneDollarSuspensionReason": { "type": "string" },
+        "oneDollarSuspendedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["uid", "displayName", "username", "email", "phoneNumber", "role", "isVerified", "isSuspended", "reportCount", "createdAt"]
     },
@@ -177,8 +180,8 @@
         "deliveryType": { "type": "string", "enum": ["delivery", "pickup"] },
         "paymentMethod": { "type": "string", "enum": ["online", "pod"] },
         "paymentStatus": { "type": "string", "enum": ["pending", "paid", "failed"] },
-        "escrowStatus": { "type": "string", "enum": ["held", "released", "refunded"] },
-        "disputeStatus": { "type": "string", "enum": ["none", "active", "resolved", "rejected"] },
+        "escrowStatus": { "type": "string", "enum": ["held", "released", "refunded", "not_applicable"] },
+        "disputeStatus": { "type": "string", "enum": ["none", "active", "seller_responded", "resolved", "rejected"] },
         "status": { "type": "string", "enum": ["pending", "accepted", "out_for_delivery", "delivered", "cancelled", "transit", "In Transit", "Out For Delivery", "Order Delivered", "logistics_pending", "logistics_booked"] },
         "createdAt": { "type": "string", "format": "date-time" },
         "acceptedAt": { "type": "string", "format": "date-time" },
@@ -202,7 +205,15 @@
         "logisticsName": { "type": "string" },
         "logisticsPhone": { "type": "string" },
         "logisticsDeliveryPrice": { "type": "number" },
-        "logisticsEstimatedDeliveryTimeline": { "type": "string" }
+        "logisticsEstimatedDeliveryTimeline": { "type": "string" },
+        "isOneDollar": { "type": "boolean" },
+        "oneDollarListingId": { "type": "string" },
+        "usdPrice": { "type": "number" },
+        "exchangeRateUsdToNgn": { "type": "number" },
+        "exchangeRateSource": { "type": "string" },
+        "exchangeRateUpdatedAt": { "type": "string", "format": "date-time" },
+        "escrowSelected": { "type": "boolean" },
+        "deliveryHandledBy": { "type": "string", "enum": ["vendor", "logistics"] }
       },
       "required": ["buyerId", "buyerName", "buyerPhone", "sellerId", "productId", "quantity", "totalPrice", "deliveryType", "paymentMethod", "status"]
     },
@@ -356,6 +367,39 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "userEmail", "category", "subject", "message", "status", "createdAt"]
+    },
+    "OneDollarListing": {
+      "title": "OneDollarListing",
+      "description": "Voluntary vendor product enrollment within the $1.00 USD and below One Dollar marketplace section",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "productId": { "type": "string" },
+        "sellerId": { "type": "string" },
+        "sellerName": { "type": "string" },
+        "storeName": { "type": "string" },
+        "sellerVerified": { "type": "boolean" },
+        "productName": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "condition": { "type": "string", "enum": ["new", "refurbished", "used"] },
+        "imageUrl": { "type": "string" },
+        "imageUrls": { "type": "array", "items": { "type": "string" } },
+        "stock": { "type": "number" },
+        "campus": { "type": "string" },
+        "location": { "type": "string" },
+        "usdPrice": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending_approval", "approved", "rejected", "deactivated"] },
+        "isActive": { "type": "boolean" },
+        "deliveryNotice": { "type": "string" },
+        "rejectionReason": { "type": "string" },
+        "approvedAt": { "type": "string", "format": "date-time" },
+        "approvedBy": { "type": "string" },
+        "rejectedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["productId", "sellerId", "sellerName", "productName", "usdPrice", "status", "isActive", "stock", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -414,6 +458,10 @@
     "/chats/{chatId}/messages/{messageId}": {
       "schema": "Message",
       "description": "Chat messages"
+    },
+    "/oneDollarListings/{listingId}": {
+      "schema": "OneDollarListing",
+      "description": "Admin-moderated One Dollar ($1 USD) product listings"
     }
   }
 }

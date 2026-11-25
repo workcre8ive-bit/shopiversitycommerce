@@ -28,11 +28,12 @@ import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
 import { usePaystackPayment } from "../hooks/usePaystackPayment";
 import { getPaystackPublicKey, getSyncPaystackPublicKey } from "../utils/paystackConfig";
 import { notifyOrderPlaced, triggerTemplatedEmail } from "../utils/orderEmailNotifications";
+import { clampOneDollarUsd, formatUsd } from "../lib/oneDollarRate";
 
 interface CartPageProps {
   cart: CartItem[];
-  onUpdateQuantity: (productId: string, delta: number, menuItemId?: string, ticketTierId?: string) => void;
-  onRemove: (productId: string, menuItemId?: string, ticketTierId?: string) => void;
+  onUpdateQuantity: (productId: string, delta: number, menuItemId?: string, ticketTierId?: string, isOneDollar?: boolean) => void;
+  onRemove: (productId: string, menuItemId?: string, ticketTierId?: string, isOneDollar?: boolean) => void;
   onClear: () => void;
   currentUser: UserProfile | null;
   setActiveTab: (tab: string) => void;
@@ -52,10 +53,11 @@ export default function CartPage({
   const [success, setSuccess] = React.useState(false);
   const [deliveryType, setDeliveryType] = React.useState<"delivery" | "pickup">("pickup");
   const [paymentMethod, setPaymentMethod] = React.useState<"online" | "pod" | "physical">("online");
+  const [useOneDollarEscrow, setUseOneDollarEscrow] = React.useState(true);
   const [selectedItemKeys, setSelectedItemKeys] = React.useState<string[]>([]);
   const isCreating = React.useRef(false);
 
-  const getItemKey = (item: CartItem) => `${item.productId}-${item.menuItemId || 'main'}-${item.ticketTierId || 'none'}`;
+  const getItemKey = (item: CartItem) => `${item.isOneDollar ? '1usd-' : ''}${item.productId}-${item.menuItemId || 'main'}-${item.ticketTierId || 'none'}`;
 
   // Initialize all items as selected on cart load and reset success message on new additions
   React.useEffect(() => {
@@ -85,12 +87,20 @@ export default function CartPage({
 
   const hasEvent = selectedItems.some(item => item.ticketTierId);
   const hasService = selectedItems.some(item => item.type === "service");
+  const hasOneDollarItems = selectedItems.some(item => item.isOneDollar);
+  const allOneDollarItems = selectedItems.length > 0 && selectedItems.every(item => item.isOneDollar);
   
   React.useEffect(() => {
     if (hasEvent) {
       setDeliveryType("pickup");
     }
   }, [hasEvent]);
+
+  React.useEffect(() => {
+    if (hasOneDollarItems && paymentMethod !== "online") {
+      setPaymentMethod("online");
+    }
+  }, [hasOneDollarItems, paymentMethod]);
 
   React.useEffect(() => {
     if (hasService) {
@@ -105,15 +115,15 @@ export default function CartPage({
           setDeliveryType("pickup");
         }
       }
-      if (paymentMethod === "pod") {
+      if (!hasOneDollarItems && paymentMethod === "pod") {
         setPaymentMethod("physical");
       }
     } else {
       if (paymentMethod === "physical") {
-        setPaymentMethod("pod");
+        setPaymentMethod(hasOneDollarItems ? "online" : "pod");
       }
     }
-  }, [hasService, selectedItems, paymentMethod]);
+  }, [hasService, hasOneDollarItems, selectedItems, paymentMethod]);
 
   const subtotal = selectedItems.reduce((acc, item) => acc + item.price * item.quantity, 0);
   const total = subtotal;
@@ -130,7 +140,17 @@ export default function CartPage({
 
   const initializePayment = usePaystackPayment(config);
 
-  const createOrders = async (isPaid: boolean) => {
+  const createOrders = async (
+    isPaid: boolean,
+    validatedOneDollar?: {
+      oneDollarUnitNgn: number;
+      exchangeRateUsdToNgn: number;
+      exchangeRateSource: string;
+      exchangeRateUpdatedAt: string;
+      paymentReference?: string;
+    },
+    paymentReference?: string
+  ) => {
     if (selectedItems.length === 0 || isCreating.current) return;
     isCreating.current = true;
     setLoading(true);
@@ -160,10 +180,19 @@ export default function CartPage({
 
       // Create an order for each unique selected item
       const orderPromises = uniqueSelectedItems.map(async (item) => {
-        const itemTotal = item.price * item.quantity;
+        const isOneDollarItem = Boolean(item.isOneDollar);
+        const itemUsd = isOneDollarItem ? clampOneDollarUsd(item.usdPrice) : undefined;
+        const unitPriceNgn = isOneDollarItem && validatedOneDollar?.exchangeRateUsdToNgn
+          ? (itemUsd === 1 && validatedOneDollar?.oneDollarUnitNgn
+              ? validatedOneDollar.oneDollarUnitNgn
+              : Math.max(1, Math.round((itemUsd || 1) * validatedOneDollar.exchangeRateUsdToNgn)))
+          : item.price;
+        const itemTotal = unitPriceNgn * item.quantity;
         const commissionRate = item.type === "service" ? 0.06 : 0.05;
-        const itemPlatformCommission = itemTotal * commissionRate;
-        const itemSellerEarnings = itemTotal - (itemTotal * commissionRate);
+        const itemPlatformCommission = isOneDollarItem
+          ? Math.round(itemTotal * commissionRate)
+          : itemTotal * commissionRate;
+        const itemSellerEarnings = itemTotal - itemPlatformCommission;
 
         // Fetch seller profile details
         let dbSellerName = "Merchant";
@@ -191,6 +220,10 @@ export default function CartPage({
         const uniqueProductId = `PRD-${randPrd}`;
         const deliveryOtp = generateSixDigitPin();
         const sellerHandoverPin = generateSixDigitPin();
+
+        const resolvedRate = validatedOneDollar?.exchangeRateUsdToNgn || item.exchangeRateUsdToNgn;
+        const resolvedRateSource = validatedOneDollar?.exchangeRateSource || item.exchangeRateSource;
+        const resolvedRateUpdated = validatedOneDollar?.exchangeRateUpdatedAt || item.exchangeRateUpdatedAt;
 
         const orderData: any = {
           uniqueOrderId,
@@ -222,10 +255,25 @@ export default function CartPage({
           deliveryType,
           paymentMethod: item.ticketTierId ? "online" : paymentMethod,
           paymentStatus: isPaid ? "paid" : "pending",
+          ...(paymentReference ? { paymentReference } : {}),
           status: item.ticketTierId ? "acquired" : (item.type === "service" ? "accepted" : "Pending Seller Acceptance"),
           createdAt: new Date().toISOString(),
           deliveryAddress: currentUser?.deliveryAddress || "",
           type: item.type || "good",
+          ...(isOneDollarItem ? {
+            isOneDollar: true,
+            ...(item.oneDollarListingId ? { oneDollarListingId: item.oneDollarListingId } : {}),
+            usdPrice: itemUsd || 1,
+            ...(resolvedRate ? { exchangeRateUsdToNgn: resolvedRate } : {}),
+            ...(resolvedRateSource ? { exchangeRateSource: resolvedRateSource } : {}),
+            ...(resolvedRateUpdated ? { exchangeRateUpdatedAt: resolvedRateUpdated } : {}),
+            escrowSelected: useOneDollarEscrow,
+            escrowStatus: isPaid ? (useOneDollarEscrow ? "held" : "not_applicable") : undefined,
+            payoutStatus: isPaid ? (useOneDollarEscrow ? "escrow" : "released") : undefined,
+            deliveryHandledBy: "vendor"
+          } : {
+            ...(isPaid ? { escrowStatus: "held", payoutStatus: "escrow" } : {})
+          }),
           ...(item.ticketTierId ? { ticketTierId: item.ticketTierId } : {}),
           ...(item.ticketTierName ? { ticketTierName: item.ticketTierName } : {}),
           ...(item.menuItemId ? { menuItemId: item.menuItemId } : {}),
@@ -263,32 +311,50 @@ export default function CartPage({
           handleFirestoreError(error, OperationType.CREATE, "orders");
         }
 
-        // 2. Decrement stock
-        const rawStock = productSnap.exists() ? productSnap.data().stock : undefined;
-        const currentStock = (rawStock !== undefined && rawStock !== null) ? Number(rawStock) : item.quantity;
-        const initialStock = productSnap.exists() ? Number(productSnap.data().initialStock || currentStock || 0) : currentStock;
-        const newStock = Math.max(0, currentStock - item.quantity);
-
-        if (rawStock !== undefined && rawStock !== null && currentStock < item.quantity) {
-          throw new Error(`Insufficient stock for ${item.name}`);
-        }
-
-        try {
-          const updatePayload: any = {
-            stock: newStock
-          };
-          if (newStock <= 0) {
-            updatePayload.status = "inactive";
-            updatePayload.outOfStockAt = new Date().toISOString();
+        // 2. Decrement stock (One Dollar promo stock tracked on oneDollarListings; regular catalog stock on products)
+        let newStock = 0;
+        if (isOneDollarItem && item.oneDollarListingId) {
+          const listingRef = doc(db, "oneDollarListings", item.oneDollarListingId);
+          const listingSnap = await getDoc(listingRef);
+          const currentPromoStock = listingSnap.exists() ? Number(listingSnap.data().stock || 0) : item.quantity;
+          if (listingSnap.exists() && currentPromoStock < item.quantity) {
+            throw new Error(`Insufficient One Dollar stock for ${item.name}`);
           }
-          await updateDoc(productRef, updatePayload);
-        } catch (error) {
-          handleFirestoreError(error, OperationType.UPDATE, `products/${item.productId}`);
+          newStock = Math.max(0, currentPromoStock - item.quantity);
+          try {
+            await updateDoc(listingRef, {
+              stock: newStock,
+              updatedAt: new Date().toISOString()
+            });
+          } catch (error) {
+            console.warn("Unable to decrement One Dollar listing stock:", error);
+          }
+        } else {
+          const rawStock = productSnap.exists() ? productSnap.data().stock : undefined;
+          const currentStock = (rawStock !== undefined && rawStock !== null) ? Number(rawStock) : item.quantity;
+          newStock = Math.max(0, currentStock - item.quantity);
+
+          if (rawStock !== undefined && rawStock !== null && currentStock < item.quantity) {
+            throw new Error(`Insufficient stock for ${item.name}`);
+          }
+
+          try {
+            const updatePayload: any = {
+              stock: newStock
+            };
+            if (newStock <= 0) {
+              updatePayload.status = "inactive";
+              updatePayload.outOfStockAt = new Date().toISOString();
+            }
+            await updateDoc(productRef, updatePayload);
+          } catch (error) {
+            handleFirestoreError(error, OperationType.UPDATE, `products/${item.productId}`);
+          }
         }
 
-        // 3. Automated registered logistics integration if configured
+        // 3. Automated registered logistics integration if configured (NEVER for One Dollar items!)
         let bookedLogisticsPartner: { id?: string; name?: string; deliveryPrice?: number } | null = null;
-        if (productSnap.exists()) {
+        if (!isOneDollarItem && productSnap.exists()) {
           const prodData = productSnap.data();
           if (prodData.logisticsType === "registered" && prodData.logisticsCompanyId) {
             try {
@@ -430,7 +496,7 @@ export default function CartPage({
       
       // Remove ordered items from cart
       uniqueSelectedItems.forEach(item => {
-        onRemove(item.productId, item.menuItemId, item.ticketTierId);
+        onRemove(item.productId, item.menuItemId, item.ticketTierId, item.isOneDollar);
       });
 
       setSuccess(true);
@@ -454,7 +520,37 @@ export default function CartPage({
         throw new Error("Payment verification failed");
       }
 
-      await createOrders(true);
+      const oneDollarSelected = selectedItems.filter(i => i.isOneDollar);
+      let validatedOneDollar: any = undefined;
+      if (oneDollarSelected.length > 0) {
+        const valRes = await fetch("/api/one-dollar/validate-checkout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            items: oneDollarSelected.map((i) => ({
+              productId: i.productId,
+              quantity: i.quantity,
+              usdPrice: clampOneDollarUsd(i.usdPrice),
+              unitPriceNgn: i.price
+            })),
+            paymentReference: response.reference,
+            paymentMethod: "online",
+            totalCartAmountNgn: total
+          })
+        });
+        const valData = await valRes.json();
+        if (!valRes.ok || !valData.success) {
+          throw new Error(valData.error || "One Dollar exchange rate validation failed.");
+        }
+        validatedOneDollar = {
+          oneDollarUnitNgn: valData.authoritativeUnitNgn,
+          exchangeRateUsdToNgn: valData.rateSnapshot?.rate,
+          exchangeRateSource: valData.rateSnapshot?.source,
+          exchangeRateUpdatedAt: valData.rateSnapshot?.updatedAt
+        };
+      }
+
+      await createOrders(true, validatedOneDollar, response.reference);
     } catch (error: any) {
       console.error("Order creation failed", error);
       alert(error.message || "Failed to process order. Please contact support.");
@@ -684,9 +780,16 @@ export default function CartPage({
 
                     {/* Item Details */}
                     <div className="min-w-0 flex-1 space-y-1">
-                      <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
-                        {item.name}
-                      </h3>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
+                          {item.name}
+                        </h3>
+                        {item.isOneDollar && (
+                          <span className="px-2 py-0.5 rounded bg-[#ff6b00] text-white text-[9px] font-black uppercase tracking-wider shrink-0 tabular-nums">
+                            One Dollar ({formatUsd(item.usdPrice)})
+                          </span>
+                        )}
+                      </div>
                       
                       {item.menuItemName && (
                         <p className="text-xs text-orange-600 dark:text-orange-400 font-semibold flex items-center gap-1">
@@ -706,9 +809,21 @@ export default function CartPage({
                         </p>
                       )}
 
-                      <div className="text-xs font-bold text-slate-500 dark:text-slate-400">
+                      <div className="text-xs font-bold text-slate-500 dark:text-slate-400 tabular-nums">
                         ₦{item.price.toLocaleString()} each
+                        {item.isOneDollar && (
+                          <span className="ml-1.5 text-[10px] font-semibold text-[#ff6b00]">
+                            ({formatUsd(item.usdPrice)} USD{item.exchangeRateUsdToNgn ? ` @ ₦${item.exchangeRateUsdToNgn.toLocaleString()}/$1` : ""})
+                          </span>
+                        )}
                       </div>
+
+                      {item.isOneDollar && (
+                        <p className="text-[10px] font-semibold text-amber-700 dark:text-amber-400 flex items-center gap-1">
+                          <Truck className="w-3 h-3 shrink-0" />
+                          Vendor-managed delivery (No Shopiversity courier assigned)
+                        </p>
+                      )}
                     </div>
                   </div>
 
@@ -716,7 +831,7 @@ export default function CartPage({
                   <div className="flex items-center justify-between sm:justify-end gap-6 w-full sm:w-auto shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 dark:border-zinc-800">
                     <div className="flex items-center bg-slate-100 dark:bg-zinc-800 rounded-xl p-1 border border-slate-200 dark:border-zinc-700">
                       <button 
-                        onClick={() => onUpdateQuantity(item.productId, -1, item.menuItemId, item.ticketTierId)}
+                        onClick={() => onUpdateQuantity(item.productId, -1, item.menuItemId, item.ticketTierId, item.isOneDollar)}
                         className="w-7 h-7 flex items-center justify-center text-slate-600 dark:text-zinc-300 hover:text-[#ff6b00] rounded-lg transition-colors cursor-pointer"
                         title="Decrease quantity"
                       >
@@ -726,7 +841,7 @@ export default function CartPage({
                         {item.quantity}
                       </span>
                       <button 
-                        onClick={() => onUpdateQuantity(item.productId, 1, item.menuItemId, item.ticketTierId)}
+                        onClick={() => onUpdateQuantity(item.productId, 1, item.menuItemId, item.ticketTierId, item.isOneDollar)}
                         className="w-7 h-7 flex items-center justify-center text-slate-600 dark:text-zinc-300 hover:text-[#ff6b00] rounded-lg transition-colors cursor-pointer"
                         title="Increase quantity"
                       >
@@ -735,11 +850,11 @@ export default function CartPage({
                     </div>
 
                     <div className="text-right">
-                      <div className="text-sm sm:text-base font-black text-slate-900 dark:text-white">
+                      <div className="text-sm sm:text-base font-black text-slate-900 dark:text-white tabular-nums">
                         ₦{(item.price * item.quantity).toLocaleString()}
                       </div>
                       <button 
-                        onClick={() => onRemove(item.productId, item.menuItemId, item.ticketTierId)}
+                        onClick={() => onRemove(item.productId, item.menuItemId, item.ticketTierId, item.isOneDollar)}
                         className="text-[11px] font-bold text-red-500 hover:text-red-600 transition-colors flex items-center gap-1 mt-1 cursor-pointer bg-transparent border-none ml-auto"
                       >
                         <Trash2 className="w-3 h-3" />
@@ -798,79 +913,145 @@ export default function CartPage({
                     <span className="text-xs font-bold">
                       {hasService ? "Home Delivery" : "Ship to Me"}
                     </span>
-                    <span className="text-[10px] text-slate-400 dark:text-zinc-500">Campus Courier</span>
+                    <span className="text-[10px] text-slate-400 dark:text-zinc-500">
+                      {allOneDollarItems ? "Vendor Arranged" : "Campus Courier"}
+                    </span>
                   </button>
                 )}
               </div>
             </div>
 
             {/* Payment Method Selector */}
-            <div className="space-y-3">
-              <label className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-zinc-400 block">
-                Payment Option
-              </label>
-              <div className="grid grid-cols-2 gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => setPaymentMethod("online")}
-                  className={cn(
-                    "flex flex-col items-center gap-1.5 p-3.5 rounded-2xl border transition-all cursor-pointer text-center",
-                    paymentMethod === "online"
-                      ? "border-[#ff6b00] bg-orange-50/40 dark:bg-orange-950/20 text-[#ff6b00] font-bold shadow-sm"
-                      : "border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400 hover:border-slate-300 dark:hover:border-zinc-700"
-                  )}
-                >
-                  <CreditCard className="w-4 h-4" />
-                  <span className="text-xs font-bold">Pay Online</span>
-                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">Escrow Protected</span>
-                </button>
-
-                {hasService ? (
+            {hasOneDollarItems ? (
+              <div className="space-y-3">
+                <label className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-zinc-400 block">
+                  One Dollar Payment Protection
+                </label>
+                <div className="grid grid-cols-2 gap-2.5">
                   <button
                     type="button"
-                    onClick={() => setPaymentMethod("physical")}
+                    onClick={() => {
+                      setPaymentMethod("online");
+                      setUseOneDollarEscrow(true);
+                    }}
                     className={cn(
                       "flex flex-col items-center gap-1.5 p-3.5 rounded-2xl border transition-all cursor-pointer text-center",
-                      paymentMethod === "physical"
+                      useOneDollarEscrow
                         ? "border-[#ff6b00] bg-orange-50/40 dark:bg-orange-950/20 text-[#ff6b00] font-bold shadow-sm"
                         : "border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400 hover:border-slate-300 dark:hover:border-zinc-700"
                     )}
                   >
-                    <Wallet className="w-4 h-4" />
-                    <span className="text-xs font-bold">Physical Pay</span>
-                    <span className="text-[10px] text-slate-400 dark:text-zinc-500">Upon Service</span>
+                    <ShieldCheck className="w-4 h-4" />
+                    <span className="text-xs font-bold">Escrow Protected</span>
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">Held Until Receipt</span>
                   </button>
-                ) : (
-                  !hasEvent && (
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPaymentMethod("online");
+                      setUseOneDollarEscrow(false);
+                    }}
+                    className={cn(
+                      "flex flex-col items-center gap-1.5 p-3.5 rounded-2xl border transition-all cursor-pointer text-center",
+                      !useOneDollarEscrow
+                        ? "border-[#ff6b00] bg-orange-50/40 dark:bg-orange-950/20 text-[#ff6b00] font-bold shadow-sm"
+                        : "border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400 hover:border-slate-300 dark:hover:border-zinc-700"
+                    )}
+                  >
+                    <CreditCard className="w-4 h-4" />
+                    <span className="text-xs font-bold">Direct Payment</span>
+                    <span className="text-[10px] text-slate-400 dark:text-zinc-500">No Escrow Hold</span>
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-500 dark:text-zinc-400 leading-relaxed">
+                  {useOneDollarEscrow
+                    ? "Your online Paystack payment is held securely in Shopiversity Escrow until you confirm delivery."
+                    : "Your online Paystack payment settles directly after existing platform commission without an escrow hold."}
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <label className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-zinc-400 block">
+                  Payment Option
+                </label>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod("online")}
+                    className={cn(
+                      "flex flex-col items-center gap-1.5 p-3.5 rounded-2xl border transition-all cursor-pointer text-center",
+                      paymentMethod === "online"
+                        ? "border-[#ff6b00] bg-orange-50/40 dark:bg-orange-950/20 text-[#ff6b00] font-bold shadow-sm"
+                        : "border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400 hover:border-slate-300 dark:hover:border-zinc-700"
+                    )}
+                  >
+                    <CreditCard className="w-4 h-4" />
+                    <span className="text-xs font-bold">Pay Online</span>
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">Escrow Protected</span>
+                  </button>
+
+                  {hasService ? (
                     <button
                       type="button"
-                      onClick={() => setPaymentMethod("pod")}
+                      onClick={() => setPaymentMethod("physical")}
                       className={cn(
                         "flex flex-col items-center gap-1.5 p-3.5 rounded-2xl border transition-all cursor-pointer text-center",
-                        paymentMethod === "pod"
+                        paymentMethod === "physical"
                           ? "border-[#ff6b00] bg-orange-50/40 dark:bg-orange-950/20 text-[#ff6b00] font-bold shadow-sm"
                           : "border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400 hover:border-slate-300 dark:hover:border-zinc-700"
                       )}
                     >
                       <Wallet className="w-4 h-4" />
-                      <span className="text-xs font-bold">Pay on Delivery</span>
-                      <span className="text-[10px] text-slate-400 dark:text-zinc-500">Cash / Transfer</span>
+                      <span className="text-xs font-bold">Physical Pay</span>
+                      <span className="text-[10px] text-slate-400 dark:text-zinc-500">Upon Service</span>
                     </button>
-                  )
-                )}
+                  ) : (
+                    !hasEvent && (
+                      <button
+                        type="button"
+                        onClick={() => setPaymentMethod("pod")}
+                        className={cn(
+                          "flex flex-col items-center gap-1.5 p-3.5 rounded-2xl border transition-all cursor-pointer text-center",
+                          paymentMethod === "pod"
+                            ? "border-[#ff6b00] bg-orange-50/40 dark:bg-orange-950/20 text-[#ff6b00] font-bold shadow-sm"
+                            : "border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400 hover:border-slate-300 dark:hover:border-zinc-700"
+                        )}
+                      >
+                        <Wallet className="w-4 h-4" />
+                        <span className="text-xs font-bold">Pay on Delivery</span>
+                        <span className="text-[10px] text-slate-400 dark:text-zinc-500">Cash / Transfer</span>
+                      </button>
+                    )
+                  )}
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Price Calculations */}
             <div className="space-y-3 pt-4 border-t border-slate-100 dark:border-zinc-800 text-sm">
               <div className="flex justify-between items-center text-slate-600 dark:text-zinc-400">
                 <span>Selected Items Subtotal</span>
-                <span className="font-bold text-slate-900 dark:text-white">
+                <span className="font-bold text-slate-900 dark:text-white tabular-nums">
                   ₦{subtotal.toLocaleString()}
                 </span>
               </div>
 
-              {deliveryType === "delivery" && (
+              {hasOneDollarItems ? (
+                <div className="p-3 bg-amber-50/70 dark:bg-amber-950/25 border border-amber-200/70 dark:border-amber-900/40 rounded-xl space-y-1">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs font-bold text-amber-900 dark:text-amber-200">
+                      One Dollar Delivery
+                    </span>
+                    <span className="text-[10px] font-bold text-amber-800 dark:text-amber-300 bg-amber-100 dark:bg-amber-900/50 px-2 py-0.5 rounded-full">
+                      Vendor-Managed
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-amber-800 dark:text-amber-300 leading-normal">
+                    Shopiversity does not manage delivery or assign campus logistics partners for One Dollar products. Delivery or pickup is arranged directly with the vendor.
+                  </p>
+                </div>
+              ) : deliveryType === "delivery" && (
                 <div className="p-3 bg-orange-50/60 dark:bg-orange-950/20 border border-orange-200/60 dark:border-orange-900/30 rounded-xl space-y-1">
                   <div className="flex justify-between items-center">
                     <span className="text-xs font-bold text-orange-900 dark:text-orange-200">
@@ -892,10 +1073,12 @@ export default function CartPage({
                     Total Due Now:
                   </span>
                   <span className="text-[10px] text-slate-400 font-medium">
-                    {paymentMethod === "online" ? "Online Escrow Transfer" : "Pay upon receipt"}
+                    {hasOneDollarItems
+                      ? (useOneDollarEscrow ? "Paystack Escrow Hold" : "Paystack Direct Payment")
+                      : (paymentMethod === "online" ? "Online Escrow Transfer" : "Pay upon receipt")}
                   </span>
                 </div>
-                <span className="text-2xl font-black text-[#ff6b00] tracking-tight">
+                <span className="text-2xl font-black text-[#ff6b00] tracking-tight tabular-nums">
                   ₦{total.toLocaleString()}
                 </span>
               </div>
@@ -905,7 +1088,11 @@ export default function CartPage({
             <div className="p-3 bg-slate-50 dark:bg-zinc-900/60 rounded-xl border border-slate-200/60 dark:border-zinc-800 text-left space-y-1">
               <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-700 dark:text-zinc-200">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                <span>Protected by 72-Hour Campus Escrow</span>
+                <span>
+                  {hasOneDollarItems && !useOneDollarEscrow
+                    ? "Standard Direct Paystack Checkout"
+                    : "Protected by 72-Hour Campus Escrow"}
+                </span>
               </div>
               <p className="text-[10px] text-slate-500 dark:text-zinc-400 leading-normal">
                 By completing this order, you agree to the{" "}
@@ -945,9 +1132,11 @@ export default function CartPage({
                 <>
                   <ShieldCheck className="w-4 h-4" />
                   <span>
-                    {paymentMethod === "online" 
-                      ? `Pay ₦${total.toLocaleString()} (Escrow Protected)` 
-                      : `Place Order (₦${total.toLocaleString()} POD)`}
+                    {hasOneDollarItems
+                      ? `Pay ₦${total.toLocaleString()} (${useOneDollarEscrow ? "Escrow Protected" : "Direct Payment"})`
+                      : (paymentMethod === "online" 
+                          ? `Pay ₦${total.toLocaleString()} (Escrow Protected)` 
+                          : `Place Order (₦${total.toLocaleString()} POD)`)}
                   </span>
                 </>
               )}

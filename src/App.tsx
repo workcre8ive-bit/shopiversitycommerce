@@ -16,7 +16,8 @@ import {
   deleteDoc,
   limit
 } from "firebase/firestore";
-import { Product, UserProfile, CartItem, Notification } from "./types";
+import { Product, UserProfile, CartItem, Notification, OneDollarListing } from "./types";
+import { useOneDollarRate, getCachedOneDollarListings, setCachedOneDollarListings, clampOneDollarUsd, computeOneDollarNgn, formatUsd } from "./lib/oneDollarRate";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage, isFirestoreQuotaError, FIRESTORE_QUOTA_EVENT, notifyFirestoreQuotaExceeded } from "./lib/firebase-errors";
 import {
   getCachedUserProfile,
@@ -63,6 +64,8 @@ import Logo from "./components/Logo";
 import StickmanLoader from "./components/StickmanLoader";
 import ShopiversityLoader from "./components/ShopiversityLoader";
 import Footer from "./components/Footer";
+import OneDollarBanner from "./components/OneDollarBanner";
+import OneDollarSection from "./components/OneDollarSection";
 import { cn } from "./lib/utils";
 import { 
   Search, 
@@ -101,7 +104,8 @@ import {
   Paintbrush,
   Truck,
   ShieldAlert,
-  UserPlus
+  UserPlus,
+  DollarSign
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -214,6 +218,8 @@ export default function App() {
   }, []);
 
   const [products, setProducts] = React.useState<Product[]>([]);
+  const [oneDollarListings, setOneDollarListings] = React.useState<OneDollarListing[]>(() => getCachedOneDollarListings());
+  const { rateInfo: oneDollarRate, loading: oneDollarRateLoading, error: oneDollarRateError, refreshRate: refreshOneDollarRate } = useOneDollarRate();
   const [sellers, setSellers] = React.useState<UserProfile[]>([]);
   const [existingUserIds, setExistingUserIds] = React.useState<Set<string>>(new Set());
   const [usersLoaded, setUsersLoaded] = React.useState(false);
@@ -324,6 +330,12 @@ export default function App() {
     menuItem?: any;
     ticketTier?: any;
     formResponses?: Record<string, string>;
+    previousTab: string;
+  } | null>(null);
+  const [pendingOneDollarListing, setPendingOneDollarListing] = React.useState<OneDollarListing | null>(null);
+  const [pendingOneDollarCartItem, setPendingOneDollarCartItem] = React.useState<{
+    listing: OneDollarListing;
+    goToCartImmediately?: boolean;
     previousTab: string;
   } | null>(null);
   const [notifications, setNotifications] = React.useState<Notification[]>([]);
@@ -1298,6 +1310,21 @@ export default function App() {
       handleFirestoreError(error, OperationType.LIST, "products");
     });
 
+    const oneDollarQ = query(collection(db, "oneDollarListings"), where("status", "==", "approved"), limit(24));
+    const unsubscribeOneDollar = onSnapshot(oneDollarQ, (snapshot) => {
+      const docs = snapshot.docs
+        .map(d => ({ id: d.id, ...d.data() } as OneDollarListing))
+        .filter(item => item.status === "approved" && item.isActive && item.stock > 0)
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      setOneDollarListings(docs);
+      setCachedOneDollarListings(docs);
+    }, (error) => {
+      if (isFirestoreQuotaError(error)) {
+        return;
+      }
+      console.warn("One Dollar listings subscription notice:", error);
+    });
+
     // Fetch sellers once with a 15-minute cache instead of opening a real-time onSnapshot listener on the entire users collection
     // (Subscribing to all users on every page load was rapidly exhausting the 50,000 daily free-tier Firestore reads)
     let isUnmounted = false;
@@ -1384,6 +1411,7 @@ export default function App() {
       if (unsubscribeProfile) unsubscribeProfile();
       if (unsubscribeNotifs) unsubscribeNotifs();
       unsubscribeProducts();
+      unsubscribeOneDollar();
       window.removeEventListener('keydown', handleAdminKeyCombo);
     };
   }, []);
@@ -1479,6 +1507,95 @@ export default function App() {
       setPendingCartItem(null);
     }
   }, [currentUser, pendingCartItem]);
+
+  React.useEffect(() => {
+    if (currentUser && pendingOneDollarCartItem) {
+      const { listing, goToCartImmediately, previousTab } = pendingOneDollarCartItem;
+      void handleAddOneDollarToCart(listing, goToCartImmediately);
+      if (!goToCartImmediately) {
+        setActiveTab(previousTab || "one-dollar");
+      }
+      setPendingOneDollarCartItem(null);
+    }
+  }, [currentUser, pendingOneDollarCartItem]);
+
+  const handleAddOneDollarToCart = async (listing: OneDollarListing, goToCartImmediately = true) => {
+    if (!currentUser) {
+      setPendingOneDollarCartItem({
+        listing,
+        goToCartImmediately,
+        previousTab: activeTab
+      });
+      setAuthMode("signup");
+      setActiveTab("signup");
+      return;
+    }
+
+    if (currentUser.uid === listing.sellerId) {
+      alert("You cannot purchase your own One Dollar listing.");
+      return;
+    }
+
+    if (listing.stock <= 0) {
+      alert("This One Dollar item is currently out of stock.");
+      return;
+    }
+
+    if (!oneDollarRate || !oneDollarRate.oneDollarNgnPrice) {
+      void refreshOneDollarRate();
+      alert("Live USD to NGN conversion rate is still loading. Please try again in a moment.");
+      return;
+    }
+
+    const itemUsd = clampOneDollarUsd(listing.usdPrice);
+    const itemNgn = computeOneDollarNgn(itemUsd, oneDollarRate) || oneDollarRate.oneDollarNgnPrice;
+
+    setCart((prev) => {
+      const existing = prev.find((item) => item.isOneDollar && item.productId === listing.productId);
+      if (existing) {
+        const nextQty = Math.min(listing.stock, existing.quantity + 1);
+        return prev.map((item) =>
+          (item.isOneDollar && item.productId === listing.productId)
+            ? {
+                ...item,
+                quantity: nextQty,
+                price: itemNgn,
+                usdPrice: itemUsd,
+                exchangeRateUsdToNgn: oneDollarRate.rate,
+                exchangeRateSource: oneDollarRate.source,
+                exchangeRateUpdatedAt: oneDollarRate.updatedAt,
+                addedAt: Date.now()
+              }
+            : item
+        );
+      }
+      return [
+        ...prev,
+        {
+          productId: listing.productId,
+          name: listing.productName,
+          price: itemNgn,
+          quantity: 1,
+          sellerId: listing.sellerId,
+          imageUrl: listing.imageUrl,
+          deliveryOptions: { delivery: true, pickup: true },
+          type: "good",
+          addedAt: Date.now(),
+          isOneDollar: true,
+          oneDollarListingId: listing.id,
+          usdPrice: itemUsd,
+          exchangeRateUsdToNgn: oneDollarRate.rate,
+          exchangeRateSource: oneDollarRate.source,
+          exchangeRateUpdatedAt: oneDollarRate.updatedAt
+        }
+      ];
+    });
+
+    if (goToCartImmediately) {
+      setActiveTab("cart");
+    }
+    triggerDynamicIsland(`Added ${formatUsd(itemUsd)} deal to Cart! 🛒`);
+  };
 
   const handleAddToCart = async (product: Product, menuItem?: any, ticketTier?: any, formResponses?: Record<string, string>) => {
     if (!currentUser) {
@@ -1802,7 +1919,7 @@ export default function App() {
   }
 
   // Determine if we should show AuthPage based on selected tab for non-logged users
-  const restrictedTabs = ["settings", "orders", "notifications", "messages", "history", "dashboard", "analytics", "add-product", "products", "admin", "auth", "signup"];
+  const restrictedTabs = ["settings", "orders", "notifications", "messages", "history", "dashboard", "analytics", "add-product", "products", "seller-one-dollar", "admin", "auth", "signup"];
   const isTabRestricted = restrictedTabs.includes(activeTab);
   
   const cleanCurrentEmail = (currentUser?.email || "").trim().toLowerCase();
@@ -1900,9 +2017,35 @@ export default function App() {
         {activeTab === "messages" && (
           <span className="hidden sm:inline-block text-xs font-bold text-slate-700 dark:text-slate-300 font-sans">Inbox Chats</span>
         )}
+        {activeTab === "one-dollar" && (
+          <span className="hidden sm:inline-block text-xs font-bold text-[#ff6b00] font-sans">One Dollar ($1)</span>
+        )}
 
-        {/* Right actions: Theme toggle, Cart / Sign Up, and Sign Out */}
+        {/* Right actions: One Dollar, Theme toggle, Cart / Sign Up, and Sign Out */}
         <div className="flex items-center gap-1 sm:gap-2.5 shrink-0">
+          {currentUser?.state !== "Logistics Partner" && currentUser?.role !== "logistics" && (
+            <button
+              id="header-one-dollar-btn"
+              type="button"
+              onClick={() => {
+                setPendingOneDollarListing(null);
+                setViewingProduct(null);
+                setViewingSellerId(null);
+                setActiveTab("one-dollar");
+              }}
+              className={cn(
+                "min-h-[32px] sm:min-h-[36px] px-2 sm:px-3 py-1 rounded-xl text-[11px] sm:text-xs font-black transition-all cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 border",
+                activeTab === "one-dollar"
+                  ? "bg-[#ff6b00] text-white border-[#ff6b00] shadow-sm shadow-orange-500/20"
+                  : "bg-orange-50/90 hover:bg-orange-100 dark:bg-orange-950/30 dark:hover:bg-orange-950/50 text-[#ff6b00] border-orange-200/80 dark:border-orange-800/50"
+              )}
+              title="Browse One Dollar ($1) Marketplace"
+            >
+              <DollarSign className="w-3.5 h-3.5 shrink-0" />
+              <span className="hidden min-[380px]:inline">One Dollar</span>
+              <span className="min-[380px]:hidden">$1</span>
+            </button>
+          )}
           {(!currentUser || !auth.currentUser) ? (
             <div className="flex items-center gap-1 sm:gap-2 shrink-0">
               <button 
@@ -2268,6 +2411,21 @@ export default function App() {
                       </div>
                     </div>
 
+                    {/* One Dollar ($1 USD) Special Shopping Banner */}
+                    <OneDollarBanner
+                      previewListings={oneDollarListings}
+                      rateInfo={oneDollarRate}
+                      rateLoading={oneDollarRateLoading}
+                      onExplore={() => {
+                        setPendingOneDollarListing(null);
+                        setActiveTab("one-dollar");
+                      }}
+                      onSelectListing={(listing) => {
+                        setPendingOneDollarListing(listing);
+                        setActiveTab("one-dollar");
+                      }}
+                    />
+
                     <div className="px-4 max-w-[1600px] mx-auto mt-4 space-y-6">
                   <div id="product-grid" className="pt-2">
                     <motion.div 
@@ -2365,6 +2523,33 @@ export default function App() {
               </>
             )}
           </motion.div>
+            ) : activeTab === "one-dollar" ? (
+              <motion.div
+                key="one-dollar-tab"
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -12 }}
+              >
+                <OneDollarSection
+                  currentUser={currentUser}
+                  rateInfo={oneDollarRate}
+                  rateLoading={oneDollarRateLoading}
+                  rateError={oneDollarRateError}
+                  onRefreshRate={refreshOneDollarRate}
+                  onAddOneDollarToCart={handleAddOneDollarToCart}
+                  onViewSellerStore={(sellerId) => {
+                    setViewingSellerId(sellerId);
+                    setActiveTab("market");
+                  }}
+                  onBack={() => {
+                    setPendingOneDollarListing(null);
+                    setActiveTab("market");
+                  }}
+                  initialSelectedListing={pendingOneDollarListing}
+                  onClearInitialSelectedListing={() => setPendingOneDollarListing(null)}
+                  sellersMap={sellersMap}
+                />
+              </motion.div>
             ) : activeTab === "search" ? (
               <motion.div
                 key="search-tab"
@@ -2685,7 +2870,7 @@ export default function App() {
                   initialSection={activeTab === "wishlist" ? "wishlist" : undefined}
                 />
               </motion.div>
-            ) : (activeTab === "dashboard" || activeTab === "overview" || activeTab === "analytics" || activeTab === "add-product" || activeTab === "my-products" || (activeTab === "orders" && (activeRole === "seller" || currentUser?.role === "seller")) || activeTab === "storefront" || activeTab === "payouts") && (activeRole === "seller" || currentUser?.role === "seller" || currentUser?.activeRole === "seller") ? (
+            ) : (activeTab === "dashboard" || activeTab === "overview" || activeTab === "analytics" || activeTab === "add-product" || activeTab === "my-products" || activeTab === "seller-one-dollar" || (activeTab === "orders" && (activeRole === "seller" || currentUser?.role === "seller")) || activeTab === "storefront" || activeTab === "payouts") && (activeRole === "seller" || currentUser?.role === "seller" || currentUser?.activeRole === "seller") ? (
               <motion.div
                 key="dashboard"
                 initial={{ opacity: 0, x: 20 }}
@@ -2700,6 +2885,7 @@ export default function App() {
                     activeTab === "analytics" ? "analytics" :
                     activeTab === "add-product" ? "add-product" : 
                     activeTab === "my-products" ? "my-products" : 
+                    activeTab === "seller-one-dollar" ? "one-dollar" :
                     activeTab === "orders" ? "orders" : 
                     activeTab === "storefront" ? "storefront" :
                     activeTab === "payouts" ? "payouts" :
@@ -2880,16 +3066,16 @@ export default function App() {
               >
                 <CartPage
                   cart={cart}
-                  onUpdateQuantity={(productId, delta, menuItemId, ticketTierId) => {
+                  onUpdateQuantity={(productId, delta, menuItemId, ticketTierId, isOneDollar) => {
                     setCart(prev => prev.map(item => 
-                      (item.productId === productId && item.menuItemId === menuItemId && item.ticketTierId === ticketTierId)
+                      (item.productId === productId && item.menuItemId === menuItemId && item.ticketTierId === ticketTierId && Boolean(item.isOneDollar) === Boolean(isOneDollar))
                         ? { ...item, quantity: Math.max(0, item.quantity + delta) } 
                         : item
                     ).filter(item => item.quantity > 0));
                   }}
-                  onRemove={(productId, menuItemId, ticketTierId) => 
+                  onRemove={(productId, menuItemId, ticketTierId, isOneDollar) => 
                     setCart(prev => prev.filter(item => 
-                      !(item.productId === productId && item.menuItemId === menuItemId && item.ticketTierId === ticketTierId)
+                      !(item.productId === productId && item.menuItemId === menuItemId && item.ticketTierId === ticketTierId && Boolean(item.isOneDollar) === Boolean(isOneDollar))
                     ))
                   }
                   onClear={() => setCart([])}
