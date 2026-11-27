@@ -1,12 +1,11 @@
 import React from "react";
-import { Product, Review, UserProfile } from "../types";
+import { CartItem, Product, Review, UserProfile } from "../types";
 import { X, ArrowLeft, Star, ShoppingCart, Truck, MapPin, Send, MessageSquare, Clock, User as UserIcon, ShieldCheck, ShieldAlert, Shield, CheckCircle, CheckCircle2, ShoppingBag, Sparkles, Layout, Minus, Plus, Hash, Trash2, RotateCcw, CalendarCheck, Store, ExternalLink, Loader2, Edit2, Tag, ChevronLeft, ChevronRight, Maximize2, Share2, Heart, Phone, Mail, Instagram, Globe, MessageCircle, AtSign, Copy, Check } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { auth, db } from "../firebase";
 import { collection, query, where, orderBy, onSnapshot, addDoc, doc, getDoc, setDoc, getDocs, updateDoc, deleteDoc, limit } from "firebase/firestore";
-import { usePaystackPayment } from "../hooks/usePaystackPayment";
-import { getSyncPaystackPublicKey } from "../utils/paystackConfig";
 import { toggleWishlist, isProductInWishlist, WISHLIST_UPDATED_EVENT } from "../utils/wishlist";
+import EscrowCheckoutModal, { EscrowSessionDetails } from "./EscrowCheckoutModal";
 
 import { cn, generateSixDigitPin } from "../lib/utils";
 import {
@@ -16,6 +15,7 @@ import {
   normalizeWhatsAppUrl,
   normalizeTikTokUrl
 } from "../lib/publicContact";
+import { getInCartQuantity, resolveAvailableStockForProduct } from "../lib/cartStock";
 import ReportModal from "./ReportModal";
 import ReviewSuccessModal from "./ReviewSuccessModal";
 import { AlertTriangle } from "lucide-react";
@@ -31,6 +31,7 @@ interface ProductDetailProps {
   onAddToCart: (product: Product, menuItem?: any, ticketTier?: any, formResponses?: Record<string, string>) => void;
   currentUser: UserProfile | null;
   isPageMode?: boolean;
+  cart?: CartItem[];
 }
 
 // Helper Component for Menu Item interaction with quantities
@@ -39,16 +40,22 @@ interface MenuItemInteractionProps {
   item: any;
   product: Product;
   quantity: number;
+  maxAddable?: number;
   onQuantityChange: (id: string, qty: number) => void;
   isOwner: boolean;
 }
 
-function MenuItemInteraction({ item, product, quantity, onQuantityChange, isOwner }: MenuItemInteractionProps) {
+function MenuItemInteraction({ item, product, quantity, maxAddable, onQuantityChange, isOwner }: MenuItemInteractionProps) {
   const isSelected = quantity > 0;
+  const isAtMax = maxAddable !== undefined && quantity >= maxAddable;
   
   return (
     <div 
-      onClick={() => !isOwner && onQuantityChange(item.id || item.name, isSelected ? 0 : 1)}
+      onClick={() => {
+        if (isOwner) return;
+        if (!isSelected && maxAddable !== undefined && maxAddable <= 0) return;
+        onQuantityChange(item.id || item.name, isSelected ? 0 : 1);
+      }}
       className={cn(
         "flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-2xl border transition-all cursor-pointer group",
         isSelected 
@@ -87,6 +94,7 @@ function MenuItemInteraction({ item, product, quantity, onQuantityChange, isOwne
         {!isOwner && (
           <div className="flex items-center bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 p-1 shadow-sm">
             <button 
+              type="button"
               onClick={() => onQuantityChange(item.id || item.name, Math.max(0, quantity - 1))}
               className="w-8 h-8 flex items-center justify-center text-slate-500 hover:text-indigo-500 transition-colors"
             >
@@ -94,8 +102,16 @@ function MenuItemInteraction({ item, product, quantity, onQuantityChange, isOwne
             </button>
             <span className="w-8 text-center text-xs font-black text-slate-900 dark:text-white">{quantity}</span>
             <button 
-              onClick={() => onQuantityChange(item.id || item.name, quantity + 1)}
-              className="w-8 h-8 flex items-center justify-center text-slate-500 hover:text-indigo-500 transition-colors"
+              type="button"
+              disabled={isAtMax}
+              onClick={() => onQuantityChange(item.id || item.name, maxAddable !== undefined ? Math.min(maxAddable, quantity + 1) : quantity + 1)}
+              className={cn(
+                "w-8 h-8 flex items-center justify-center transition-colors",
+                isAtMax
+                  ? "text-slate-300 dark:text-zinc-600 cursor-not-allowed opacity-40"
+                  : "text-slate-500 hover:text-indigo-500"
+              )}
+              title={isAtMax ? "Inventory limit reached" : "Increase quantity"}
             >
               <Plus className="w-4 h-4" />
             </button>
@@ -106,7 +122,7 @@ function MenuItemInteraction({ item, product, quantity, onQuantityChange, isOwne
   );
 }
 
-export default function ProductDetail({ product, isOpen, onClose, onAddToCart, currentUser, isPageMode = false }: ProductDetailProps) {
+export default function ProductDetail({ product, isOpen, onClose, onAddToCart, currentUser, isPageMode = false, cart }: ProductDetailProps) {
   const [reviews, setReviews] = React.useState<Review[]>([]);
   const [newReview, setNewReview] = React.useState("");
   const [rating, setRating] = React.useState(5);
@@ -118,6 +134,9 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
   const [sellerProfile, setSellerProfile] = React.useState<UserProfile | null>(null);
   const [isReportModalOpen, setIsReportModalOpen] = React.useState(false);
   const [isReviewSuccessOpen, setIsReviewSuccessOpen] = React.useState(false);
+  const [escrowSession, setEscrowSession] = React.useState<EscrowSessionDetails | null>(null);
+  const [isEscrowModalOpen, setIsEscrowModalOpen] = React.useState(false);
+  const [ticketError, setTicketError] = React.useState<string | null>(null);
   const [submittedReviewInfo, setSubmittedReviewInfo] = React.useState<{ rating: number; comment: string } | null>(null);
   const [activeImageIndex, setActiveImageIndex] = React.useState(0);
   const [selectedTier, setSelectedTier] = React.useState<any>(null);
@@ -364,26 +383,32 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
     }
   };
 
-  const ticketPrice = selectedTier ? Number(selectedTier.price) : 0;
-  const paystackConfig = {
-    reference: (new Date()).getTime().toString(),
-    email: currentUser?.email || auth.currentUser?.email || "guest@campus.com",
-    amount: Math.round(ticketPrice * 100),
-    publicKey: getSyncPaystackPublicKey(),
-    metadata: {
-      custom_fields: []
-    }
-  };
-
-  const initializePaystackRegistration = usePaystackPayment(paystackConfig);
-
-  const handleDirectRegistration = async (tier: any, responses: Record<string, string>) => {
+  const handleDirectRegistration = async (
+    tier: any,
+    responses: Record<string, string>,
+    isPaidEscrowEvent = false
+  ) => {
+    setTicketError(null);
     if (!auth.currentUser) {
-      alert("Please sign in or register to join.");
+      setTicketError("Please sign in or register to join.");
       return;
     }
     setIsRegistering(true);
     try {
+      const totalPayablePrice = tier ? Number(tier.price) : 0;
+      const requiresEscrowPayment = isPaidEscrowEvent && totalPayablePrice > 0;
+      if (requiresEscrowPayment) {
+        const cfgRes = await fetch("/api/payments/escrow/config-status");
+        if (cfgRes.ok) {
+          const cfgData = await cfgRes.json();
+          if (!cfgData.configured) {
+            throw new Error(
+              "EscrowPay Sandbox API key is not configured on the server yet (missing ESCROWPAY_TEST_SECRET_KEY)."
+            );
+          }
+        }
+      }
+
       const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
       let randOrd = "";
       let randPrd = "";
@@ -406,13 +431,11 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
         console.error("Error fetching seller profile name:", err);
       }
 
-      const totalPayablePrice = tier ? Number(tier.price) : 0;
       const commissionAmount = totalPayablePrice * 0.02; // 2% for events
       const sellerEarnings = totalPayablePrice - commissionAmount;
       const deliveryOtp = generateSixDigitPin();
       const sellerHandoverPin = generateSixDigitPin();
-
-      const orderData = {
+      const orderData: any = {
         uniqueOrderId,
         uniqueProductId,
         deliveryOtp,
@@ -434,12 +457,33 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
         sellerEarnings,
         deliveryType: "pickup",
         paymentMethod: "online",
-        paymentStatus: "paid",
-        status: "acquired",
+        paymentStatus: requiresEscrowPayment ? "pending" : "paid",
+        status: requiresEscrowPayment ? "awaiting_payment" : "acquired",
         createdAt: new Date().toISOString(),
         deliveryAddress: "",
         ...(tier ? { ticketTierId: tier.id, ticketTierName: tier.name } : {}),
-        formResponses: responses || {}
+        formResponses: responses || {},
+        ...(requiresEscrowPayment ? {
+          paymentReceipt: {
+            receiptNumber: `ESC-EVT-${Date.now().toString().slice(-6)}`,
+            orderId: "",
+            transactionId: "",
+            paymentReference: "",
+            paymentMethod: "online",
+            provider: "escrowpay",
+            amountPaid: totalPayablePrice,
+            currency: "NGN",
+            platformFee: commissionAmount,
+            buyerName: currentUser?.displayName || "Anonymous",
+            productName: product.name,
+            quantity: 1,
+            deliveryType: "pickup",
+            verificationTimestamp: new Date().toISOString(),
+            escrowStatus: "not_applicable",
+            status: "processing",
+            verifiedStatus: "processing"
+          }
+        } : {})
       };
 
       const orderRef = await addDoc(collection(db, "orders"), orderData);
@@ -462,6 +506,73 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
         timestamp: new Date().toISOString()
       });
 
+      if (requiresEscrowPayment) {
+        const idToken = await auth.currentUser.getIdToken(true);
+        const createRes = await fetch("/api/payments/escrow/create", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(idToken ? { Authorization: `Bearer ${idToken}` } : {})
+          },
+          body: JSON.stringify({
+            orderId: orderRef.id,
+            uniqueOrderId,
+            amountNgn: totalPayablePrice,
+            description: `${product.name}${tier?.name ? ` (${tier.name})` : ""}`,
+            sellerId: product.sellerId,
+            sellerEmail: dbSellerEmail,
+            sellerName: dbSellerName,
+            buyerName: currentUser?.displayName || "Anonymous",
+            buyerPhone: currentUser?.phoneNumber || "",
+            commissionRate: 0.02,
+            returnOrigin: window.location.origin
+          })
+        });
+        const createData = await createRes.json().catch(() => ({}));
+        if (!createRes.ok || !createData.success) {
+          throw new Error(createData.error || "Unable to initialize EscrowPay ticket checkout.");
+        }
+
+        const nowIso = new Date().toISOString();
+        await updateDoc(doc(db, "orders", orderRef.id), {
+          paymentReference: createData.reference,
+          paymentStatus: "pending",
+          paymentReceipt: {
+            ...orderData.paymentReceipt,
+            orderId: orderRef.id,
+            transactionId: createData.transactionId,
+            paymentReference: createData.reference,
+            environment: createData.environment,
+            isTestTransaction: createData.isTestTransaction,
+            escrowId: createData.transactionId,
+            ...(createData.checkoutSessionId ? { checkoutSessionId: createData.checkoutSessionId } : {}),
+            ...(createData.checkoutUrl ? { checkoutUrl: createData.checkoutUrl } : {}),
+            ...(createData.virtualAccount ? { virtualAccount: createData.virtualAccount } : {}),
+            verificationTimestamp: nowIso
+          },
+          updatedAt: nowIso
+        }).catch((updErr) => {
+          console.warn("Non-fatal ProductDetail paymentReceipt update warning:", updErr);
+        });
+
+        setEscrowSession({
+          orderId: orderRef.id,
+          uniqueOrderId,
+          transactionId: createData.transactionId,
+          reference: createData.reference,
+          environment: createData.environment,
+          isTestTransaction: createData.isTestTransaction,
+          amountNgn: totalPayablePrice,
+          currency: "NGN",
+          checkoutUrl: createData.checkoutUrl,
+          checkoutSessionId: createData.checkoutSessionId,
+          virtualAccount: createData.virtualAccount,
+          returnUrl: createData.returnUrl
+        });
+        setIsEscrowModalOpen(true);
+        return;
+      }
+
       void notifyOrderPlaced({
         orderId: orderRef.id,
         order: { ...orderData, campus: currentUser?.campus || "Campus" },
@@ -469,34 +580,34 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
         sellerEmail: dbSellerEmail
       });
 
-      alert("Registration Successful! You have successfully booked your ticket. Check your profile or tickets to view.");
       onClose();
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error in registration:", error);
-      alert("Registration failed. Please try again.");
+      setTicketError(error?.message || "Registration failed. Please try again.");
     } finally {
       setIsRegistering(false);
     }
   };
 
   const handleRegistrationClick = () => {
+    setTicketError(null);
     if (product.eventDetails?.isPaid && !selectedTier) {
-      alert("Please select a ticket tier.");
+      setTicketError("Please select a ticket tier.");
       return;
     }
     const missingRequired = !product.eventDetails?.googleFormUrl && product.eventDetails?.formFields?.find(f => f.required && !formResponses[f.id]);
     if (missingRequired) {
-      alert(`Please fill in the required field: ${missingRequired.label}`);
+      setTicketError(`Please fill in the required field: ${missingRequired.label}`);
       return;
     }
 
     if (!auth.currentUser) {
-      alert("Please sign in or register to book tickets.");
+      setTicketError("Please sign in or register to book tickets.");
       return;
     }
 
     if (auth.currentUser && !auth.currentUser.emailVerified) {
-      alert("Email Verification Required: Please verify your email address before booking tickets or placing orders. Check your inbox or click 'Resend Verification Email' in the top banner.");
+      setTicketError("Email Verification Required: Please verify your email address before booking tickets or placing orders. Check your inbox or click 'Resend Verification Email' in the top banner.");
       return;
     }
 
@@ -505,19 +616,9 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
       : formResponses;
 
     if (product.eventDetails?.isPaid) {
-      // Direct payment checkout before registering
-      initializePaystackRegistration({
-        onSuccess: (reference: any) => {
-          handleDirectRegistration(selectedTier, finalResponses);
-        },
-        onClose: () => {
-          alert("Payment cancelled.");
-        }
-      });
+      handleDirectRegistration(selectedTier, finalResponses, true);
     } else {
-      // Direct registration as requested since it is free:
-      // "but if it's fully free registration then it just to register and for payment it's just direct pay no pick up"
-      handleDirectRegistration(null, finalResponses);
+      handleDirectRegistration(null, finalResponses, false);
     }
   };
 
@@ -1506,16 +1607,26 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                       </div>
                     </div>
                       <div className="grid gap-3">
-                        {product.menuItems.map((item, idx) => (
-                          <MenuItemInteraction 
-                            key={item.id ? `${item.id}-${idx}` : `menu-${idx}`} 
-                            item={item} 
-                            product={product} 
-                            quantity={menuQuantities[item.id || item.name] || 0}
-                            onQuantityChange={handleMenuQuantityChange}
-                            isOwner={currentUser?.uid === product.sellerId}
-                          />
-                        ))}
+                        {product.menuItems.map((item, idx) => {
+                          const menuStock = resolveAvailableStockForProduct(product, item);
+                          const inCartMenuQty = getInCartQuantity(cart, {
+                            productId: product.id,
+                            menuItemId: item.id || item.name,
+                            isOneDollar: false
+                          });
+                          const maxAddable = menuStock !== undefined ? Math.max(0, menuStock - inCartMenuQty) : undefined;
+                          return (
+                            <MenuItemInteraction 
+                              key={item.id ? `${item.id}-${idx}` : `menu-${idx}`} 
+                              item={item} 
+                              product={product} 
+                              quantity={menuQuantities[item.id || item.name] || 0}
+                              maxAddable={maxAddable}
+                              onQuantityChange={handleMenuQuantityChange}
+                              isOwner={currentUser?.uid === product.sellerId}
+                            />
+                          );
+                        })}
                       </div>
 
                       {/* Bulk Add for Menu Items */}
@@ -1802,18 +1913,31 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                         </button>
                       </div>
                     ) : (
-                      <button
-                        disabled={isRegistering}
-                        onClick={handleRegistrationClick}
-                        className="w-full h-16 bg-brand-gradient text-white rounded-2xl font-bold text-lg shadow-lg shadow-purple-200 dark:shadow-purple-900/20 hover:shadow-purple-300 transition-all active:scale-[0.98] flex items-center justify-center gap-3 disabled:opacity-50"
-                      >
-                        {isRegistering ? (
-                          <Loader2 className="w-6 h-6 animate-spin" />
-                        ) : (
-                          <Sparkles className="w-6 h-6" />
+                      <div className="space-y-3">
+                        {ticketError && (
+                          <div
+                            role="alert"
+                            className="p-3.5 rounded-2xl bg-red-50 dark:bg-red-950/35 border border-red-200 dark:border-red-900/50 flex items-start gap-2.5 text-left"
+                          >
+                            <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+                            <p className="text-xs font-semibold text-red-800 dark:text-red-200 leading-relaxed">
+                              {ticketError}
+                            </p>
+                          </div>
                         )}
-                        {isRegistering ? "Processing RSVP..." : (product.eventDetails?.googleFormUrl ? "Confirm & Book RSVP" : (product.eventDetails?.isPaid ? "Buy Tickets" : "Register Now"))}
-                      </button>
+                        <button
+                          disabled={isRegistering}
+                          onClick={handleRegistrationClick}
+                          className="w-full h-16 bg-brand-gradient text-white rounded-2xl font-bold text-lg shadow-lg shadow-purple-200 dark:shadow-purple-900/20 hover:shadow-purple-300 transition-all active:scale-[0.98] flex items-center justify-center gap-3 disabled:opacity-50"
+                        >
+                          {isRegistering ? (
+                            <Loader2 className="w-6 h-6 animate-spin" />
+                          ) : (
+                            <Sparkles className="w-6 h-6" />
+                          )}
+                          {isRegistering ? "Processing RSVP..." : (product.eventDetails?.googleFormUrl ? "Confirm & Book RSVP" : (product.eventDetails?.isPaid ? "Buy Tickets" : "Register Now"))}
+                        </button>
+                      </div>
                     )}
                   </div>
                 ) : (
@@ -2282,26 +2406,38 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                         ) : (
                           currentUser?.uid === product.sellerId ? (
                             renderSellerControls()
-                          ) : (
-                            <button
-                              onClick={() => {
-                                onAddToCart(product);
-                                onClose();
-                              }}
-                              disabled={product.type === "good" && (product.stock === 0 || product.status === "inactive")}
-                              className={cn(
-                                "w-full h-16 rounded-2xl font-bold text-lg transition-all active:scale-[0.98] flex items-center justify-center gap-3 mb-10 shadow-lg",
-                                (product.type === "good" && (product.stock === 0 || product.status === "inactive"))
-                                  ? "bg-slate-300 dark:bg-zinc-800 text-slate-500 dark:text-zinc-500 cursor-not-allowed shadow-none"
-                                  : "bg-brand-gradient text-white shadow-indigo-200 dark:shadow-indigo-900/20 hover:shadow-indigo-300"
-                              )}
-                            >
-                              <ShoppingCart className="w-6 h-6" />
-                              {(product.type === "good" && (product.stock === 0 || product.status === "inactive"))
-                                ? "Inactive to Buy (Out of Stock)"
-                                : "Add to Cart"}
-                            </button>
-                          )
+                          ) : (() => {
+                            const availableStock = resolveAvailableStockForProduct(product);
+                            const inCartQty = getInCartQuantity(cart, { productId: product.id, isOneDollar: false });
+                            const isOutOfStock = product.type === "good" && (product.stock === 0 || product.status === "inactive");
+                            const isAtCartLimit = availableStock !== undefined && availableStock > 0 && inCartQty >= availableStock;
+                            const isDisabled = isOutOfStock || isAtCartLimit;
+
+                            return (
+                              <button
+                                onClick={() => {
+                                  if (isDisabled) return;
+                                  onAddToCart(product);
+                                  onClose();
+                                }}
+                                disabled={isDisabled}
+                                title={isAtCartLimit ? `Inventory limit reached (${availableStock} in cart)` : undefined}
+                                className={cn(
+                                  "w-full h-16 rounded-2xl font-bold text-lg transition-all active:scale-[0.98] flex items-center justify-center gap-3 mb-10 shadow-lg",
+                                  isDisabled
+                                    ? "bg-slate-200 dark:bg-zinc-800 text-slate-400 dark:text-zinc-500 cursor-not-allowed shadow-none"
+                                    : "bg-brand-gradient text-white shadow-indigo-200 dark:shadow-indigo-900/20 hover:shadow-indigo-300"
+                                )}
+                              >
+                                <ShoppingCart className="w-6 h-6" />
+                                {isOutOfStock
+                                  ? "Inactive to Buy (Out of Stock)"
+                                  : isAtCartLimit
+                                  ? `Max Stock in Cart (${inCartQty}/${availableStock})`
+                                  : "Add to Cart"}
+                              </button>
+                            );
+                          })()
                         )
                       )
                     )
@@ -2537,6 +2673,25 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
           </div>
         )}
       </AnimatePresence>
+
+      <EscrowCheckoutModal
+        isOpen={isEscrowModalOpen}
+        session={escrowSession}
+        onClose={() => {
+          setIsEscrowModalOpen(false);
+          onClose();
+        }}
+        onProceedToReturnCheck={(returnUrl) => {
+          setIsEscrowModalOpen(false);
+          try {
+            const parsed = new URL(returnUrl, window.location.origin);
+            window.history.pushState({}, "", `${parsed.pathname}${parsed.search}`);
+            window.dispatchEvent(new PopStateEvent("popstate"));
+          } catch {
+            window.location.href = returnUrl;
+          }
+        }}
+      />
     </ContainerWrapper>
   );
 }

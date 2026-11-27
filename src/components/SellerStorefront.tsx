@@ -10,7 +10,7 @@ import {
   limit
 } from "firebase/firestore";
 import { isFirestoreQuotaError, notifyFirestoreQuotaExceeded } from "../lib/firebase-errors";
-import { Product, UserProfile, StorefrontSettings } from "../types";
+import { CartItem, Product, UserProfile, StorefrontSettings } from "../types";
 import { 
   Store, 
   Package, 
@@ -47,9 +47,10 @@ interface SellerStorefrontProps {
   previewSettings?: StorefrontSettings | null;
   onBack: () => void;
   onAddToCart: (product: Product, menuItem?: any) => void;
+  cart?: CartItem[];
 }
 
-export default function SellerStorefront({ sellerId, currentUser, previewSettings, onBack, onAddToCart }: SellerStorefrontProps) {
+export default function SellerStorefront({ sellerId, currentUser, previewSettings, onBack, onAddToCart, cart }: SellerStorefrontProps) {
   const [seller, setSeller] = React.useState<UserProfile | null>(null);
   const [products, setProducts] = React.useState<Product[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -506,6 +507,7 @@ export default function SellerStorefront({ sellerId, currentUser, previewSetting
                     isOwner={currentUser?.uid === product.sellerId}
                     currentUser={currentUser}
                     customColor={colors.primary}
+                    cart={cart}
                   />
                 </motion.div>
               ))

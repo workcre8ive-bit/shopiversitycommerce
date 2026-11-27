@@ -1,5 +1,5 @@
 import React from "react";
-import { CartItem, UserProfile } from "../types";
+import { CartItem, OneDollarListing, Product, UserProfile } from "../types";
 import { X, ShoppingBag, Trash2, Plus, Minus, Send, CheckCircle, Truck, Package as PackageIcon, CreditCard, Wallet, ChevronRight, Loader2, Building, ShieldCheck, Clock } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { auth, db } from "../firebase";
@@ -9,19 +9,22 @@ import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
 import { usePaystackPayment } from "../hooks/usePaystackPayment";
 import { getPaystackPublicKey, getSyncPaystackPublicKey } from "../utils/paystackConfig";
 import { notifyOrderPlaced, triggerTemplatedEmail } from "../utils/orderEmailNotifications";
+import { resolveAvailableStockForCartItem } from "../lib/cartStock";
 
 interface CartDrawerProps {
   isOpen: boolean;
   onClose: () => void;
   cart: CartItem[];
-  onUpdateQuantity: (productId: string, delta: number, menuItemId?: string, ticketTierId?: string) => void;
-  onRemove: (productId: string, menuItemId?: string, ticketTierId?: string) => void;
+  onUpdateQuantity: (productId: string, delta: number, menuItemId?: string, ticketTierId?: string, isOneDollar?: boolean) => void;
+  onRemove: (productId: string, menuItemId?: string, ticketTierId?: string, isOneDollar?: boolean) => void;
   onClear: () => void;
   currentUser: UserProfile | null;
   setActiveTab: (tab: string) => void;
+  products?: Product[];
+  oneDollarListings?: OneDollarListing[];
 }
 
-export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, onRemove, onClear, currentUser, setActiveTab }: CartDrawerProps) {
+export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, onRemove, onClear, currentUser, setActiveTab, products, oneDollarListings }: CartDrawerProps) {
   const [loading, setLoading] = React.useState(false);
   const [success, setSuccess] = React.useState(false);
   const [deliveryType, setDeliveryType] = React.useState<"delivery" | "pickup">("pickup");
@@ -663,29 +666,51 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
                             </span>
                           </div>
                           
-                          <div className="flex items-center gap-4 mt-2">
-                            <div className="flex items-center bg-slate-50 dark:bg-slate-805 rounded-lg p-0.5 shadow-sm border border-slate-300 dark:border-zinc-700">
-                               <button 
-                                 onClick={() => onUpdateQuantity(item.productId, -1, item.menuItemId, item.ticketTierId)}
-                                 className="w-6 h-6 flex items-center justify-center text-slate-500 hover:text-purple-600 transition-colors"
-                               >
-                                 <Minus className="w-2.5 h-2.5" />
-                               </button>
-                               <span className="w-6 text-center text-xs font-bold text-slate-900 dark:text-white">{item.quantity}</span>
-                               <button 
-                                 onClick={() => onUpdateQuantity(item.productId, 1, item.menuItemId, item.ticketTierId)}
-                                 className="w-6 h-6 flex items-center justify-center text-slate-500 hover:text-purple-600 transition-colors"
-                               >
-                                 <Plus className="w-2.5 h-2.5" />
-                               </button>
-                            </div>
-                            <button 
-                              onClick={() => onRemove(item.productId, item.menuItemId, item.ticketTierId)}
-                              className="text-xs text-slate-500 dark:text-slate-400 hover:text-red-600 hover:underline transition-colors font-semibold flex items-center gap-1 cursor-pointer"
-                            >
-                              <Trash2 className="w-3.5 h-3.5 text-slate-400" /> Delete
-                            </button>
-                          </div>
+                          {(() => {
+                            const maxStock = resolveAvailableStockForCartItem(item, products, oneDollarListings);
+                            const isAtMaxStock = maxStock !== undefined && item.quantity >= maxStock;
+                            return (
+                              <div className="flex items-center gap-4 mt-2">
+                                <div className="flex items-center bg-slate-50 dark:bg-slate-805 rounded-lg p-0.5 shadow-sm border border-slate-300 dark:border-zinc-700">
+                                  <button 
+                                    type="button"
+                                    onClick={() => onUpdateQuantity(item.productId, -1, item.menuItemId, item.ticketTierId, item.isOneDollar)}
+                                    className="w-6 h-6 flex items-center justify-center text-slate-500 hover:text-purple-600 transition-colors"
+                                    title="Decrease quantity"
+                                  >
+                                    <Minus className="w-2.5 h-2.5" />
+                                  </button>
+                                  <span className="w-6 text-center text-xs font-bold text-slate-900 dark:text-white">{item.quantity}</span>
+                                  <button 
+                                    type="button"
+                                    disabled={isAtMaxStock}
+                                    onClick={() => onUpdateQuantity(item.productId, 1, item.menuItemId, item.ticketTierId, item.isOneDollar)}
+                                    className={cn(
+                                      "w-6 h-6 flex items-center justify-center transition-colors",
+                                      isAtMaxStock
+                                        ? "text-slate-300 dark:text-zinc-600 cursor-not-allowed opacity-40"
+                                        : "text-slate-500 hover:text-purple-600"
+                                    )}
+                                    title={isAtMaxStock ? `Inventory limit reached (${maxStock} available)` : "Increase quantity"}
+                                  >
+                                    <Plus className="w-2.5 h-2.5" />
+                                  </button>
+                                </div>
+                                {isAtMaxStock && (
+                                  <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400">
+                                    Max ({maxStock})
+                                  </span>
+                                )}
+                                <button 
+                                  type="button"
+                                  onClick={() => onRemove(item.productId, item.menuItemId, item.ticketTierId, item.isOneDollar)}
+                                  className="text-xs text-slate-500 dark:text-slate-400 hover:text-red-600 hover:underline transition-colors font-semibold flex items-center gap-1 cursor-pointer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5 text-slate-400" /> Delete
+                                </button>
+                              </div>
+                            );
+                          })()}
                         </div>
                       </motion.div>
                     );

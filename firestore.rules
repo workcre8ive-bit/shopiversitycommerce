@@ -681,8 +681,8 @@ service cloud.firestore {
                       isNotOneDollarSuspended() &&
                       isValidOneDollarListing(request.resource.data) &&
                       request.resource.data.sellerId == request.auth.uid &&
-                      request.resource.data.status == 'pending_approval' &&
-                      request.resource.data.isActive == false &&
+                      request.resource.data.status in ['approved', 'deactivated', 'pending_approval'] &&
+                      (request.resource.data.status != 'deactivated' || request.resource.data.isActive == false) &&
                       exists(/databases/$(database)/documents/products/$(request.resource.data.productId)) &&
                       get(/databases/$(database)/documents/products/$(request.resource.data.productId)).data.sellerId == request.auth.uid;
       allow update: if isAuthenticated() &&
@@ -692,21 +692,10 @@ service cloud.firestore {
                         (
                           resource.data.sellerId == request.auth.uid &&
                           isNotOneDollarSuspended() &&
-                          areImmutableFieldsUnchanged(['sellerId', 'productId', 'createdAt', 'approvedAt', 'approvedBy']) &&
-                          (
-                            (
-                              request.resource.data.usdPrice == resource.data.usdPrice &&
-                              (
-                                (request.resource.data.status == resource.data.status && (request.resource.data.status == 'approved' || request.resource.data.isActive == false)) ||
-                                (request.resource.data.status == 'deactivated' && request.resource.data.isActive == false) ||
-                                (resource.data.status in ['deactivated', 'rejected'] && request.resource.data.status == 'pending_approval' && request.resource.data.isActive == false)
-                              )
-                            ) ||
-                            (
-                              request.resource.data.status == 'pending_approval' &&
-                              request.resource.data.isActive == false
-                            )
-                          )
+                          areImmutableFieldsUnchanged(['sellerId', 'productId', 'createdAt']) &&
+                          request.resource.data.status in ['approved', 'deactivated', 'pending_approval'] &&
+                          (request.resource.data.status != 'deactivated' || request.resource.data.isActive == false) &&
+                          (resource.data.status != 'rejected' || request.resource.data.status == 'deactivated')
                         ) ||
                         (
                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'updatedAt']) &&

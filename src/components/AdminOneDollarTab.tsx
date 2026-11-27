@@ -326,7 +326,7 @@ export default function AdminOneDollarTab({
             Moderation, Participating Vendors &amp; Escrow Oversight
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Review voluntary vendor $1 submissions, monitor exchange-rate pricing, and oversee optional escrow orders.
+            Monitor live vendor $1 &amp; below listings, pause or remove non-compliant items, suspend violating vendors, and oversee optional escrow orders.
           </p>
         </div>
 

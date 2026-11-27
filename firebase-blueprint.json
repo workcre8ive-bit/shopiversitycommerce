@@ -76,6 +76,8 @@
         "isDeleted": { "type": "boolean" },
         "deletedAt": { "type": "string", "format": "date-time" },
         "location": { "type": "string" },
+        "addToOneDollar": { "type": "boolean" },
+        "oneDollarDeliveryNote": { "type": "string" },
         "menuItems": {
           "type": "array",
           "items": {

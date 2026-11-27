@@ -39,17 +39,22 @@ import OrderAuditTrailModal from "./OrderAuditTrailModal";
 import OrderDisputeModal from "./OrderDisputeModal";
 import { Star, MessageSquare, AlertTriangle, ExternalLink as ExternalLinkIcon, Shield, History, Undo2, KeyRound, Lock } from "lucide-react";
 import { notifyOrderCompleted } from "../utils/orderEmailNotifications";
+import EscrowCheckoutModal, { EscrowSessionDetails } from "./EscrowCheckoutModal";
 
 interface OrderTrackingProps {
   setActiveTab: (tab: string) => void;
   onBack?: () => void;
   userProfile?: UserProfile | null;
+  initialOrderId?: string | null;
+  onOrderFocused?: () => void;
 }
 
-export default function OrderTracking({ setActiveTab, onBack, userProfile }: OrderTrackingProps) {
+export default function OrderTracking({ setActiveTab, onBack, userProfile, initialOrderId, onOrderFocused }: OrderTrackingProps) {
   const [orders, setOrders] = React.useState<Order[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [markingId, setMarkingId] = React.useState<string | null>(null);
+  const [highlightedOrderId, setHighlightedOrderId] = React.useState<string | null>(null);
+  const orderCardRefs = React.useRef<Record<string, HTMLDivElement | null>>({});
   const [showClearConfirm, setShowClearConfirm] = React.useState(false);
   const [clearing, setClearing] = React.useState(false);
   const [currentTime, setCurrentTime] = React.useState(Date.now());
@@ -77,6 +82,9 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
   const [cancelRefundOrder, setCancelRefundOrder] = React.useState<Order | null>(null);
   const [disputeModalOrder, setDisputeModalOrder] = React.useState<Order | null>(null);
   const [auditModalOrder, setAuditModalOrder] = React.useState<Order | null>(null);
+  const [escrowSession, setEscrowSession] = React.useState<EscrowSessionDetails | null>(null);
+  const [isEscrowModalOpen, setIsEscrowModalOpen] = React.useState(false);
+  const [paymentError, setPaymentError] = React.useState<string | null>(null);
 
   const basePaystackConfig = {
     reference: `ORD_${Date.now()}`,
@@ -86,6 +94,144 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
   };
 
   const initializePayment = usePaystackPayment(basePaystackConfig);
+
+  const triggerEscrowPayPayment = async (order: Order) => {
+    if (!auth.currentUser) return;
+    setOrderToPay(order);
+    setIsVerifyingPayment(true);
+    setPaymentError(null);
+    try {
+      const existingReceipt = order.paymentReceipt;
+      if (
+        existingReceipt?.provider === "escrowpay" &&
+        existingReceipt.transactionId &&
+        (existingReceipt.checkoutUrl || existingReceipt.virtualAccount?.accountNumber) &&
+        order.paymentStatus !== "paid"
+      ) {
+        const ref = existingReceipt.paymentReference || order.paymentReference || existingReceipt.transactionId;
+        const returnUrl = `${window.location.origin}/payment/escrow/return?transactionId=${encodeURIComponent(existingReceipt.transactionId)}&orderId=${encodeURIComponent(order.id)}&reference=${encodeURIComponent(ref)}`;
+        setEscrowSession({
+          orderId: order.id,
+          uniqueOrderId: order.uniqueOrderId,
+          transactionId: existingReceipt.transactionId,
+          reference: ref,
+          environment: existingReceipt.environment || "test",
+          isTestTransaction: existingReceipt.isTestTransaction ?? (existingReceipt.environment === "test"),
+          amountNgn: order.totalPrice,
+          currency: "NGN",
+          checkoutUrl: existingReceipt.checkoutUrl,
+          checkoutSessionId: existingReceipt.checkoutSessionId,
+          virtualAccount: existingReceipt.virtualAccount,
+          returnUrl
+        });
+        setIsEscrowModalOpen(true);
+        return;
+      }
+
+      const cfgRes = await fetch("/api/payments/escrow/config-status");
+      if (cfgRes.ok) {
+        const cfgData = await cfgRes.json();
+        if (!cfgData.configured) {
+          throw new Error(
+            "EscrowPay Sandbox API key is not configured on the server yet (missing ESCROWPAY_TEST_SECRET_KEY)."
+          );
+        }
+      }
+
+      const idToken = await auth.currentUser.getIdToken(true);
+      const createRes = await fetch("/api/payments/escrow/create", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(idToken ? { Authorization: `Bearer ${idToken}` } : {})
+        },
+        body: JSON.stringify({
+          orderId: order.id,
+          uniqueOrderId: order.uniqueOrderId,
+          amountNgn: order.totalPrice,
+          description: order.productName,
+          sellerId: order.sellerId,
+          sellerName: order.sellerName,
+          buyerName: order.buyerName || userProfile?.displayName || "Buyer",
+          buyerPhone: order.buyerPhone || userProfile?.phoneNumber || "",
+          commissionRate: order.type === "service" ? 0.06 : 0.05,
+          isOneDollar: Boolean(order.isOneDollar),
+          returnOrigin: window.location.origin
+        })
+      });
+
+      const createData = await createRes.json().catch(() => ({}));
+      if (!createRes.ok || !createData.success) {
+        throw new Error(createData.error || "Unable to initialize EscrowPay checkout.");
+      }
+
+      const nowIso = new Date().toISOString();
+      await updateDoc(doc(db, "orders", order.id), {
+        paymentReference: createData.reference,
+        paymentStatus: "pending",
+        paymentReceipt: {
+          receiptNumber: `${createData.isTestTransaction ? "ESC-TEST-" : "ESC-"}${Date.now().toString().slice(-6)}`,
+          orderId: order.id,
+          transactionId: createData.transactionId,
+          paymentReference: createData.reference,
+          paymentMethod: order.paymentMethod || "online",
+          provider: "escrowpay",
+          environment: createData.environment,
+          isTestTransaction: createData.isTestTransaction,
+          escrowId: createData.transactionId,
+          ...(createData.checkoutSessionId ? { checkoutSessionId: createData.checkoutSessionId } : {}),
+          ...(createData.checkoutUrl ? { checkoutUrl: createData.checkoutUrl } : {}),
+          ...(createData.virtualAccount ? { virtualAccount: createData.virtualAccount } : {}),
+          amountPaid: order.totalPrice,
+          currency: "NGN",
+          platformFee: order.commissionAmount || 0,
+          buyerName: order.buyerName || "Buyer",
+          productName: order.productName,
+          quantity: order.quantity || 1,
+          deliveryType: order.deliveryType || "delivery",
+          verificationTimestamp: nowIso,
+          escrowStatus: "not_applicable",
+          status: "processing",
+          verifiedStatus: "processing"
+        },
+        updatedAt: nowIso
+      }).catch((updErr) => {
+        console.warn("Non-fatal OrderTracking paymentReceipt update warning:", updErr);
+      });
+
+      setEscrowSession({
+        orderId: order.id,
+        uniqueOrderId: order.uniqueOrderId,
+        transactionId: createData.transactionId,
+        reference: createData.reference,
+        environment: createData.environment,
+        isTestTransaction: createData.isTestTransaction,
+        amountNgn: order.totalPrice,
+        currency: "NGN",
+        checkoutUrl: createData.checkoutUrl,
+        checkoutSessionId: createData.checkoutSessionId,
+        virtualAccount: createData.virtualAccount,
+        returnUrl: createData.returnUrl
+      });
+      setIsEscrowModalOpen(true);
+    } catch (err: any) {
+      console.error("EscrowPay initiation error:", err);
+      setPaymentError(err?.message || "Failed to open EscrowPay checkout.");
+    } finally {
+      setIsVerifyingPayment(false);
+      setMarkingId(null);
+    }
+  };
+
+  const triggerOrderPayment = (order: Order) => {
+    // Paystack ONLY for One Dollar orders not explicitly routed via EscrowPay;
+    // Regular marketplace orders strictly use EscrowPay without Paystack.
+    if (order.isOneDollar && order.paymentReceipt?.provider !== "escrowpay") {
+      triggerPaystackPayment(order);
+    } else {
+      void triggerEscrowPayPayment(order);
+    }
+  };
 
   const triggerPaystackPayment = (order: Order) => {
     setOrderToPay(order);
@@ -243,6 +389,26 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
     return () => unsubscribe();
   }, [userProfile?.uid]);
 
+  React.useEffect(() => {
+    if (!initialOrderId || loading || orders.length === 0) return;
+    const matched = orders.find(
+      (o) => o.id === initialOrderId || o.uniqueOrderId === initialOrderId
+    );
+    if (!matched) return;
+
+    setHighlightedOrderId(matched.id);
+    const el = orderCardRefs.current[matched.id];
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    onOrderFocused?.();
+
+    const timer = setTimeout(() => {
+      setHighlightedOrderId((prev) => (prev === matched.id ? null : prev));
+    }, 3200);
+    return () => clearTimeout(timer);
+  }, [initialOrderId, loading, orders, onOrderFocused]);
+
   const handleConfirmPickup = async (order: Order) => {
     if (!auth.currentUser) return;
     setMarkingId(order.id);
@@ -271,7 +437,7 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
           });
         } catch (e) {}
 
-        triggerPaystackPayment(order);
+        triggerOrderPayment(order);
         setMarkingId(null);
         return;
       }
@@ -289,8 +455,8 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
         return;
       }
 
-      // 4. Otherwise (unpaid online/fallback), launch real Paystack checkout immediately after pickup
-      triggerPaystackPayment(order);
+      // 4. Otherwise (unpaid online/fallback), launch appropriate checkout (EscrowPay for marketplace, Paystack for One Dollar)
+      triggerOrderPayment(order);
     } catch (err) {
       console.error("Pickup confirmation failed:", err);
       alert("Pickup confirmation failed.");
@@ -347,7 +513,7 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
           });
         } catch (e) {}
 
-        triggerPaystackPayment(order);
+        triggerOrderPayment(order);
         setMarkingId(null);
         return;
       }
@@ -359,9 +525,9 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
         updatedAt: new Date().toISOString()
       });
 
-      // 3. If it's unpaid, launch real Paystack checkout
+      // 3. If it's unpaid, launch EscrowPay (marketplace) or Paystack (One Dollar) checkout
       if (order.paymentStatus !== "paid") {
-        triggerPaystackPayment(order);
+        triggerOrderPayment(order);
         return;
       }
 
@@ -426,7 +592,7 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
         const orderToTrigger = verifyingOrder;
         setVerifyingOrder(null);
         setProductIdInput("");
-        triggerPaystackPayment(orderToTrigger);
+        triggerOrderPayment(orderToTrigger);
       } else {
         // Next stage: Order Completed (Escrow Funds Released to Vendor if Escrow selected)
         const updatePayload: any = {
@@ -960,12 +1126,21 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
       case "payment_required":
         return {
           title: "POD Payment Required",
-          subtitle: "Package received! Please complete your Paystack payment to finalize escrow settlement."
+          subtitle:
+            order.isOneDollar && order.paymentReceipt?.provider !== "escrowpay"
+              ? "Package received! Please complete your Paystack payment to finalize escrow settlement."
+              : "Package received! Please complete your EscrowPay payment to finalize escrow settlement."
         };
       case "awaiting_payment":
         return {
-          title: "Awaiting Payment",
-          subtitle: "Please complete payment to finalize your order."
+          title:
+            order.type === "service"
+              ? "Awaiting Payment"
+              : "Payment Processing",
+          subtitle:
+            order.type === "service"
+              ? "Please complete payment to finalize your service order."
+              : "Your order remains in Payment Processing until EscrowPay verifies funding."
         };
       case "completed":
         return {
@@ -1030,6 +1205,27 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
 
   return (
     <div className="space-y-6">
+      {paymentError && (
+        <div
+          role="alert"
+          className="p-4 rounded-2xl bg-red-50 dark:bg-red-950/35 border border-red-200 dark:border-red-900/50 flex items-start justify-between gap-3"
+        >
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+            <p className="text-xs font-semibold text-red-800 dark:text-red-200 leading-relaxed">
+              {paymentError}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setPaymentError(null)}
+            className="p-1 text-red-500 hover:text-red-700 dark:hover:text-red-300 cursor-pointer shrink-0"
+            aria-label="Dismiss payment error"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <button 
@@ -1070,9 +1266,17 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
           return (
             <motion.div
               key={`order-tracking-${order.id}-${oIdx}`}
+              ref={(node) => {
+                orderCardRefs.current[order.id] = node;
+              }}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-[2.5rem] overflow-hidden shadow-sm hover:shadow-md transition-all"
+              className={cn(
+                "bg-white dark:bg-slate-900 border rounded-[2.5rem] overflow-hidden shadow-sm hover:shadow-md transition-all",
+                highlightedOrderId === order.id
+                  ? "border-[#ff6b00] ring-2 ring-[#ff6b00]/30 shadow-lg shadow-orange-500/10"
+                  : "border-slate-100 dark:border-slate-800"
+              )}
             >
               <div className="p-6 sm:p-8">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
@@ -1112,13 +1316,57 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
                     {order.deliveryType === "delivery" ? <Truck className="w-3 h-3" /> : <Package className="w-3 h-3" />}
                     {order.deliveryType}
                   </span>
-                  <span className={cn(
-                    "px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider flex items-center gap-2",
-                    (order.paymentStatus === "paid" || order.paymentMethod === "online") ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400" : "bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400"
-                  )}>
-                    {(order.paymentStatus === "paid" || order.paymentMethod === "online") ? <CreditCard className="w-3 h-3" /> : <Wallet className="w-3 h-3" />}
-                    {(order.paymentStatus === "paid" || order.paymentMethod === "online") ? "Paid Online (In Escrow)" : "Pay on Delivery (Unpaid)"}
-                  </span>
+                  {(() => {
+                    const isUnderReview = Boolean(
+                      order.settlementOnHold || order.paymentReceipt?.verifiedStatus === "under_review"
+                    );
+                    const isOnlineFailed =
+                      order.paymentMethod === "online" && order.paymentStatus === "failed";
+                    const isOnlineProcessing =
+                      order.paymentMethod === "online" && order.paymentStatus === "pending";
+                    const isPaidEscrow =
+                      order.paymentStatus === "paid" ||
+                      (order.paymentMethod === "online" && !isOnlineFailed && !isOnlineProcessing && !isUnderReview);
+
+                    return (
+                      <span
+                        className={cn(
+                          "px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider flex items-center gap-2",
+                          isUnderReview
+                            ? "bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300"
+                            : isOnlineFailed
+                            ? "bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400"
+                            : isOnlineProcessing
+                            ? "bg-orange-50 dark:bg-orange-900/20 text-[#ff6b00]"
+                            : isPaidEscrow
+                            ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400"
+                            : "bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400"
+                        )}
+                      >
+                        {isUnderReview || isOnlineFailed || isOnlineProcessing ? (
+                          <ShieldAlert className="w-3 h-3" />
+                        ) : isPaidEscrow ? (
+                          <CreditCard className="w-3 h-3" />
+                        ) : (
+                          <Wallet className="w-3 h-3" />
+                        )}
+                        {isUnderReview
+                          ? "Payment Under Review"
+                          : isOnlineFailed
+                          ? "Payment Failed"
+                          : isOnlineProcessing
+                          ? "Payment Processing"
+                          : isPaidEscrow
+                          ? "Paid Online (In Escrow)"
+                          : "Pay on Delivery (Unpaid)"}
+                      </span>
+                    );
+                  })()}
+                  {(order.paymentReceipt?.isTestTransaction || order.paymentReceipt?.environment === "test") && (
+                    <span className="px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border border-amber-300/80 dark:border-amber-800">
+                      TEST TRANSACTION
+                    </span>
+                  )}
                   <button
                     onClick={() => handleClearIndividual(order)}
                     disabled={clearing}
@@ -1610,10 +1858,10 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
                         </div>
                       </div>
                       <p className="text-xs text-amber-800 dark:text-amber-300 leading-relaxed font-medium">
-                        📦 Handover confirmed! Pay on Delivery escrow policy requires electronic settlement via Paystack to release final verified receipts and credit vendor balance.
+                        📦 Handover confirmed! Pay on Delivery escrow policy requires electronic settlement via {order.isOneDollar && order.paymentReceipt?.provider !== "escrowpay" ? "Paystack" : "EscrowPay"} to release final verified receipts and credit vendor balance.
                       </p>
                       <button
-                        onClick={() => triggerPaystackPayment(order)}
+                        onClick={() => triggerOrderPayment(order)}
                         disabled={isVerifyingPayment}
                         className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-xs tracking-wider transition-all duration-200 flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 active:scale-[0.98]"
                       >
@@ -1622,7 +1870,9 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
                         ) : (
                           <CreditCard className="w-4 h-4" />
                         )}
-                        PAY VIA PAYSTACK (₦{order.totalPrice.toLocaleString()})
+                        {order.isOneDollar && order.paymentReceipt?.provider !== "escrowpay"
+                          ? `PAY VIA PAYSTACK (₦${order.totalPrice.toLocaleString()})`
+                          : `PAY VIA ESCROWPAY (₦${order.totalPrice.toLocaleString()})`}
                       </button>
                     </div>
                   )}
@@ -2083,22 +2333,42 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
                           </button>
                         </div>
                       ) : effectiveStatus === "awaiting_payment" ? (
-                        <div className="space-y-2 animate-in fade-in duration-305">
-                          <div className="p-3 bg-amber-50 dark:bg-amber-900/25 border border-amber-100 dark:border-amber-900/40 rounded-xl text-xs font-medium text-amber-800 dark:text-amber-400">
-                            Service completed by vendor! Please finalize your secure online escrow payment on the app now.
+                        <div className="space-y-2.5 animate-in fade-in duration-305">
+                          <div className="p-3.5 bg-amber-50 dark:bg-amber-900/25 border border-amber-200/80 dark:border-amber-900/40 rounded-xl text-xs font-medium text-amber-900 dark:text-amber-300 leading-relaxed">
+                            {order.type === "service"
+                              ? "Service completed by vendor! Please finalize your secure online escrow payment on the app now."
+                              : "Payment Processing: Complete funding via EscrowPay or verify your transaction status. This order will never be marked paid until EscrowPay confirms settlement."}
                           </div>
                           <button
-                            onClick={() => triggerPaystackPayment(order)}
+                            onClick={() => triggerOrderPayment(order)}
                             disabled={isVerifyingPayment}
-                            className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-bold text-sm tracking-wide transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer shadow-lg"
+                            className="w-full py-4 bg-[#ff6b00] hover:bg-[#e55f00] text-white rounded-2xl font-bold text-sm tracking-wide transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer shadow-md disabled:opacity-50"
                           >
                             {isVerifyingPayment ? (
                               <Loader2 className="w-4 h-4 animate-spin" />
                             ) : (
                               <CreditCard className="w-4 h-4" />
                             )}
-                            Pay For Service via Paystack (₦{order.totalPrice.toLocaleString()})
+                            {order.isOneDollar && order.paymentReceipt?.provider !== "escrowpay"
+                              ? `Complete Payment via Paystack (₦${order.totalPrice.toLocaleString()})`
+                              : `Complete Payment via EscrowPay (₦${order.totalPrice.toLocaleString()})`}
                           </button>
+                          {(order.paymentReceipt?.transactionId || order.paymentReference) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const txId = order.paymentReceipt?.transactionId || "";
+                                const ref = order.paymentReference || order.paymentReceipt?.paymentReference || "";
+                                const url = `/payment/escrow/return?orderId=${encodeURIComponent(order.id)}&transactionId=${encodeURIComponent(txId)}&reference=${encodeURIComponent(ref)}`;
+                                window.history.pushState({}, "", url);
+                                window.dispatchEvent(new PopStateEvent("popstate"));
+                              }}
+                              className="w-full py-3 bg-white hover:bg-slate-50 dark:bg-slate-900 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-2xl font-bold text-xs tracking-wide transition-all flex items-center justify-center gap-2 cursor-pointer"
+                            >
+                              <ShieldCheck className="w-4 h-4 text-[#ff6b00]" />
+                              Verify EscrowPay Payment Status
+                            </button>
+                          )}
                         </div>
                       ) : effectiveStatus === "pending" ? (
                         <button
@@ -2308,7 +2578,7 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
                             Pay on Delivery security policy requires electronic payment verification to complete escrow settlement.
                           </div>
                           <button
-                            onClick={() => triggerPaystackPayment(order)}
+                            onClick={() => triggerOrderPayment(order)}
                             disabled={isVerifyingPayment}
                             className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-bold text-sm tracking-wide transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer shadow-lg active:scale-95"
                           >
@@ -2317,7 +2587,9 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
                             ) : (
                               <CreditCard className="w-4 h-4" />
                             )}
-                            Pay via Paystack (₦{order.totalPrice.toLocaleString()})
+                            {order.isOneDollar && order.paymentReceipt?.provider !== "escrowpay"
+                              ? `Pay via Paystack (₦${order.totalPrice.toLocaleString()})`
+                              : `Pay via EscrowPay (₦${order.totalPrice.toLocaleString()})`}
                           </button>
                         </div>
                       ) : (effectiveStatus === "delivered" || (order.isOneDollar && order.deliveryType === "delivery" && effectiveStatus === "out_for_delivery")) ? (
@@ -2331,7 +2603,7 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
                             </div>
                             <p className="text-xs text-emerald-800 dark:text-emerald-300 leading-relaxed font-medium">
                               {order.paymentMethod === "pod" && order.paymentStatus !== "paid"
-                                ? "Package received! Please complete your Paystack payment to finalize settlement and release vendor balance."
+                                ? `Package received! Please complete your ${order.isOneDollar && order.paymentReceipt?.provider !== "escrowpay" ? "Paystack" : "EscrowPay"} payment to finalize settlement and release vendor balance.`
                                 : order.isOneDollar
                                   ? (order.escrowSelected === false
                                       ? "Once you receive your One Dollar item from the vendor, click below to confirm receipt."
@@ -2342,12 +2614,14 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
 
                           {order.paymentMethod === "pod" && order.paymentStatus !== "paid" ? (
                             <button
-                              onClick={() => triggerPaystackPayment(order)}
+                              onClick={() => triggerOrderPayment(order)}
                               disabled={isVerifyingPayment || markingId === order.id}
                               className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-sm tracking-wide transition-all flex items-center justify-center gap-2 shadow-lg cursor-pointer active:scale-95"
                             >
                               {isVerifyingPayment ? <Loader2 className="w-4 h-4 animate-spin" /> : <CreditCard className="w-4 h-4" />}
-                              Pay via Paystack (₦{order.totalPrice.toLocaleString()})
+                              {order.isOneDollar && order.paymentReceipt?.provider !== "escrowpay"
+                                ? `Pay via Paystack (₦${order.totalPrice.toLocaleString()})`
+                                : `Pay via EscrowPay (₦${order.totalPrice.toLocaleString()})`}
                             </button>
                           ) : (
                             <button
@@ -2639,24 +2913,28 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
 
                 <div className="flex flex-col gap-3 pt-2">
                   <button 
-                    onClick={() => triggerPaystackPayment(orderToPay)}
+                    onClick={() => triggerOrderPayment(orderToPay)}
                     disabled={isVerifyingPayment}
-                    className="w-full h-14 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white rounded-2xl font-black text-xs uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2 shadow-xl cursor-pointer disabled:opacity-50"
+                    className="w-full h-14 bg-[#ff6b00] hover:bg-[#e55f00] active:scale-[0.99] text-white rounded-2xl font-black text-xs uppercase tracking-[0.18em] transition-all flex items-center justify-center gap-2 shadow-xl cursor-pointer disabled:opacity-50"
                   >
                     {isVerifyingPayment ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin" />
-                        Verifying Real Payment...
+                        Connecting Escrow Gateway...
                       </>
                     ) : (
                       <>
                         <CreditCard className="w-4 h-4" />
-                        Pay ₦{orderToPay.totalPrice.toLocaleString()} via Paystack
+                        {orderToPay.isOneDollar && orderToPay.paymentReceipt?.provider !== "escrowpay"
+                          ? `Pay ₦${orderToPay.totalPrice.toLocaleString()} via Paystack`
+                          : `Pay ₦${orderToPay.totalPrice.toLocaleString()} via EscrowPay`}
                       </>
                     )}
                   </button>
                   <p className="text-[10px] text-center text-slate-500 dark:text-slate-400 font-medium">
-                    Protected by Paystack 256-bit encryption & SHOPIVERSITY Escrow.
+                    {orderToPay.isOneDollar && orderToPay.paymentReceipt?.provider !== "escrowpay"
+                      ? "Protected by Paystack 256-bit encryption & SHOPIVERSITY Escrow."
+                      : "Protected by EscrowPay & SHOPIVERSITY Escrow."}
                   </p>
                 </div>
 
@@ -2939,6 +3217,22 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile }: Ord
           onClose={() => setAuditModalOrder(null)}
         />
       )}
+
+      <EscrowCheckoutModal
+        isOpen={isEscrowModalOpen}
+        session={escrowSession}
+        onClose={() => setIsEscrowModalOpen(false)}
+        onProceedToReturnCheck={(returnUrl) => {
+          setIsEscrowModalOpen(false);
+          try {
+            const parsed = new URL(returnUrl, window.location.origin);
+            window.history.pushState({}, "", `${parsed.pathname}${parsed.search}`);
+            window.dispatchEvent(new PopStateEvent("popstate"));
+          } catch {
+            window.location.href = returnUrl;
+          }
+        }}
+      />
     </div>
   );
 }

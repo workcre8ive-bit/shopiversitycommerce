@@ -14,10 +14,11 @@ import {
   Truck,
   X
 } from "lucide-react";
-import { ExchangeRateSnapshot, OneDollarListing, Product, UserProfile } from "../types";
+import { CartItem, ExchangeRateSnapshot, OneDollarListing, Product, UserProfile } from "../types";
 import { db } from "../firebase";
 import { collection, limit, onSnapshot, query, where } from "firebase/firestore";
 import { clampOneDollarUsd, computeOneDollarNgn, formatNaira, formatUsd, getCachedOneDollarListings, setCachedOneDollarListings } from "../lib/oneDollarRate";
+import { getInCartQuantity } from "../lib/cartStock";
 import { handleListenerError, isFirestoreQuotaError, OperationType } from "../lib/firebase-errors";
 import { cn } from "../lib/utils";
 import VendorVerificationBadge from "./VendorVerificationBadge";
@@ -34,6 +35,7 @@ interface OneDollarSectionProps {
   initialSelectedListing?: OneDollarListing | null;
   onClearInitialSelectedListing?: () => void;
   sellersMap?: Record<string, UserProfile> | Map<string, UserProfile>;
+  cart?: CartItem[];
 }
 
 export default function OneDollarSection({
@@ -47,7 +49,8 @@ export default function OneDollarSection({
   onBack,
   initialSelectedListing,
   onClearInitialSelectedListing,
-  sellersMap
+  sellersMap,
+  cart
 }: OneDollarSectionProps) {
   const [listings, setListings] = React.useState<OneDollarListing[]>(() => getCachedOneDollarListings());
   const [loadingListings, setLoadingListings] = React.useState<boolean>(() => getCachedOneDollarListings().length === 0);
@@ -158,7 +161,7 @@ export default function OneDollarSection({
               Verified Products at $1 USD &amp; Below
             </h1>
             <p className="text-xs sm:text-sm text-orange-50 font-medium leading-relaxed">
-              Verified Shopiversity vendors voluntarily list selected items here from $0.01 up to $1.00 USD. Prices automatically convert to Nigerian Naira (₦) daily, and fulfillment is arranged directly between you and the vendor.
+              Verified Shopiversity vendors list selected items here from $0.01 up to $1.00 USD. Prices automatically convert to Nigerian Naira (₦) daily, and fulfillment is arranged directly between you and the vendor.
             </p>
             <div className="flex flex-wrap items-center gap-4 pt-1 text-xs font-semibold text-white/95">
               <span className="inline-flex items-center gap-1.5">
@@ -312,7 +315,7 @@ export default function OneDollarSection({
             No Approved One Dollar Items Available Yet
           </h3>
           <p className="text-xs text-slate-500 dark:text-zinc-400 max-w-md mx-auto leading-relaxed">
-            Vendors can voluntarily submit or add products priced at $1.00 USD &amp; below from their Seller Dashboard. Once approved by an administrator, they appear here.
+            Vendors can add any product priced at $1.00 USD &amp; below directly while listing a product or from their Seller Dashboard, and it goes straight here immediately.
           </p>
         </div>
       ) : (
@@ -379,26 +382,33 @@ export default function OneDollarSection({
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-1.5 mt-auto pt-1" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      type="button"
-                      disabled={isOwner || !liveNgnPrice}
-                      onClick={() => onAddOneDollarToCart(item, false)}
-                      className="h-9 px-2 rounded-xl border border-[#ff6b00] text-[#ff6b00] hover:bg-orange-50 dark:hover:bg-orange-950/30 font-bold text-[11px] transition-colors flex items-center justify-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed bg-transparent"
-                    >
-                      <ShoppingCart className="w-3.5 h-3.5" />
-                      <span>Add</span>
-                    </button>
-                    <button
-                      type="button"
-                      disabled={isOwner || !liveNgnPrice}
-                      onClick={() => onAddOneDollarToCart(item, true)}
-                      className="h-9 px-2 rounded-xl bg-[#ff6b00] hover:bg-[#e56000] text-white font-bold text-[11px] transition-colors flex items-center justify-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed border-none"
-                    >
-                      <ShoppingBag className="w-3.5 h-3.5" />
-                      <span>{isOwner ? "Yours" : "Buy Now"}</span>
-                    </button>
-                  </div>
+                  {(() => {
+                    const inCartQty = getInCartQuantity(cart, { productId: item.productId, isOneDollar: true });
+                    const isAtCartLimit = item.stock <= 0 || inCartQty >= item.stock;
+                    return (
+                      <div className="grid grid-cols-2 gap-1.5 mt-auto pt-1" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          disabled={isOwner || !liveNgnPrice || isAtCartLimit}
+                          onClick={() => onAddOneDollarToCart(item, false)}
+                          title={isAtCartLimit ? `Inventory limit reached (${item.stock} available)` : "Add to cart"}
+                          className="h-9 px-2 rounded-xl border border-[#ff6b00] text-[#ff6b00] hover:bg-orange-50 dark:hover:bg-orange-950/30 font-bold text-[11px] transition-colors flex items-center justify-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed bg-transparent"
+                        >
+                          <ShoppingCart className="w-3.5 h-3.5" />
+                          <span>{isAtCartLimit && inCartQty > 0 ? "Max Added" : "Add"}</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isOwner || !liveNgnPrice || (item.stock <= 0 && inCartQty === 0)}
+                          onClick={() => onAddOneDollarToCart(item, true)}
+                          className="h-9 px-2 rounded-xl bg-[#ff6b00] hover:bg-[#e56000] text-white font-bold text-[11px] transition-colors flex items-center justify-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed border-none"
+                        >
+                          <ShoppingBag className="w-3.5 h-3.5" />
+                          <span>{isOwner ? "Yours" : (isAtCartLimit && inCartQty > 0 ? "In Cart" : "Buy Now")}</span>
+                        </button>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             );
@@ -575,32 +585,39 @@ export default function OneDollarSection({
                 </div>
 
                 {/* Purchase Actions */}
-                <div className="pt-2 mt-auto grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    disabled={currentUser?.uid === selectedListing.sellerId || !liveNgnPrice}
-                    onClick={() => {
-                      onAddOneDollarToCart(selectedListing, false);
-                      closeDetail();
-                    }}
-                    className="h-12 rounded-2xl border-2 border-[#ff6b00] text-[#ff6b00] hover:bg-orange-50 dark:hover:bg-orange-950/30 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed bg-transparent"
-                  >
-                    <ShoppingCart className="w-4 h-4" />
-                    Add to Cart
-                  </button>
-                  <button
-                    type="button"
-                    disabled={currentUser?.uid === selectedListing.sellerId || !liveNgnPrice}
-                    onClick={() => {
-                      onAddOneDollarToCart(selectedListing, true);
-                      closeDetail();
-                    }}
-                    className="h-12 rounded-2xl bg-[#ff6b00] hover:bg-[#e56000] text-white font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed border-none shadow-md shadow-orange-500/20"
-                  >
-                    <CheckCircle className="w-4 h-4" />
-                    {currentUser?.uid === selectedListing.sellerId ? "Your Listing" : "Buy Now"}
-                  </button>
-                </div>
+                {(() => {
+                  const inCartQty = getInCartQuantity(cart, { productId: selectedListing.productId, isOneDollar: true });
+                  const isAtCartLimit = selectedListing.stock <= 0 || inCartQty >= selectedListing.stock;
+                  return (
+                    <div className="pt-2 mt-auto grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        disabled={currentUser?.uid === selectedListing.sellerId || !liveNgnPrice || isAtCartLimit}
+                        onClick={() => {
+                          onAddOneDollarToCart(selectedListing, false);
+                          closeDetail();
+                        }}
+                        title={isAtCartLimit ? `Inventory limit reached (${selectedListing.stock} available)` : "Add to cart"}
+                        className="h-12 rounded-2xl border-2 border-[#ff6b00] text-[#ff6b00] hover:bg-orange-50 dark:hover:bg-orange-950/30 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed bg-transparent"
+                      >
+                        <ShoppingCart className="w-4 h-4" />
+                        {isAtCartLimit && inCartQty > 0 ? "Max in Cart" : "Add to Cart"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={currentUser?.uid === selectedListing.sellerId || !liveNgnPrice || (selectedListing.stock <= 0 && inCartQty === 0)}
+                        onClick={() => {
+                          onAddOneDollarToCart(selectedListing, true);
+                          closeDetail();
+                        }}
+                        className="h-12 rounded-2xl bg-[#ff6b00] hover:bg-[#e56000] text-white font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed border-none shadow-md shadow-orange-500/20"
+                      >
+                        <CheckCircle className="w-4 h-4" />
+                        {currentUser?.uid === selectedListing.sellerId ? "Your Listing" : (isAtCartLimit && inCartQty > 0 ? "View in Cart" : "Buy Now")}
+                      </button>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           </div>

@@ -130,6 +130,7 @@ import ProfileSettings from "./ProfileSettings";
 import StorefrontSettingsTab from "./StorefrontSettingsTab";
 import ReceiptModal from "./ReceiptModal";
 import SellerOneDollarPanel from "./SellerOneDollarPanel";
+import { clampOneDollarUsd, formatNaira, formatUsd, useOneDollarRate } from "../lib/oneDollarRate";
 
 
 interface SellerDashboardProps {
@@ -4490,6 +4491,11 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
   const [publicTiktok, setPublicTiktok] = React.useState<string>(initialPublicContact?.tiktok || "");
   const [publicOther, setPublicOther] = React.useState<string>(initialPublicContact?.other || "");
   const [savingDraft, setSavingDraft] = React.useState(false);
+  const { rateInfo: oneDollarRate } = useOneDollarRate();
+  const [addToOneDollar, setAddToOneDollar] = React.useState<boolean>(Boolean(editingProduct?.addToOneDollar));
+  const [oneDollarDeliveryNote, setOneDollarDeliveryNote] = React.useState<string>(editingProduct?.oneDollarDeliveryNote || "");
+  const [existingOneDollarListing, setExistingOneDollarListing] = React.useState<any | null>(null);
+  const [addedToOneDollarSuccess, setAddedToOneDollarSuccess] = React.useState<boolean>(false);
 
   React.useEffect(() => {
     const editingDraft = Boolean(
@@ -4500,10 +4506,40 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
     if (editingProduct?.serialNumber) {
       draftSerialRef.current = editingProduct.serialNumber;
     }
+    setAddToOneDollar(Boolean(editingProduct?.addToOneDollar));
+    setOneDollarDeliveryNote(editingProduct?.oneDollarDeliveryNote || "");
     isPublishedRef.current = false;
     isDiscardedRef.current = false;
     hasInteractedRef.current = false;
   }, [editingProduct?.id]);
+
+  React.useEffect(() => {
+    if (!editingProduct?.id || !isEditingPublished) {
+      setExistingOneDollarListing(null);
+      return;
+    }
+    let cancelled = false;
+    getDoc(doc(db, "oneDollarListings", `odl_${editingProduct.id}`))
+      .then((snap) => {
+        if (cancelled) return;
+        if (snap.exists()) {
+          const data = { id: snap.id, ...snap.data() } as any;
+          setExistingOneDollarListing(data);
+          if (data.status === "approved" && data.isActive) {
+            setAddToOneDollar(true);
+          }
+          if (data.deliveryNotice) {
+            setOneDollarDeliveryNote(data.deliveryNotice);
+          }
+        } else {
+          setExistingOneDollarListing(null);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [editingProduct?.id, isEditingPublished]);
   const [pricingType, setPricingType] = React.useState<"fixed" | "hourly" | "project" | "daily">(editingProduct?.pricingType || "fixed");
   const [condition, setCondition] = React.useState<"new" | "refurbished" | "used">(editingProduct?.condition || "new");
   const [deliveryOptions, setDeliveryOptions] = React.useState({
@@ -4872,6 +4908,31 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
     "food", "drink", "catering", "cooking", "cake", "pastries", "mocktail", "cocktail", "meal prep", "snacks", "small chops", "puff puff", "shawarma", "burger", "pizza"
   ].some(term => (name || "").toLowerCase().includes(term) || (customServiceName || "").toLowerCase().includes(term));
 
+  const parsedSellingPriceNgn = parseFloat(price);
+  const isOneDollarEligibleItem =
+    type === "good" &&
+    !isFoodAndDrinks &&
+    category !== "Logistics & Errands" &&
+    category !== "Logistics";
+  const oneDollarCeilingNgn = oneDollarRate?.oneDollarNgnPrice || 0;
+  const isPriceInOneDollarRange = Boolean(
+    isOneDollarEligibleItem &&
+    Number.isFinite(parsedSellingPriceNgn) &&
+    parsedSellingPriceNgn > 0 &&
+    oneDollarCeilingNgn > 0 &&
+    parsedSellingPriceNgn <= oneDollarCeilingNgn
+  );
+  const computedOneDollarUsd = React.useMemo(() => {
+    if (!isPriceInOneDollarRange || !oneDollarRate?.rate) return null;
+    return clampOneDollarUsd(parsedSellingPriceNgn / oneDollarRate.rate);
+  }, [isPriceInOneDollarRange, parsedSellingPriceNgn, oneDollarRate?.rate]);
+
+  React.useEffect(() => {
+    if (!isPriceInOneDollarRange && addToOneDollar) {
+      setAddToOneDollar(false);
+    }
+  }, [isPriceInOneDollarRange, addToOneDollar]);
+
   const SERVICE_OPTIONS = [
     "Graphic Design", "Tutoring", "Cleaning", "Delivery", "Repairs", "Hairdressing", 
     "Makeup Artistry", "Photography", "Catering", "Food & Drinks", "Laundry", "Tailoring/Fashion Design", 
@@ -5086,6 +5147,8 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
       schoolAddress: schoolAddress.trim() || null,
       schoolLocation: finalSchoolLocation || null,
       pickupPolicyAccepted: !!pickupPolicyAccepted,
+      addToOneDollar: Boolean(addToOneDollar && isPriceInOneDollarRange),
+      oneDollarDeliveryNote: oneDollarDeliveryNote.trim().slice(0, 300) || null,
       logisticsType,
       logisticsCompanyId: logisticsType === "registered" ? selectedLogisticsCompanyId : null,
       logisticsCompanyName: logisticsType === "registered" ? (allLogisticsCompanies.find(c => c.id === selectedLogisticsCompanyId)?.companyName || null) : null,
@@ -5402,6 +5465,69 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
       isPublishedRef.current = true;
       activeDraftIdRef.current = null;
 
+      let publishedToOneDollar = false;
+      const sellerUid = auth.currentUser?.uid || currentUser?.uid || "";
+      if (
+        sellerUid &&
+        addToOneDollar &&
+        isPriceInOneDollarRange &&
+        computedOneDollarUsd !== null &&
+        currentUser?.oneDollarSuspended !== true &&
+        existingOneDollarListing?.status !== "rejected"
+      ) {
+        const listingId = `odl_${productId}`;
+        const nowIso = new Date().toISOString();
+        const listingPayload: Record<string, any> = {
+          id: listingId,
+          productId,
+          sellerId: sellerUid,
+          sellerName: currentUser?.displayName || auth.currentUser?.displayName || "Vendor",
+          storeName:
+            productData.businessName ||
+            currentUser?.businessName ||
+            currentUser?.storefrontSettings?.businessName ||
+            currentUser?.displayName ||
+            "Campus Store",
+          sellerVerified: Boolean(currentUser?.isVerified),
+          productName: productData.name,
+          description: productData.description || "",
+          category: productData.category || "Other",
+          condition: productData.condition || "new",
+          imageUrl: productData.imageUrl || "",
+          imageUrls: productData.imageUrls || [],
+          stock: Number(productData.stock || 0),
+          campus: currentUser?.campus || productData.pickupSchool || "",
+          location: productData.location || currentUser?.deliveryAddress || "",
+          usdPrice: computedOneDollarUsd,
+          status: "approved",
+          isActive: true,
+          approvedAt: nowIso,
+          approvedBy: "Seller Direct",
+          deliveryNotice:
+            oneDollarDeliveryNote.trim().slice(0, 300) ||
+            "Delivery or campus pickup arranged directly with the vendor.",
+          createdAt: existingOneDollarListing?.createdAt || nowIso,
+          updatedAt: nowIso
+        };
+        if (productData.publicContact) {
+          listingPayload.publicContact = productData.publicContact;
+        }
+        await setDoc(doc(db, "oneDollarListings", listingId), listingPayload, { merge: true });
+        publishedToOneDollar = true;
+      } else if (
+        !addToOneDollar &&
+        existingOneDollarListing &&
+        existingOneDollarListing.status === "approved" &&
+        existingOneDollarListing.isActive
+      ) {
+        await updateDoc(doc(db, "oneDollarListings", `odl_${productId}`), {
+          status: "deactivated",
+          isActive: false,
+          updatedAt: new Date().toISOString()
+        }).catch(() => {});
+      }
+      setAddedToOneDollarSuccess(publishedToOneDollar);
+
       if (!isEditingPublished) {
         void triggerTemplatedEmail({
           templateId: "seller_product_published",
@@ -5420,7 +5546,11 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
       }
       setLastCreatedProduct(productData);
       setNewProductId(productId);
-      setSuccessMessage("🎉 Congratulations! Your listing is now live on the marketplace.");
+      setSuccessMessage(
+        publishedToOneDollar
+          ? "🎉 Congratulations! Your listing is live on Shopiversity and directly added to the One Dollar section!"
+          : "🎉 Congratulations! Your listing is now live on the marketplace."
+      );
     } catch (error) {
       console.warn("Submission error:", error);
       if (isFirestoreQuotaError(error)) {
@@ -5533,9 +5663,16 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
                       />
                     </div>
                     <div className="flex-1 min-w-0 flex flex-col justify-center">
-                      <span className="text-[10px] font-black uppercase tracking-widest bg-purple-100 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400 px-2 py-0.5 rounded-md self-start mb-1">
-                        {lastCreatedProduct?.category}
-                      </span>
+                      <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                        <span className="text-[10px] font-black uppercase tracking-widest bg-purple-100 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400 px-2 py-0.5 rounded-md">
+                          {lastCreatedProduct?.category}
+                        </span>
+                        {addedToOneDollarSuccess && (
+                          <span className="text-[10px] font-black uppercase tracking-widest bg-[#ff6b00] text-white px-2 py-0.5 rounded-md">
+                            Live in One Dollar
+                          </span>
+                        )}
+                      </div>
                       <h4 className="text-base font-black text-slate-900 dark:text-white truncate">{lastCreatedProduct?.name || "Campus Listing"}</h4>
                       <p className="text-lg font-black text-purple-600 dark:text-purple-400 mt-0.5">
                         ₦{lastCreatedProduct?.price?.toLocaleString() || "0"}
@@ -5669,6 +5806,10 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
                       setSubjectsWithPrices([{ name: "", price: "" }]);
                       setCertificateUrl("");
                       setPickupCoordinates(null);
+                      setAddToOneDollar(false);
+                      setOneDollarDeliveryNote("");
+                      setExistingOneDollarListing(null);
+                      setAddedToOneDollarSuccess(false);
                     }}
                     className="w-full py-3.5 bg-brand-gradient hover:-translate-y-0.5 text-white rounded-2xl font-black text-xs uppercase tracking-[0.2em] shadow-lg shadow-purple-200 dark:shadow-purple-950/20 transition-all"
                   >
@@ -6154,6 +6295,86 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
               )}
             </div>
           ) : null}
+
+          {isOneDollarEligibleItem && !isFoodAndDrinks && (
+            <div className="col-span-1 sm:col-span-2">
+              {isPriceInOneDollarRange && computedOneDollarUsd !== null ? (
+                <div className="p-4 rounded-2xl bg-orange-50/90 dark:bg-orange-950/25 border-2 border-[#ff6b00]/40 space-y-3 transition-all">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-[#ff6b00] text-white text-[10px] font-black uppercase tracking-wider">
+                        <DollarSign className="w-3 h-3" />
+                        One Dollar Eligible
+                      </span>
+                      <span className="text-xs font-black text-slate-900 dark:text-white">
+                        Can be added to the One Dollar section
+                      </span>
+                    </div>
+                    <span className="text-xs font-black text-[#ff6b00] tabular-nums">
+                      ≈ {formatUsd(computedOneDollarUsd)} USD (Ceiling: {formatNaira(oneDollarCeilingNgn)})
+                    </span>
+                  </div>
+
+                  <p className="text-[11px] text-slate-600 dark:text-zinc-300 leading-relaxed">
+                    Your selling price ({formatNaira(parsedSellingPriceNgn)}) tallies with today&apos;s <strong>$1.00 USD &amp; below</strong> threshold. Once you approve below and publish, this item goes <strong>straight to the One Dollar section</strong> immediately (no admin approval needed).
+                  </p>
+
+                  {currentUser?.oneDollarSuspended ? (
+                    <div className="p-2.5 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 text-[11px] font-bold text-red-700 dark:text-red-300">
+                      One Dollar Program access is currently suspended on your account.
+                    </div>
+                  ) : existingOneDollarListing?.status === "rejected" ? (
+                    <div className="p-2.5 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 text-[11px] font-bold text-red-700 dark:text-red-300">
+                      This item&apos;s One Dollar listing was previously removed by an administrator.
+                    </div>
+                  ) : (
+                    <div className="space-y-2.5">
+                      <label className="flex items-start gap-3 p-3 rounded-xl bg-white dark:bg-zinc-900 border border-orange-200/80 dark:border-orange-900/40 cursor-pointer hover:border-[#ff6b00] transition-colors">
+                        <input
+                          type="checkbox"
+                          checked={addToOneDollar}
+                          onChange={(e) => setAddToOneDollar(e.target.checked)}
+                          className="mt-0.5 w-4 h-4 accent-[#ff6b00] rounded cursor-pointer shrink-0"
+                        />
+                        <div className="space-y-0.5">
+                          <span className="text-xs font-black text-slate-900 dark:text-white block">
+                            Approve &amp; Add Directly to One Dollar Section ({formatUsd(computedOneDollarUsd)} USD)
+                          </span>
+                          <span className="text-[11px] text-slate-500 dark:text-zinc-400 block">
+                            Goes live in One Dollar right after publishing. Delivery/pickup is arranged directly by you (no logistics courier auto-assigned).
+                          </span>
+                        </div>
+                      </label>
+
+                      {addToOneDollar && (
+                        <input
+                          type="text"
+                          maxLength={300}
+                          value={oneDollarDeliveryNote}
+                          onChange={(e) => setOneDollarDeliveryNote(e.target.value)}
+                          placeholder="Optional One Dollar vendor pickup / delivery note for buyers..."
+                          className="w-full h-10 px-3.5 rounded-xl bg-white dark:bg-zinc-900 border border-orange-200/80 dark:border-zinc-700 text-xs text-slate-900 dark:text-white outline-none focus:border-[#ff6b00]"
+                        />
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="p-3 rounded-xl bg-slate-100/70 dark:bg-zinc-900/60 border border-slate-200/80 dark:border-zinc-800 flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-zinc-400">
+                  <span className="flex items-center gap-1.5">
+                    <DollarSign className="w-3.5 h-3.5 text-[#ff6b00] shrink-0" />
+                    <span>
+                      <strong>One Dollar Tip:</strong> Price at or below{" "}
+                      <strong className="text-slate-700 dark:text-zinc-200">
+                        {oneDollarCeilingNgn > 0 ? formatNaira(oneDollarCeilingNgn) : "$1.00 USD"}
+                      </strong>{" "}
+                      to unlock adding this product straight to the One Dollar section.
+                    </span>
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
 
           {type === "good" && !isFoodAndDrinks ? (
             <div className="space-y-1.5">

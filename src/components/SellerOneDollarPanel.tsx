@@ -127,15 +127,22 @@ export default function SellerOneDollarPanel({
   );
 
   const eligibleProducts = React.useMemo(() => {
-    return products.filter((p) => {
-      if (p.isDeleted || p.isDraft || p.status === "draft" || p.isArchived) return false;
-      if (p.type === "service") return false;
-      if (p.category === "Logistics & Errands" || p.category === "Logistics") return false;
-      if ((p.stock ?? 0) <= 0) return false;
-      if (submittedProductIds.has(p.id)) return false;
-      return true;
-    });
-  }, [products, submittedProductIds]);
+    const ceilingNgn = rateInfo?.oneDollarNgnPrice || 0;
+    return products
+      .filter((p) => {
+        if (p.isDeleted || p.isDraft || p.status === "draft" || p.isArchived) return false;
+        if (p.type === "service") return false;
+        if (p.category === "Logistics & Errands" || p.category === "Logistics") return false;
+        if ((p.stock ?? 0) <= 0) return false;
+        if (submittedProductIds.has(p.id)) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        const aMatches = ceilingNgn > 0 && a.price > 0 && a.price <= ceilingNgn ? 1 : 0;
+        const bMatches = ceilingNgn > 0 && b.price > 0 && b.price <= ceilingNgn ? 1 : 0;
+        return bMatches - aMatches;
+      });
+  }, [products, submittedProductIds, rateInfo?.oneDollarNgnPrice]);
 
   const oneDollarOrders = React.useMemo(
     () => orders.filter((o) => o.isOneDollar === true),
@@ -278,8 +285,10 @@ export default function SellerOneDollarPanel({
         campus: currentUser.campus || "",
         location: currentUser.deliveryAddress || currentUser.location || "",
         usdPrice: parsedUsd,
-        status: "pending_approval",
-        isActive: false,
+        status: "approved",
+        isActive: true,
+        approvedAt: now,
+        approvedBy: "Seller Direct",
         deliveryNotice: newDeliveryNote.trim().slice(0, 300) || "Delivery or campus pickup arranged directly with the vendor.",
         createdAt: now,
         updatedAt: now
@@ -292,8 +301,8 @@ export default function SellerOneDollarPanel({
 
       await addDoc(collection(db, "notifications"), {
         userId: sellerUid,
-        title: "One Dollar Product Submitted",
-        message: `"${cleanName}" (${formatUsd(parsedUsd)} USD) has been created and submitted for Admin approval.`,
+        title: "One Dollar Product Live",
+        message: `"${cleanName}" (${formatUsd(parsedUsd)} USD) is now live in the One Dollar section.`,
         type: "system",
         isRead: false,
         createdAt: now
@@ -309,7 +318,7 @@ export default function SellerOneDollarPanel({
 
       setFeedback({
         type: "success",
-        text: `"${cleanName}" added at ${formatUsd(parsedUsd)} USD and submitted for Admin approval.`
+        text: `"${cleanName}" (${formatUsd(parsedUsd)} USD) is now live in the One Dollar section!`
       });
     } catch (err: any) {
       setFeedback({ type: "error", text: err?.message || "Could not create One Dollar product." });
@@ -355,8 +364,10 @@ export default function SellerOneDollarPanel({
         campus: currentUser.campus || product.pickupSchool || "",
         location: product.location || currentUser.deliveryAddress || "",
         usdPrice: parsedUsd,
-        status: "pending_approval",
-        isActive: false,
+        status: "approved",
+        isActive: true,
+        approvedAt: now,
+        approvedBy: "Seller Direct",
         deliveryNotice: note || "Delivery or campus pickup arranged directly with the vendor.",
         createdAt: now,
         updatedAt: now
@@ -369,8 +380,8 @@ export default function SellerOneDollarPanel({
 
       await addDoc(collection(db, "notifications"), {
         userId: sellerUid,
-        title: "One Dollar Listing Submitted",
-        message: `"${product.name}" has been submitted at ${formatUsd(parsedUsd)} USD for Admin approval.`,
+        title: "One Dollar Listing Live",
+        message: `"${product.name}" is now live in the One Dollar section at ${formatUsd(parsedUsd)} USD.`,
         type: "system",
         isRead: false,
         createdAt: now
@@ -378,18 +389,18 @@ export default function SellerOneDollarPanel({
 
       setFeedback({
         type: "success",
-        text: `"${product.name}" submitted at ${formatUsd(parsedUsd)} USD. An admin will review and approve it before it goes live.`
+        text: `"${product.name}" is now live in the One Dollar section at ${formatUsd(parsedUsd)} USD!`
       });
     } catch (err: any) {
-      setFeedback({ type: "error", text: err?.message || "Could not submit product to One Dollar." });
+      setFeedback({ type: "error", text: err?.message || "Could not add product to One Dollar." });
       handleFirestoreError(err, OperationType.CREATE, `oneDollarListings/odl_${product.id}`);
     } finally {
       setSubmittingId(null);
     }
   };
 
-  const handleUpdateListingPriceAndResubmit = async (listing: OneDollarListing) => {
-    if (isSuspended) return;
+  const handleUpdateListingPriceAndPublish = async (listing: OneDollarListing) => {
+    if (isSuspended || listing.status === "rejected") return;
     const rawUsd = editUsdByListing[listing.id] ?? clampOneDollarUsd(listing.usdPrice).toFixed(2);
     const parsedUsd = parseValidUsdPrice(rawUsd);
     if (parsedUsd === null) {
@@ -403,13 +414,15 @@ export default function SellerOneDollarPanel({
       const now = new Date().toISOString();
       await updateDoc(doc(db, "oneDollarListings", listing.id), {
         usdPrice: parsedUsd,
-        status: "pending_approval",
-        isActive: false,
+        status: "approved",
+        isActive: true,
+        approvedAt: now,
+        approvedBy: "Seller Direct",
         updatedAt: now
       });
       setFeedback({
         type: "success",
-        text: `Updated "${listing.productName}" to ${formatUsd(parsedUsd)} USD and submitted for Admin approval.`
+        text: `Updated "${listing.productName}" to ${formatUsd(parsedUsd)} USD. It is live in One Dollar!`
       });
     } catch (err: any) {
       setFeedback({ type: "error", text: err?.message || "Could not update listing price." });
@@ -421,6 +434,7 @@ export default function SellerOneDollarPanel({
 
   const handleToggleActive = async (listing: OneDollarListing) => {
     if (isSuspended && !listing.isActive) return;
+    if (listing.status === "rejected") return;
     setTogglingId(listing.id);
     setFeedback(null);
     try {
@@ -437,18 +451,20 @@ export default function SellerOneDollarPanel({
             ? `"${listing.productName}" is now live in the One Dollar section.`
             : `"${listing.productName}" has been paused from public One Dollar view.`
         });
-      } else if (listing.status === "deactivated" || listing.status === "rejected") {
+      } else if (listing.status === "deactivated" || listing.status === "pending_approval") {
         const rawUsd = editUsdByListing[listing.id] ?? clampOneDollarUsd(listing.usdPrice).toFixed(2);
         const parsedUsd = parseValidUsdPrice(rawUsd) ?? clampOneDollarUsd(listing.usdPrice);
         await updateDoc(doc(db, "oneDollarListings", listing.id), {
           usdPrice: parsedUsd,
-          status: "pending_approval",
-          isActive: false,
+          status: "approved",
+          isActive: true,
+          approvedAt: now,
+          approvedBy: "Seller Direct",
           updatedAt: now
         });
         setFeedback({
           type: "success",
-          text: `"${listing.productName}" (${formatUsd(parsedUsd)} USD) was resubmitted for Admin approval.`
+          text: `"${listing.productName}" (${formatUsd(parsedUsd)} USD) is now live in the One Dollar section.`
         });
       }
     } catch (err: any) {
@@ -511,7 +527,7 @@ export default function SellerOneDollarPanel({
               List Products Priced at $1.00 USD &amp; Below
             </h3>
             <p className="text-xs sm:text-sm text-slate-500 dark:text-zinc-400 max-w-2xl leading-relaxed">
-              Participation is voluntary. Pick any price between <strong>$0.01 and $1.00 USD</strong> for existing store products or add a new $1-and-below item directly. Approved listings convert to Naira daily using live FX rates.
+              Participation is voluntary. Pick any price between <strong>$0.01 and $1.00 USD</strong> for existing store products or add a new $1-and-below item directly—your item goes straight to the One Dollar section immediately.
             </p>
           </div>
 
@@ -625,7 +641,7 @@ export default function SellerOneDollarPanel({
               Add a New Product ($0.01 – $1.00 USD)
             </h4>
             <p className="text-xs text-slate-500 dark:text-zinc-400">
-              Create a product specifically priced within the $1.00 USD and below range and submit it for Admin approval.
+              Create a product specifically priced within the $1.00 USD and below range and publish it straight to One Dollar.
             </p>
           </div>
           <button
@@ -791,14 +807,14 @@ export default function SellerOneDollarPanel({
                 className="px-5 py-2.5 rounded-xl bg-[#ff6b00] hover:bg-[#e56000] text-white text-xs font-black uppercase tracking-wider flex items-center gap-2 border-none cursor-pointer disabled:opacity-40"
               >
                 {creatingProduct ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                <span>Create &amp; Submit ({newFormParsedUsd !== null ? formatUsd(newFormParsedUsd) : "$1.00"})</span>
+                <span>Publish to One Dollar ({newFormParsedUsd !== null ? formatUsd(newFormParsedUsd) : "$1.00"})</span>
               </button>
             </div>
           </form>
         )}
       </div>
 
-      {/* Existing One Dollar Submissions */}
+      {/* Existing One Dollar Listings */}
       <div className="bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800 rounded-3xl p-6 space-y-4">
         <div className="flex items-center justify-between gap-2">
           <div>
@@ -806,7 +822,7 @@ export default function SellerOneDollarPanel({
               My One Dollar Listings
             </h4>
             <p className="text-xs text-slate-500 dark:text-zinc-400">
-              Manage approvals, adjust USD pricing ($0.01 – $1.00), pause/reactivate, or remove items anytime.
+              Adjust USD pricing ($0.01 – $1.00), pause/activate, or remove items anytime.
             </p>
           </div>
         </div>
@@ -891,7 +907,7 @@ export default function SellerOneDollarPanel({
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
-                    {!isSuspended && (
+                    {!isSuspended && item.status !== "rejected" && (
                       <div className="flex items-center gap-1.5">
                         <div className="relative w-24">
                           <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[11px] font-black text-slate-400">$</span>
@@ -910,7 +926,7 @@ export default function SellerOneDollarPanel({
                           <button
                             type="button"
                             disabled={togglingId === item.id || editParsed === null}
-                            onClick={() => handleUpdateListingPriceAndResubmit(item)}
+                            onClick={() => handleUpdateListingPriceAndPublish(item)}
                             className="px-2.5 h-8 rounded-lg bg-slate-900 dark:bg-zinc-800 text-white text-[11px] font-bold border-none cursor-pointer disabled:opacity-40"
                           >
                             Save Price
@@ -940,14 +956,14 @@ export default function SellerOneDollarPanel({
                         </button>
                       </>
                     )}
-                    {(item.status === "deactivated" || item.status === "rejected") && !isSuspended && (
+                    {(item.status === "deactivated" || item.status === "pending_approval") && !isSuspended && (
                       <button
                         type="button"
                         disabled={togglingId === item.id}
                         onClick={() => handleToggleActive(item)}
                         className="px-3 py-2 rounded-xl bg-[#ff6b00] hover:bg-[#e56000] text-white text-xs font-bold border-none cursor-pointer disabled:opacity-40"
                       >
-                        Resubmit ({editParsed !== null ? formatUsd(editParsed) : formatUsd(itemUsd)})
+                        Publish Live ({editParsed !== null ? formatUsd(editParsed) : formatUsd(itemUsd)})
                       </button>
                     )}
                     <button
@@ -994,10 +1010,16 @@ export default function SellerOneDollarPanel({
               const rawUsdStr = getDefaultUsdString(p);
               const parsedUsd = parseValidUsdPrice(rawUsdStr);
               const previewNgn = parsedUsd !== null ? computeOneDollarNgn(parsedUsd, rateInfo) : null;
+              const matchesCeiling = Boolean(rateInfo?.oneDollarNgnPrice && p.price > 0 && p.price <= rateInfo.oneDollarNgnPrice);
               return (
                 <div
                   key={p.id}
-                  className="p-4 rounded-2xl border border-slate-200/80 dark:border-zinc-800 bg-slate-50/40 dark:bg-zinc-950/40 flex flex-col gap-3"
+                  className={cn(
+                    "p-4 rounded-2xl border flex flex-col gap-3",
+                    matchesCeiling
+                      ? "border-orange-300 dark:border-orange-900/60 bg-orange-50/30 dark:bg-orange-950/10"
+                      : "border-slate-200/80 dark:border-zinc-800 bg-slate-50/40 dark:bg-zinc-950/40"
+                  )}
                 >
                   <div className="flex items-start gap-3">
                     <div className="w-14 h-14 rounded-xl overflow-hidden bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shrink-0">
@@ -1009,7 +1031,14 @@ export default function SellerOneDollarPanel({
                       />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-bold text-slate-900 dark:text-white truncate">{p.name}</p>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <p className="text-sm font-bold text-slate-900 dark:text-white truncate">{p.name}</p>
+                        {matchesCeiling && (
+                          <span className="px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 text-[10px] font-black uppercase">
+                            Matches ≤ $1.00 price
+                          </span>
+                        )}
+                      </div>
                       <p className="text-xs text-slate-500 dark:text-zinc-400 tabular-nums">
                         Regular Store Price: ₦{Number(p.price || 0).toLocaleString()} • Stock: {p.stock}
                       </p>
@@ -1088,7 +1117,7 @@ export default function SellerOneDollarPanel({
                       <Plus className="w-4 h-4" />
                     )}
                     <span>
-                      Submit to One Dollar ({parsedUsd !== null ? formatUsd(parsedUsd) : "$1.00 max"})
+                      Add Directly to One Dollar ({parsedUsd !== null ? formatUsd(parsedUsd) : "$1.00 max"})
                     </span>
                   </button>
                 </div>

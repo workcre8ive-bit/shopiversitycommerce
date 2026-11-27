@@ -224,6 +224,8 @@ export interface Product {
   schoolAddress?: string;
   schoolLocation?: string;
   pickupPolicyAccepted?: boolean;
+  addToOneDollar?: boolean;
+  oneDollarDeliveryNote?: string;
 }
 
 export interface Order {
@@ -423,7 +425,26 @@ export interface OrderPaymentReceipt {
   logisticsPartner?: string;
   verificationTimestamp: string;
   escrowStatus: "held" | "released" | "refunded" | "not_applicable";
-  status: "verified" | "cleared";
+  status: "verified" | "cleared" | "processing" | "under_review" | "failed";
+  provider?: string;
+  escrowId?: string;
+  currency?: string;
+  verifiedStatus?: "processing" | "secured" | "failed" | "under_review";
+  environment?: "test" | "live";
+  isTestTransaction?: boolean;
+  checkoutSessionId?: string;
+  checkoutUrl?: string;
+  virtualAccount?: {
+    accountNumber?: string;
+    bankName?: string;
+    accountName?: string;
+    expiresAt?: string;
+    expectedAmount?: number;
+  };
+  releaseId?: string;
+  refundId?: string;
+  fundedMinor?: number;
+  fundingFeeDeductedMinor?: number;
 }
 
 export interface LogisticsCompany {
@@ -560,6 +581,7 @@ export interface CartItem {
   exchangeRateUsdToNgn?: number;
   exchangeRateSource?: string;
   exchangeRateUpdatedAt?: string;
+  maxStock?: number;
 }
 
 export interface EventPlan {

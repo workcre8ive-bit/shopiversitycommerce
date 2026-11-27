@@ -93,46 +93,43 @@
         display: flex;
         align-items: center;
         justify-content: center;
+        border-radius: 22px;
         animation: floatEmblem 2.4s ease-in-out infinite;
       }
+      @media (prefers-color-scheme: dark) {
+        .preloader-cart-wrap {
+          background-color: rgba(255, 255, 255, 0.95);
+          padding: 8px;
+        }
+      }
       .preloader-title {
-        font-size: 27px;
+        font-size: 30px;
         font-weight: 900;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-        background: linear-gradient(90deg, #ff8800 0%, #ff6b00 50%, #ff4d00 100%);
-        -webkit-background-clip: text;
-        background-clip: text;
-        color: transparent;
+        letter-spacing: -0.03em;
         line-height: 1;
-      }
-      .preloader-tagline-row {
-        margin-top: 8px;
         display: flex;
-        align-items: center;
-        gap: 8px;
+        align-items: baseline;
       }
-      .preloader-rule-l, .preloader-rule-r {
-        width: 24px;
-        height: 2px;
-        border-radius: 9999px;
+      .preloader-title-dark {
+        color: #141414;
       }
-      .preloader-rule-l {
-        background: linear-gradient(90deg, transparent, #ff6b00);
-      }
-      .preloader-rule-r {
-        background: linear-gradient(270deg, transparent, #ff6b00);
+      .preloader-title-orange {
+        color: #ff7a00;
       }
       .preloader-tagline {
+        margin-top: 6px;
         font-size: 11px;
         font-style: italic;
         font-weight: 600;
-        letter-spacing: 0.015em;
-        color: #1e293b;
+        letter-spacing: 0.01em;
+        color: #334155;
       }
       @media (prefers-color-scheme: dark) {
+        .preloader-title-dark {
+          color: #ffffff;
+        }
         .preloader-tagline {
-          color: #e2e8f0;
+          color: #cbd5e1;
         }
       }
       .preloader-bar-wrap {
@@ -189,15 +186,10 @@
             />
           </div>
         </div>
-        <div class="preloader-title">SHOPIVERSITY</div>
-        <div class="preloader-tagline-row">
-          <span class="preloader-rule-l"></span>
-          <span class="preloader-tagline">The Marketplace at Your Finger Tips</span>
-          <span class="preloader-rule-r"></span>
+        <div class="preloader-title">
+          <span class="preloader-title-dark">Shop</span><span style="position:relative;display:inline-block;"><span class="preloader-title-dark">ı</span><span style="position:absolute;left:50%;transform:translateX(-50%);top:0.06em;width:0.23em;height:0.23em;border-radius:9999px;background:#ff7a00;"></span></span><span class="preloader-title-orange">versity</span>
         </div>
-        <svg viewBox="0 0 180 12" width="164" height="10" style="margin-top: 4px; overflow: visible;" aria-hidden="true">
-          <path d="M 8 10 Q 90 1 172 10" fill="none" stroke="#ff6b00" stroke-width="2.6" stroke-linecap="round" />
-        </svg>
+        <div class="preloader-tagline">the marketplace at your finger tips</div>
         <div class="preloader-bar-wrap">
           <div class="preloader-bar-fill"></div>
         </div>

@@ -1,5 +1,5 @@
 import React from "react";
-import { CartItem, UserProfile } from "../types";
+import { CartItem, OneDollarListing, Product, UserProfile } from "../types";
 import { 
   ArrowLeft, 
   ShoppingBag, 
@@ -29,6 +29,8 @@ import { usePaystackPayment } from "../hooks/usePaystackPayment";
 import { getPaystackPublicKey, getSyncPaystackPublicKey } from "../utils/paystackConfig";
 import { notifyOrderPlaced, triggerTemplatedEmail } from "../utils/orderEmailNotifications";
 import { clampOneDollarUsd, formatUsd } from "../lib/oneDollarRate";
+import { resolveAvailableStockForCartItem } from "../lib/cartStock";
+import EscrowCheckoutModal, { EscrowSessionDetails } from "./EscrowCheckoutModal";
 
 interface CartPageProps {
   cart: CartItem[];
@@ -38,6 +40,8 @@ interface CartPageProps {
   currentUser: UserProfile | null;
   setActiveTab: (tab: string) => void;
   onBack?: () => void;
+  products?: Product[];
+  oneDollarListings?: OneDollarListing[];
 }
 
 export default function CartPage({ 
@@ -47,13 +51,20 @@ export default function CartPage({
   onClear, 
   currentUser, 
   setActiveTab,
-  onBack 
+  onBack,
+  products,
+  oneDollarListings
 }: CartPageProps) {
   const [loading, setLoading] = React.useState(false);
   const [success, setSuccess] = React.useState(false);
   const [deliveryType, setDeliveryType] = React.useState<"delivery" | "pickup">("pickup");
   const [paymentMethod, setPaymentMethod] = React.useState<"online" | "pod" | "physical">("online");
   const [useOneDollarEscrow, setUseOneDollarEscrow] = React.useState(true);
+  const [oneDollarProvider, setOneDollarProvider] = React.useState<"paystack" | "escrowpay">("paystack");
+  const [escrowSession, setEscrowSession] = React.useState<EscrowSessionDetails | null>(null);
+  const [isEscrowModalOpen, setIsEscrowModalOpen] = React.useState(false);
+  const [checkoutError, setCheckoutError] = React.useState<string | null>(null);
+  const [failedEscrowOrders, setFailedEscrowOrders] = React.useState<Array<{ orderId: string; uniqueOrderId: string; totalPrice: number; sellerId: string; productName: string; commissionRate: number; amountNgn: number; isOneDollar: boolean }> | null>(null);
   const [selectedItemKeys, setSelectedItemKeys] = React.useState<string[]>([]);
   const isCreating = React.useRef(false);
 
@@ -64,6 +75,7 @@ export default function CartPage({
     setSelectedItemKeys(cart.map(getItemKey));
     if (cart.length > 0) {
       setSuccess(false);
+      setCheckoutError(null);
     }
   }, [cart.length]);
 
@@ -88,6 +100,8 @@ export default function CartPage({
   const hasEvent = selectedItems.some(item => item.ticketTierId);
   const hasService = selectedItems.some(item => item.type === "service");
   const hasOneDollarItems = selectedItems.some(item => item.isOneDollar);
+  const hasRegularMarketplaceItems = selectedItems.some(item => !item.isOneDollar);
+  const hasMixedCartItems = hasOneDollarItems && hasRegularMarketplaceItems;
   const allOneDollarItems = selectedItems.length > 0 && selectedItems.every(item => item.isOneDollar);
   
   React.useEffect(() => {
@@ -149,11 +163,19 @@ export default function CartPage({
       exchangeRateUpdatedAt: string;
       paymentReference?: string;
     },
-    paymentReference?: string
-  ) => {
-    if (selectedItems.length === 0 || isCreating.current) return;
+    paymentReference?: string,
+    options?: {
+      initialOrderStatus?: string;
+      skipSuccessScreen?: boolean;
+      forceEscrowSelected?: boolean;
+      paymentProvider?: "escrowpay" | "paystack";
+    }
+  ): Promise<Array<{ orderId: string; uniqueOrderId: string; totalPrice: number; sellerId: string; productName: string; commissionRate: number }>> => {
+    if (selectedItems.length === 0 || isCreating.current) return [];
     isCreating.current = true;
     setLoading(true);
+
+    const createdRecords: Array<{ orderId: string; uniqueOrderId: string; totalPrice: number; sellerId: string; productName: string; commissionRate: number }> = [];
 
     try {
       const uniqueSelectedItems = Array.from(
@@ -225,6 +247,7 @@ export default function CartPage({
         const resolvedRateSource = validatedOneDollar?.exchangeRateSource || item.exchangeRateSource;
         const resolvedRateUpdated = validatedOneDollar?.exchangeRateUpdatedAt || item.exchangeRateUpdatedAt;
 
+        const resolvedEscrowSelected = options?.forceEscrowSelected ?? useOneDollarEscrow;
         const orderData: any = {
           uniqueOrderId,
           uniqueProductId,
@@ -256,7 +279,9 @@ export default function CartPage({
           paymentMethod: item.ticketTierId ? "online" : paymentMethod,
           paymentStatus: isPaid ? "paid" : "pending",
           ...(paymentReference ? { paymentReference } : {}),
-          status: item.ticketTierId ? "acquired" : (item.type === "service" ? "accepted" : "Pending Seller Acceptance"),
+          status:
+            options?.initialOrderStatus ||
+            (item.ticketTierId ? "acquired" : (item.type === "service" ? "accepted" : "Pending Seller Acceptance")),
           createdAt: new Date().toISOString(),
           deliveryAddress: currentUser?.deliveryAddress || "",
           type: item.type || "good",
@@ -267,13 +292,36 @@ export default function CartPage({
             ...(resolvedRate ? { exchangeRateUsdToNgn: resolvedRate } : {}),
             ...(resolvedRateSource ? { exchangeRateSource: resolvedRateSource } : {}),
             ...(resolvedRateUpdated ? { exchangeRateUpdatedAt: resolvedRateUpdated } : {}),
-            escrowSelected: useOneDollarEscrow,
-            escrowStatus: isPaid ? (useOneDollarEscrow ? "held" : "not_applicable") : undefined,
-            payoutStatus: isPaid ? (useOneDollarEscrow ? "escrow" : "released") : undefined,
+            escrowSelected: resolvedEscrowSelected,
+            ...(isPaid ? {
+              escrowStatus: resolvedEscrowSelected ? "held" : "not_applicable",
+              payoutStatus: resolvedEscrowSelected ? "escrow" : "released"
+            } : {}),
             deliveryHandledBy: "vendor"
           } : {
             ...(isPaid ? { escrowStatus: "held", payoutStatus: "escrow" } : {})
           }),
+          ...(options?.paymentProvider === "escrowpay" ? {
+            paymentReceipt: {
+              receiptNumber: `ESC-INIT-${Date.now().toString().slice(-6)}`,
+              orderId: "",
+              transactionId: paymentReference || "",
+              paymentReference: paymentReference || "",
+              paymentMethod: "online",
+              provider: "escrowpay",
+              amountPaid: itemTotal,
+              currency: "NGN",
+              platformFee: itemPlatformCommission,
+              buyerName: currentUser?.displayName || "Buyer",
+              productName: item.name,
+              quantity: item.quantity,
+              deliveryType,
+              verificationTimestamp: new Date().toISOString(),
+              escrowStatus: "not_applicable",
+              status: "processing",
+              verifiedStatus: "processing"
+            }
+          } : {}),
           ...(item.ticketTierId ? { ticketTierId: item.ticketTierId } : {}),
           ...(item.ticketTierName ? { ticketTierName: item.ticketTierName } : {}),
           ...(item.menuItemId ? { menuItemId: item.menuItemId } : {}),
@@ -301,6 +349,14 @@ export default function CartPage({
         try {
           const orderRef = await addDoc(collection(db, "orders"), orderData);
           orderId = orderRef.id;
+          createdRecords.push({
+            orderId,
+            uniqueOrderId,
+            totalPrice: itemTotal,
+            sellerId: item.sellerId,
+            productName: item.name,
+            commissionRate
+          });
           await addDoc(collection(db, "analytics"), {
             productId: item.productId,
             sellerId: item.sellerId,
@@ -499,7 +555,10 @@ export default function CartPage({
         onRemove(item.productId, item.menuItemId, item.ticketTierId, item.isOneDollar);
       });
 
-      setSuccess(true);
+      if (!options?.skipSuccessScreen) {
+        setSuccess(true);
+      }
+      return createdRecords;
     } catch (err) {
       console.error("Order creation internal error:", err);
       throw err;
@@ -535,6 +594,7 @@ export default function CartPage({
             })),
             paymentReference: response.reference,
             paymentMethod: "online",
+            paymentProvider: "paystack",
             totalCartAmountNgn: total
           })
         });
@@ -553,7 +613,7 @@ export default function CartPage({
       await createOrders(true, validatedOneDollar, response.reference);
     } catch (error: any) {
       console.error("Order creation failed", error);
-      alert(error.message || "Failed to process order. Please contact support.");
+      setCheckoutError(error?.message || "Failed to process order. Please contact support.");
     } finally {
       setLoading(false);
     }
@@ -563,38 +623,238 @@ export default function CartPage({
     setLoading(false);
   };
 
+  const startEscrowPayCheckout = async (
+    retryRecords?: Array<{ orderId: string; uniqueOrderId: string; totalPrice: number; sellerId: string; productName: string; commissionRate: number; amountNgn: number; isOneDollar: boolean }>
+  ) => {
+    setLoading(true);
+    setCheckoutError(null);
+    let createdRecordsForRetry: Array<{ orderId: string; uniqueOrderId: string; totalPrice: number; sellerId: string; productName: string; commissionRate: number; amountNgn: number; isOneDollar: boolean }> =
+      retryRecords || [];
+
+    try {
+      // Pre-flight check so missing EscrowPay credentials never wipe the user's cart or create orphan orders
+      const cfgRes = await fetch("/api/payments/escrow/config-status");
+      if (cfgRes.ok) {
+        const cfgData = await cfgRes.json();
+        if (!cfgData.configured) {
+          throw new Error(
+            "EscrowPay Sandbox API key is not configured on the server yet (missing ESCROWPAY_TEST_SECRET_KEY). Add it in your server environment variables and redeploy."
+          );
+        }
+      }
+
+      if (!retryRecords || retryRecords.length === 0) {
+        let validatedOneDollar: any = undefined;
+        if (hasOneDollarItems) {
+          const oneDollarSelected = selectedItems.filter(i => i.isOneDollar);
+          const valRes = await fetch("/api/one-dollar/validate-checkout", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              items: oneDollarSelected.map((i) => ({
+                productId: i.productId,
+                quantity: i.quantity,
+                usdPrice: clampOneDollarUsd(i.usdPrice),
+                unitPriceNgn: i.price
+              })),
+              paymentReference: `ESC_PRE_${Date.now()}`,
+              paymentMethod: "online",
+              paymentProvider: "escrowpay",
+              totalCartAmountNgn: total
+            })
+          });
+          const valData = await valRes.json();
+          if (!valRes.ok || !valData.success) {
+            throw new Error(valData.error || "One Dollar exchange rate validation failed.");
+          }
+          validatedOneDollar = {
+            oneDollarUnitNgn: valData.authoritativeUnitNgn,
+            exchangeRateUsdToNgn: valData.rateSnapshot?.rate,
+            exchangeRateSource: valData.rateSnapshot?.source,
+            exchangeRateUpdatedAt: valData.rateSnapshot?.updatedAt
+          };
+        }
+
+        // Create pending awaiting_payment order(s) FIRST — NEVER marked paid until EscrowPay verifies!
+        const createdRecords = await createOrders(false, validatedOneDollar, undefined, {
+          initialOrderStatus: "awaiting_payment",
+          skipSuccessScreen: true,
+          forceEscrowSelected: true,
+          paymentProvider: "escrowpay"
+        });
+
+        createdRecordsForRetry = createdRecords.map((rec) => ({
+          ...rec,
+          amountNgn: total,
+          isOneDollar: hasOneDollarItems
+        }));
+      }
+
+      const primaryRecord = createdRecordsForRetry[0];
+      if (!primaryRecord?.orderId) {
+        throw new Error("Could not create pending order for EscrowPay checkout.");
+      }
+
+      const checkoutAmount = primaryRecord.amountNgn || total;
+      const idToken = await auth.currentUser?.getIdToken(true);
+      const createRes = await fetch("/api/payments/escrow/create", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(idToken ? { Authorization: `Bearer ${idToken}` } : {})
+        },
+        body: JSON.stringify({
+          orderId: primaryRecord.orderId,
+          uniqueOrderId: primaryRecord.uniqueOrderId,
+          amountNgn: checkoutAmount,
+          description:
+            createdRecordsForRetry.length > 1
+              ? `Shopiversity Cart (${createdRecordsForRetry.length} items)`
+              : primaryRecord.productName,
+          sellerId: primaryRecord.sellerId,
+          buyerName: currentUser?.displayName || "Buyer",
+          buyerPhone: currentUser?.phoneNumber || "",
+          commissionRate: primaryRecord.commissionRate,
+          isOneDollar: Boolean(primaryRecord.isOneDollar),
+          returnOrigin: window.location.origin
+        })
+      });
+
+      const createData = await createRes.json().catch(() => ({}));
+      if (!createRes.ok || !createData.success) {
+        if (createdRecordsForRetry.length > 0) {
+          setFailedEscrowOrders(createdRecordsForRetry);
+        }
+        throw new Error(
+          createData.error ||
+            "Order saved in Payment Processing, but EscrowPay checkout session could not start right now."
+        );
+      }
+
+      setFailedEscrowOrders(null);
+
+      // Link EscrowPay transaction details back to all created order docs cleanly (no undefined fields)
+      const nowIso = new Date().toISOString();
+      await Promise.all(
+        createdRecordsForRetry.map((rec) =>
+          updateDoc(doc(db, "orders", rec.orderId), {
+            paymentReference: createData.reference,
+            paymentStatus: "pending",
+            paymentReceipt: {
+              receiptNumber: `${createData.isTestTransaction ? "ESC-TEST-" : "ESC-"}${Date.now().toString().slice(-6)}`,
+              orderId: rec.orderId,
+              transactionId: createData.transactionId,
+              paymentReference: createData.reference,
+              paymentMethod: "online",
+              provider: "escrowpay",
+              environment: createData.environment,
+              isTestTransaction: createData.isTestTransaction,
+              escrowId: createData.transactionId,
+              ...(createData.checkoutSessionId ? { checkoutSessionId: createData.checkoutSessionId } : {}),
+              ...(createData.checkoutUrl ? { checkoutUrl: createData.checkoutUrl } : {}),
+              ...(createData.virtualAccount ? { virtualAccount: createData.virtualAccount } : {}),
+              amountPaid: rec.totalPrice,
+              currency: "NGN",
+              platformFee: 0,
+              buyerName: currentUser?.displayName || "Buyer",
+              productName: rec.productName,
+              quantity: 1,
+              deliveryType,
+              verificationTimestamp: nowIso,
+              escrowStatus: "not_applicable",
+              status: "processing",
+              verifiedStatus: "processing"
+            },
+            updatedAt: nowIso
+          }).catch((updErr) => {
+            console.warn("Non-fatal paymentReceipt update warning:", updErr);
+          })
+        )
+      );
+
+      setEscrowSession({
+        orderId: primaryRecord.orderId,
+        uniqueOrderId: primaryRecord.uniqueOrderId,
+        transactionId: createData.transactionId,
+        reference: createData.reference,
+        environment: createData.environment,
+        isTestTransaction: createData.isTestTransaction,
+        amountNgn: checkoutAmount,
+        currency: "NGN",
+        checkoutUrl: createData.checkoutUrl,
+        checkoutSessionId: createData.checkoutSessionId,
+        virtualAccount: createData.virtualAccount,
+        returnUrl: createData.returnUrl
+      });
+      setIsEscrowModalOpen(true);
+    } catch (err: any) {
+      console.error("EscrowPay checkout error:", err);
+      setCheckoutError(err?.message || "Failed to initialize EscrowPay checkout. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleCheckout = async () => {
     if (loading || isCreating.current) return;
+    setCheckoutError(null);
     if (!auth.currentUser || !currentUser || selectedItems.length === 0) {
       if (selectedItems.length === 0 && cart.length > 0) {
-        alert("Please select at least one item to checkout.");
+        setCheckoutError("Please select at least one item to checkout.");
       }
       return;
     }
 
-    if (auth.currentUser && !auth.currentUser.emailVerified) {
-      alert("Email Verification Required: Please verify your email address before placing an order. Check your inbox for the verification link or click 'Resend Verification Email' in the top banner.");
+    if (hasMixedCartItems) {
+      setCheckoutError("Please checkout One Dollar items separately from Regular Marketplace items so the right payment gateway applies to each.");
       return;
     }
-    
-    if (paymentMethod === "online") {
+
+    if (auth.currentUser && !auth.currentUser.emailVerified) {
+      setCheckoutError("Email Verification Required: Please verify your email address before placing an order. Check your inbox or click 'Resend Verification Email' in the top banner.");
+      return;
+    }
+
+    for (const selectedItem of selectedItems) {
+      const liveMaxStock = resolveAvailableStockForCartItem(selectedItem, products, oneDollarListings);
+      if (liveMaxStock !== undefined && liveMaxStock <= 0) {
+        setCheckoutError(`"${selectedItem.name}" is currently out of stock. Please remove it from your selection to continue.`);
+        return;
+      }
+      if (liveMaxStock !== undefined && selectedItem.quantity > liveMaxStock) {
+        setCheckoutError(`"${selectedItem.name}" only has ${liveMaxStock} left in inventory. Please reduce the quantity to ${liveMaxStock} or less before checking out.`);
+        return;
+      }
+    }
+
+    // One Dollar checkout: Paystack primary with optional EscrowPay
+    if (hasOneDollarItems) {
+      if (oneDollarProvider === "escrowpay") {
+        await startEscrowPayCheckout();
+        return;
+      }
       setLoading(true);
       const activeKey = await getPaystackPublicKey();
       if (!activeKey) {
         setLoading(false);
-        alert(
-          "Paystack Public Key is not configured.\n\n" +
-          "Please add VITE_PAYSTACK_PUBLIC_KEY (or live_public_key) to your Vercel Environment Variables and redeploy."
+        setCheckoutError(
+          "Paystack Public Key is not configured. Please add VITE_PAYSTACK_PUBLIC_KEY (or live_public_key) to your server environment variables, or choose the EscrowPay Option."
         );
         return;
       }
       initializePayment({ onSuccess, onClose: onClosePayment, publicKey: activeKey });
+      return;
+    }
+
+    // Regular Marketplace checkout: EscrowPay ONLY (no Paystack!) for online payment; POD / Physical preserved
+    if (paymentMethod === "online") {
+      await startEscrowPayCheckout();
     } else {
       try {
         await createOrders(false);
       } catch (error: any) {
         console.error("POD Order creation failed", error);
-        alert("Failed to process order. Please try again.");
+        setCheckoutError(error?.message || "Failed to process order. Please try again.");
       }
     }
   };
@@ -828,40 +1088,72 @@ export default function CartPage({
                   </div>
 
                   {/* Quantity and Actions */}
-                  <div className="flex items-center justify-between sm:justify-end gap-6 w-full sm:w-auto shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 dark:border-zinc-800">
-                    <div className="flex items-center bg-slate-100 dark:bg-zinc-800 rounded-xl p-1 border border-slate-200 dark:border-zinc-700">
-                      <button 
-                        onClick={() => onUpdateQuantity(item.productId, -1, item.menuItemId, item.ticketTierId, item.isOneDollar)}
-                        className="w-7 h-7 flex items-center justify-center text-slate-600 dark:text-zinc-300 hover:text-[#ff6b00] rounded-lg transition-colors cursor-pointer"
-                        title="Decrease quantity"
-                      >
-                        <Minus className="w-3.5 h-3.5" />
-                      </button>
-                      <span className="w-8 text-center text-xs font-black text-slate-900 dark:text-white">
-                        {item.quantity}
-                      </span>
-                      <button 
-                        onClick={() => onUpdateQuantity(item.productId, 1, item.menuItemId, item.ticketTierId, item.isOneDollar)}
-                        className="w-7 h-7 flex items-center justify-center text-slate-600 dark:text-zinc-300 hover:text-[#ff6b00] rounded-lg transition-colors cursor-pointer"
-                        title="Increase quantity"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+                  {(() => {
+                    const maxStock = resolveAvailableStockForCartItem(item, products, oneDollarListings);
+                    const isAtMaxStock = maxStock !== undefined && item.quantity >= maxStock;
+                    const exceedsLiveStock = maxStock !== undefined && item.quantity > maxStock;
 
-                    <div className="text-right">
-                      <div className="text-sm sm:text-base font-black text-slate-900 dark:text-white tabular-nums">
-                        ₦{(item.price * item.quantity).toLocaleString()}
+                    return (
+                      <div className="flex items-center justify-between sm:justify-end gap-6 w-full sm:w-auto shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 dark:border-zinc-800">
+                        <div className="flex flex-col items-start sm:items-center gap-1">
+                          <div className="flex items-center bg-slate-100 dark:bg-zinc-800 rounded-xl p-1 border border-slate-200 dark:border-zinc-700">
+                            <button 
+                              type="button"
+                              onClick={() => onUpdateQuantity(item.productId, -1, item.menuItemId, item.ticketTierId, item.isOneDollar)}
+                              className="w-7 h-7 flex items-center justify-center text-slate-600 dark:text-zinc-300 hover:text-[#ff6b00] rounded-lg transition-colors cursor-pointer"
+                              title="Decrease quantity"
+                            >
+                              <Minus className="w-3.5 h-3.5" />
+                            </button>
+                            <span className="w-8 text-center text-xs font-black text-slate-900 dark:text-white tabular-nums">
+                              {item.quantity}
+                            </span>
+                            <button 
+                              type="button"
+                              disabled={isAtMaxStock}
+                              onClick={() => onUpdateQuantity(item.productId, 1, item.menuItemId, item.ticketTierId, item.isOneDollar)}
+                              className={cn(
+                                "w-7 h-7 flex items-center justify-center rounded-lg transition-colors",
+                                isAtMaxStock
+                                  ? "text-slate-300 dark:text-zinc-600 cursor-not-allowed opacity-40"
+                                  : "text-slate-600 dark:text-zinc-300 hover:text-[#ff6b00] cursor-pointer"
+                              )}
+                              title={isAtMaxStock ? `Inventory limit reached (${maxStock} available)` : "Increase quantity"}
+                              aria-label={isAtMaxStock ? `Inventory limit reached (${maxStock} available)` : "Increase quantity"}
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          {exceedsLiveStock ? (
+                            <span className="text-[10px] font-bold text-red-600 dark:text-red-400">
+                              Only {maxStock} left in stock
+                            </span>
+                          ) : isAtMaxStock ? (
+                            <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400">
+                              Max stock ({maxStock})
+                            </span>
+                          ) : maxStock !== undefined ? (
+                            <span className="text-[10px] font-medium text-slate-400 dark:text-zinc-500">
+                              {maxStock} in stock
+                            </span>
+                          ) : null}
+                        </div>
+
+                        <div className="text-right">
+                          <div className="text-sm sm:text-base font-black text-slate-900 dark:text-white tabular-nums">
+                            ₦{(item.price * item.quantity).toLocaleString()}
+                          </div>
+                          <button 
+                            onClick={() => onRemove(item.productId, item.menuItemId, item.ticketTierId, item.isOneDollar)}
+                            className="text-[11px] font-bold text-red-500 hover:text-red-600 transition-colors flex items-center gap-1 mt-1 cursor-pointer bg-transparent border-none ml-auto"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            Remove
+                          </button>
+                        </div>
                       </div>
-                      <button 
-                        onClick={() => onRemove(item.productId, item.menuItemId, item.ticketTierId, item.isOneDollar)}
-                        className="text-[11px] font-bold text-red-500 hover:text-red-600 transition-colors flex items-center gap-1 mt-1 cursor-pointer bg-transparent border-none ml-auto"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                        Remove
-                      </button>
-                    </div>
-                  </div>
+                    );
+                  })()}
                 </motion.div>
               );
             })}
@@ -921,51 +1213,115 @@ export default function CartPage({
               </div>
             </div>
 
+            {/* Mixed Cart Guard */}
+            {hasMixedCartItems && (
+              <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 space-y-2.5">
+                <div className="flex items-start gap-2 text-xs text-amber-900 dark:text-amber-200">
+                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <p className="leading-relaxed">
+                    <strong>Separate Checkout Required:</strong> Regular marketplace items checkout via <strong>EscrowPay</strong>, while One Dollar items use <strong>Paystack</strong> (with an optional EscrowPay choice).
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedItemKeys(cart.filter(i => !i.isOneDollar).map(getItemKey))}
+                    className="py-2 px-2.5 rounded-xl bg-white dark:bg-zinc-900 border border-amber-300 dark:border-amber-800 text-[11px] font-bold text-slate-800 dark:text-zinc-200 hover:border-[#ff6b00] cursor-pointer"
+                  >
+                    Select Marketplace Only
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedItemKeys(cart.filter(i => i.isOneDollar).map(getItemKey))}
+                    className="py-2 px-2.5 rounded-xl bg-white dark:bg-zinc-900 border border-amber-300 dark:border-amber-800 text-[11px] font-bold text-slate-800 dark:text-zinc-200 hover:border-[#ff6b00] cursor-pointer"
+                  >
+                    Select One Dollar Only
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Payment Method Selector */}
             {hasOneDollarItems ? (
               <div className="space-y-3">
                 <label className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-zinc-400 block">
-                  One Dollar Payment Protection
+                  One Dollar Payment Gateway &amp; Protection
                 </label>
                 <div className="grid grid-cols-2 gap-2.5">
                   <button
                     type="button"
                     onClick={() => {
                       setPaymentMethod("online");
-                      setUseOneDollarEscrow(true);
+                      setOneDollarProvider("paystack");
                     }}
                     className={cn(
-                      "flex flex-col items-center gap-1.5 p-3.5 rounded-2xl border transition-all cursor-pointer text-center",
-                      useOneDollarEscrow
+                      "flex flex-col items-center gap-1.5 p-3 rounded-2xl border transition-all cursor-pointer text-center",
+                      oneDollarProvider === "paystack"
                         ? "border-[#ff6b00] bg-orange-50/40 dark:bg-orange-950/20 text-[#ff6b00] font-bold shadow-sm"
                         : "border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400 hover:border-slate-300 dark:hover:border-zinc-700"
                     )}
                   >
-                    <ShieldCheck className="w-4 h-4" />
-                    <span className="text-xs font-bold">Escrow Protected</span>
-                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">Held Until Receipt</span>
+                    <CreditCard className="w-4 h-4" />
+                    <span className="text-xs font-bold">Paystack</span>
+                    <span className="text-[10px] text-slate-500 dark:text-zinc-400">Card / Bank / USSD</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => {
                       setPaymentMethod("online");
-                      setUseOneDollarEscrow(false);
+                      setOneDollarProvider("escrowpay");
+                      setUseOneDollarEscrow(true);
                     }}
                     className={cn(
-                      "flex flex-col items-center gap-1.5 p-3.5 rounded-2xl border transition-all cursor-pointer text-center",
-                      !useOneDollarEscrow
+                      "flex flex-col items-center gap-1.5 p-3 rounded-2xl border transition-all cursor-pointer text-center",
+                      oneDollarProvider === "escrowpay"
                         ? "border-[#ff6b00] bg-orange-50/40 dark:bg-orange-950/20 text-[#ff6b00] font-bold shadow-sm"
                         : "border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400 hover:border-slate-300 dark:hover:border-zinc-700"
                     )}
                   >
-                    <CreditCard className="w-4 h-4" />
-                    <span className="text-xs font-bold">Direct Payment</span>
-                    <span className="text-[10px] text-slate-400 dark:text-zinc-500">No Escrow Hold</span>
+                    <ShieldCheck className="w-4 h-4" />
+                    <span className="text-xs font-bold">EscrowPay Option</span>
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">Escrow Protected</span>
                   </button>
                 </div>
+
+                {oneDollarProvider === "paystack" && (
+                  <div className="grid grid-cols-2 gap-2.5 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setUseOneDollarEscrow(true)}
+                      className={cn(
+                        "flex flex-col items-center gap-1 p-2.5 rounded-xl border transition-all cursor-pointer text-center",
+                        useOneDollarEscrow
+                          ? "border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300 font-bold"
+                          : "border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400"
+                      )}
+                    >
+                      <span className="text-[11px] font-bold">Escrow Protected</span>
+                      <span className="text-[10px] opacity-80">Held Until Receipt</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setUseOneDollarEscrow(false)}
+                      className={cn(
+                        "flex flex-col items-center gap-1 p-2.5 rounded-xl border transition-all cursor-pointer text-center",
+                        !useOneDollarEscrow
+                          ? "border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300 font-bold"
+                          : "border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400"
+                      )}
+                    >
+                      <span className="text-[11px] font-bold">Direct Payment</span>
+                      <span className="text-[10px] opacity-80">No Escrow Hold</span>
+                    </button>
+                  </div>
+                )}
+
                 <p className="text-[10px] text-slate-500 dark:text-zinc-400 leading-relaxed">
-                  {useOneDollarEscrow
+                  {oneDollarProvider === "escrowpay"
+                    ? "Your One Dollar payment routes through EscrowPay and stays in Payment Processing until EscrowPay confirms escrow funding."
+                    : useOneDollarEscrow
                     ? "Your online Paystack payment is held securely in Shopiversity Escrow until you confirm delivery."
                     : "Your online Paystack payment settles directly after existing platform commission without an escrow hold."}
                 </p>
@@ -973,7 +1329,7 @@ export default function CartPage({
             ) : (
               <div className="space-y-3">
                 <label className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-zinc-400 block">
-                  Payment Option
+                  Payment Option (Marketplace EscrowPay)
                 </label>
                 <div className="grid grid-cols-2 gap-2.5">
                   <button
@@ -986,8 +1342,8 @@ export default function CartPage({
                         : "border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400 hover:border-slate-300 dark:hover:border-zinc-700"
                     )}
                   >
-                    <CreditCard className="w-4 h-4" />
-                    <span className="text-xs font-bold">Pay Online</span>
+                    <ShieldCheck className="w-4 h-4" />
+                    <span className="text-xs font-bold">Pay via EscrowPay</span>
                     <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">Escrow Protected</span>
                   </button>
 
@@ -1020,7 +1376,7 @@ export default function CartPage({
                       >
                         <Wallet className="w-4 h-4" />
                         <span className="text-xs font-bold">Pay on Delivery</span>
-                        <span className="text-[10px] text-slate-400 dark:text-zinc-500">Cash / Transfer</span>
+                        <span className="text-[10px] text-slate-400 dark:text-zinc-500">EscrowPay Upon Delivery</span>
                       </button>
                     )
                   )}
@@ -1074,8 +1430,10 @@ export default function CartPage({
                   </span>
                   <span className="text-[10px] text-slate-400 font-medium">
                     {hasOneDollarItems
-                      ? (useOneDollarEscrow ? "Paystack Escrow Hold" : "Paystack Direct Payment")
-                      : (paymentMethod === "online" ? "Online Escrow Transfer" : "Pay upon receipt")}
+                      ? oneDollarProvider === "escrowpay"
+                        ? "EscrowPay Escrow Hold"
+                        : (useOneDollarEscrow ? "Paystack Escrow Hold" : "Paystack Direct Payment")
+                      : (paymentMethod === "online" ? "EscrowPay Protected Transfer" : "Pay upon receipt")}
                   </span>
                 </div>
                 <span className="text-2xl font-black text-[#ff6b00] tracking-tight tabular-nums">
@@ -1089,7 +1447,7 @@ export default function CartPage({
               <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-700 dark:text-zinc-200">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
                 <span>
-                  {hasOneDollarItems && !useOneDollarEscrow
+                  {hasOneDollarItems && oneDollarProvider === "paystack" && !useOneDollarEscrow
                     ? "Standard Direct Paystack Checkout"
                     : "Protected by 72-Hour Campus Escrow"}
                 </span>
@@ -1114,10 +1472,48 @@ export default function CartPage({
               </p>
             </div>
 
+            {/* Visible Inline Checkout Error Banner (replaces iframe-blocked alerts) */}
+            {checkoutError && (
+              <div
+                role="alert"
+                className="p-3.5 rounded-2xl bg-red-50 dark:bg-red-950/35 border border-red-200 dark:border-red-900/50 text-left space-y-2.5"
+              >
+                <div className="flex items-start gap-2.5">
+                  <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+                  <p className="text-xs font-semibold text-red-800 dark:text-red-200 leading-relaxed flex-1">
+                    {checkoutError}
+                  </p>
+                </div>
+                {failedEscrowOrders && failedEscrowOrders.length > 0 && (
+                  <div className="flex flex-wrap gap-2 pl-6">
+                    <button
+                      type="button"
+                      disabled={loading}
+                      onClick={() => void startEscrowPayCheckout(failedEscrowOrders)}
+                      className="px-3 py-1.5 rounded-xl bg-[#ff6b00] hover:bg-[#e05e00] text-white text-[11px] font-bold cursor-pointer disabled:opacity-50"
+                    >
+                      Retry EscrowPay Checkout
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCheckoutError(null);
+                        setFailedEscrowOrders(null);
+                        setActiveTab("orders");
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-white dark:bg-zinc-900 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-[11px] font-bold cursor-pointer"
+                    >
+                      View Saved Order
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Checkout Action Button */}
             <button
               onClick={handleCheckout}
-              disabled={loading || selectedItems.length === 0}
+              disabled={loading || selectedItems.length === 0 || hasMixedCartItems}
               className={cn(
                 "w-full py-4 bg-[#ff6b00] hover:bg-[#e05e00] active:scale-[0.98] text-white rounded-2xl font-bold text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2 shadow-xl shadow-orange-500/20 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer focus-visible:ring-2 focus-visible:ring-[#ff6b00] outline-none",
                 loading && "animate-pulse"
@@ -1133,9 +1529,11 @@ export default function CartPage({
                   <ShieldCheck className="w-4 h-4" />
                   <span>
                     {hasOneDollarItems
-                      ? `Pay ₦${total.toLocaleString()} (${useOneDollarEscrow ? "Escrow Protected" : "Direct Payment"})`
+                      ? oneDollarProvider === "escrowpay"
+                        ? `Pay ₦${total.toLocaleString()} via EscrowPay`
+                        : `Pay ₦${total.toLocaleString()} (${useOneDollarEscrow ? "Paystack Escrow" : "Paystack Direct"})`
                       : (paymentMethod === "online" 
-                          ? `Pay ₦${total.toLocaleString()} (Escrow Protected)` 
+                          ? `Pay ₦${total.toLocaleString()} via EscrowPay` 
                           : `Place Order (₦${total.toLocaleString()} POD)`)}
                   </span>
                 </>
@@ -1152,6 +1550,25 @@ export default function CartPage({
           </div>
         </div>
       </div>
+
+      <EscrowCheckoutModal
+        isOpen={isEscrowModalOpen}
+        session={escrowSession}
+        onClose={() => {
+          setIsEscrowModalOpen(false);
+          setActiveTab("orders");
+        }}
+        onProceedToReturnCheck={(returnUrl) => {
+          setIsEscrowModalOpen(false);
+          try {
+            const parsed = new URL(returnUrl, window.location.origin);
+            window.history.pushState({}, "", `${parsed.pathname}${parsed.search}`);
+            window.dispatchEvent(new PopStateEvent("popstate"));
+          } catch {
+            window.location.href = returnUrl;
+          }
+        }}
+      />
     </div>
   );
 }

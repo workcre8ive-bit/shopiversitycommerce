@@ -18,6 +18,7 @@ import {
 } from "firebase/firestore";
 import { Product, UserProfile, CartItem, Notification, OneDollarListing } from "./types";
 import { useOneDollarRate, getCachedOneDollarListings, setCachedOneDollarListings, clampOneDollarUsd, computeOneDollarNgn, formatUsd } from "./lib/oneDollarRate";
+import { resolveAvailableStockForCartItem, resolveAvailableStockForProduct } from "./lib/cartStock";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage, isFirestoreQuotaError, FIRESTORE_QUOTA_EVENT, notifyFirestoreQuotaExceeded } from "./lib/firebase-errors";
 import {
   getCachedUserProfile,
@@ -66,6 +67,7 @@ import ShopiversityLoader from "./components/ShopiversityLoader";
 import Footer from "./components/Footer";
 import OneDollarBanner from "./components/OneDollarBanner";
 import OneDollarSection from "./components/OneDollarSection";
+import EscrowReturnPage from "./components/EscrowReturnPage";
 import { cn } from "./lib/utils";
 import { 
   Search, 
@@ -384,12 +386,62 @@ export default function App() {
   };
   
   // Navigation & UI states
+  const [isEscrowReturnRoute, setIsEscrowReturnRoute] = React.useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.location.pathname.replace(/\/+$/, "") === "/payment/escrow/return";
+  });
+  const [focusedOrderId, setFocusedOrderId] = React.useState<string | null>(null);
+  const [pendingOrderRedirectAfterAuth, setPendingOrderRedirectAfterAuth] = React.useState<boolean>(false);
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(false);
   const [activeTab, setActiveTabState] = React.useState("market");
   const [settingsSubView, setSettingsSubView] = React.useState<"hub" | "edit">("hub");
   const [tabHistory, setTabHistory] = React.useState<string[]>([]);
   const [viewingProduct, setViewingProduct] = React.useState<Product | null>(null);
   const [viewingSellerId, setViewingSellerId] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const syncPathRoute = () => {
+      setIsEscrowReturnRoute(
+        window.location.pathname.replace(/\/+$/, "") === "/payment/escrow/return"
+      );
+    };
+    window.addEventListener("popstate", syncPathRoute);
+    return () => window.removeEventListener("popstate", syncPathRoute);
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof document === "undefined") return;
+    if (isEscrowReturnRoute) {
+      document.title = "EscrowPay Return · SHOPIVERSITY";
+    } else {
+      document.title = "SHOPIVERSITY - Student E-Commerce Platform";
+    }
+  }, [isEscrowReturnRoute]);
+
+  const leaveEscrowReturnRoute = React.useCallback(
+    (targetTab: string, orderId?: string | null, requireSignIn = false) => {
+      if (typeof window !== "undefined" && window.location.pathname.replace(/\/+$/, "") === "/payment/escrow/return") {
+        window.history.pushState({}, "", "/");
+      }
+      setIsEscrowReturnRoute(false);
+      setIsInitialSplashActive(false);
+      if (orderId) {
+        setFocusedOrderId(orderId);
+      }
+      if (targetTab === "orders") {
+        setActiveRole("buyer");
+      }
+      if (requireSignIn) {
+        setPendingOrderRedirectAfterAuth(true);
+        setAuthMode("login");
+      } else {
+        setPendingOrderRedirectAfterAuth(false);
+      }
+      setActiveTab(targetTab);
+    },
+    []
+  );
 
   const [isFilterTransitioning, setIsFilterTransitioning] = React.useState(false);
   const filterTimerRef = React.useRef<any>(null);
@@ -1549,6 +1601,14 @@ export default function App() {
 
     const itemUsd = clampOneDollarUsd(listing.usdPrice);
     const itemNgn = computeOneDollarNgn(itemUsd, oneDollarRate) || oneDollarRate.oneDollarNgnPrice;
+    const existingOneDollar = cart.find((item) => item.isOneDollar && item.productId === listing.productId);
+    if (existingOneDollar && existingOneDollar.quantity >= listing.stock) {
+      if (goToCartImmediately) {
+        setActiveTab("cart");
+      }
+      triggerDynamicIsland(`Maximum inventory (${listing.stock}) already in your cart`);
+      return;
+    }
 
     setCart((prev) => {
       const existing = prev.find((item) => item.isOneDollar && item.productId === listing.productId);
@@ -1559,6 +1619,7 @@ export default function App() {
             ? {
                 ...item,
                 quantity: nextQty,
+                maxStock: listing.stock,
                 price: itemNgn,
                 usdPrice: itemUsd,
                 exchangeRateUsdToNgn: oneDollarRate.rate,
@@ -1576,6 +1637,7 @@ export default function App() {
           name: listing.productName,
           price: itemNgn,
           quantity: 1,
+          maxStock: listing.stock,
           sellerId: listing.sellerId,
           imageUrl: listing.imageUrl,
           deliveryOptions: { delivery: true, pickup: true },
@@ -1617,29 +1679,53 @@ export default function App() {
     }
 
     const itemQuantity = menuItem?.quantity || 1;
+    const maxStock = resolveAvailableStockForProduct(product, menuItem, ticketTier);
+    if (maxStock !== undefined && maxStock <= 0) {
+      triggerDynamicIsland("This item is currently out of stock.");
+      return;
+    }
+
+    const matchesTarget = (item: CartItem) =>
+      !item.isOneDollar &&
+      item.productId === product.id &&
+      (menuItem ? item.menuItemId === (menuItem.id || menuItem.name) : !item.menuItemId) &&
+      (ticketTier ? item.ticketTierId === (ticketTier.id || ticketTier.name) : !item.ticketTierId);
+
+    const existingInCart = cart.find(matchesTarget);
+    if (existingInCart && maxStock !== undefined && existingInCart.quantity >= maxStock) {
+      triggerDynamicIsland(`Maximum inventory (${maxStock}) already in your cart`);
+      return;
+    }
 
     setCart((prev) => {
-      const existing = prev.find((item) => 
-        item.productId === product.id && 
-        (menuItem ? (item.menuItemId === (menuItem.id || menuItem.name)) : !item.menuItemId) &&
-        (ticketTier ? (item.ticketTierId === (ticketTier.id || ticketTier.name)) : !item.ticketTierId)
-      );
+      const existing = prev.find(matchesTarget);
       if (existing) {
+        const nextQty =
+          maxStock !== undefined
+            ? Math.min(maxStock, existing.quantity + itemQuantity)
+            : existing.quantity + itemQuantity;
         return prev.map((item) =>
-          (item.productId === product.id && 
-           (menuItem ? (item.menuItemId === (menuItem.id || menuItem.name)) : !item.menuItemId) && 
-           (ticketTier ? (item.ticketTierId === (ticketTier.id || ticketTier.name)) : !item.ticketTierId))
-            ? { ...item, quantity: item.quantity + itemQuantity, formResponses: formResponses || item.formResponses, addedAt: Date.now() }
+          matchesTarget(item)
+            ? {
+                ...item,
+                quantity: nextQty,
+                ...(maxStock !== undefined ? { maxStock } : {}),
+                formResponses: formResponses || item.formResponses,
+                addedAt: Date.now()
+              }
             : item
         );
       }
+      const initialQty =
+        maxStock !== undefined ? Math.min(maxStock, itemQuantity) : itemQuantity;
       return [
         ...prev,
         {
           productId: product.id,
           name: menuItem ? `${product.name} - ${menuItem.name}` : (ticketTier ? `${product.name} (${ticketTier.name})` : product.name),
           price: menuItem ? menuItem.price : (ticketTier ? ticketTier.price : product.price),
-          quantity: itemQuantity,
+          quantity: initialQty,
+          ...(maxStock !== undefined ? { maxStock } : {}),
           sellerId: product.sellerId,
           imageUrl: menuItem?.imageUrl || ticketTier?.imageUrl || product.imageUrl,
           deliveryOptions: product.deliveryOptions,
@@ -1771,6 +1857,27 @@ export default function App() {
   };
 
   const isHibernated = currentUser?.hibernatedUntil && new Date(currentUser.hibernatedUntil) > new Date();
+
+  // Dedicated EscrowPay return route renders immediately once auth initializes
+  if (isEscrowReturnRoute && !authLoading) {
+    return (
+      <EscrowReturnPage
+        currentUser={currentUser}
+        onReturnToOrder={(orderId) => {
+          leaveEscrowReturnRoute("orders", orderId, !currentUser);
+        }}
+        onSignInForOrder={(orderId) => {
+          leaveEscrowReturnRoute("orders", orderId, true);
+        }}
+        onBackToMarketplace={() => {
+          leaveEscrowReturnRoute("market");
+        }}
+        onContactSupport={() => {
+          leaveEscrowReturnRoute("support");
+        }}
+      />
+    );
+  }
 
   // Premium branded Shopiversity preloader animation before the home page
   if (isInitialSplashActive || authLoading || (currentUser && loading)) {
@@ -2257,7 +2364,11 @@ export default function App() {
                     const targetRole = explicitRole ||
                       (verifiedProfile?.role === "seller" || verifiedProfile?.activeRole === "seller" ? "seller" : undefined) ||
                       (savedRole === "seller" ? "seller" : (currentUser?.role === "seller" ? "seller" : "buyer"));
-                    if (targetRole === "seller") {
+                    if (pendingOrderRedirectAfterAuth) {
+                      setPendingOrderRedirectAfterAuth(false);
+                      setActiveRole("buyer");
+                      setActiveTab("orders");
+                    } else if (targetRole === "seller") {
                       setActiveRole("seller");
                       setActiveTab("dashboard");
                     } else {
@@ -2299,6 +2410,7 @@ export default function App() {
                   onAddToCart={handleAddToCart}
                   currentUser={currentUser}
                   isPageMode={true}
+                  cart={cart}
                 />
               </motion.div>
             ) : activeTab === "market" ? (
@@ -2324,6 +2436,7 @@ export default function App() {
                         setStorefrontPreviewSettings(null);
                       }}
                       onAddToCart={handleAddToCart}
+                      cart={cart}
                     />
                   </div>
                 ) : (
@@ -2514,6 +2627,7 @@ export default function App() {
                             isOwner={currentUser?.uid === p.sellerId}
                             currentUser={currentUser}
                             sellersMap={sellersMap}
+                            cart={cart}
                           />
                         ))
                       )}
@@ -2548,6 +2662,7 @@ export default function App() {
                   initialSelectedListing={pendingOneDollarListing}
                   onClearInitialSelectedListing={() => setPendingOneDollarListing(null)}
                   sellersMap={sellersMap}
+                  cart={cart}
                 />
               </motion.div>
             ) : activeTab === "search" ? (
@@ -2847,6 +2962,7 @@ export default function App() {
                                 isOwner={currentUser?.uid === p.sellerId}
                                 currentUser={currentUser}
                                 sellersMap={sellersMap}
+                                cart={cart}
                               />
                             </motion.div>
                           ))}
@@ -2929,7 +3045,13 @@ export default function App() {
                 exit={{ opacity: 0, y: -10 }}
                 className="space-y-8"
               >
-                <OrderTracking setActiveTab={setActiveTab} onBack={handleGoBack} userProfile={currentUser} />
+                <OrderTracking
+                  setActiveTab={setActiveTab}
+                  onBack={handleGoBack}
+                  userProfile={currentUser}
+                  initialOrderId={focusedOrderId}
+                  onOrderFocused={() => setFocusedOrderId(null)}
+                />
               </motion.div>
             ) : activeTab === "history" && currentUser ? (
               <motion.div 
@@ -3066,12 +3188,24 @@ export default function App() {
               >
                 <CartPage
                   cart={cart}
+                  products={products}
+                  oneDollarListings={oneDollarListings}
                   onUpdateQuantity={(productId, delta, menuItemId, ticketTierId, isOneDollar) => {
-                    setCart(prev => prev.map(item => 
-                      (item.productId === productId && item.menuItemId === menuItemId && item.ticketTierId === ticketTierId && Boolean(item.isOneDollar) === Boolean(isOneDollar))
-                        ? { ...item, quantity: Math.max(0, item.quantity + delta) } 
-                        : item
-                    ).filter(item => item.quantity > 0));
+                    setCart(prev => prev.map(item => {
+                      if (!(item.productId === productId && item.menuItemId === menuItemId && item.ticketTierId === ticketTierId && Boolean(item.isOneDollar) === Boolean(isOneDollar))) {
+                        return item;
+                      }
+                      const maxStock = resolveAvailableStockForCartItem(item, products, oneDollarListings);
+                      const nextQty =
+                        delta > 0 && maxStock !== undefined
+                          ? Math.min(maxStock, item.quantity + delta)
+                          : Math.max(0, item.quantity + delta);
+                      return {
+                        ...item,
+                        quantity: nextQty,
+                        ...(maxStock !== undefined ? { maxStock } : {})
+                      };
+                    }).filter(item => item.quantity > 0));
                   }}
                   onRemove={(productId, menuItemId, ticketTierId, isOneDollar) => 
                     setCart(prev => prev.filter(item => 

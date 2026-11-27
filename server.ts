@@ -24,7 +24,11 @@ export const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({
+  verify: (req: any, _res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 
 // Generic request logger
 app.use((req, res, next) => {
@@ -3547,6 +3551,2182 @@ Return ONLY a JSON object:
   });
 
   // ===============================================================
+  // ESCROWPAY OFFICIAL MERCHANT API V1 (SANDBOX / TEST & LIVE)
+  // Official Host: https://production-business-api.escrowpay.app
+  // Auth Header: X-API-Key (ep_test_sk_... for Sandbox | ep_live_sk_... for Live)
+  // ===============================================================
+  type CanonicalEscrowReturnStatus = "processing" | "secured" | "failed" | "under_review";
+  type EscrowPayEnvironment = "test" | "live";
+
+  const OFFICIAL_ESCROWPAY_HOST = "https://production-business-api.escrowpay.app";
+  const ALLOWED_ESCROWPAY_HOSTNAMES = new Set([
+    "production-business-api.escrowpay.app",
+    "staging-business-api.escrowpay.app"
+  ]);
+
+  const ADMIN_ALLOWLIST_EMAILS = new Set([
+    "fashinaayomide2005@gmail.com",
+    "fashinaayomide@2005@gmail.com",
+    "fashinaayomide12005@gmail.com",
+    "shopiversitycommerce@gmail.com",
+    "tommzypolaris@gmail.com",
+    "fashopcommerce@gmail.com"
+  ]);
+
+  function detectEscrowPayKeyEnv(key: string): EscrowPayEnvironment | "unknown" {
+    const k = String(key || "").trim();
+    if (!k) return "unknown";
+    if (k.includes("_test_") || k.startsWith("ep_test") || k.startsWith("epk_test")) return "test";
+    if (k.includes("_live_") || k.startsWith("ep_live") || k.startsWith("epk_live")) return "live";
+    return "unknown";
+  }
+
+  function resolveOfficialEscrowPayBaseUrl(): string {
+    const raw = (
+      process.env.ESCROWPAY_API_BASE_URL ||
+      process.env.ESCROW_PAY_API_BASE_URL ||
+      ""
+    ).trim();
+    // Ignore legacy placeholder URL if left in older env files
+    if (!raw || raw === "https://api.escrowpay.com" || raw === "http://api.escrowpay.com") {
+      return OFFICIAL_ESCROWPAY_HOST;
+    }
+    try {
+      const parsed = new URL(raw);
+      if (parsed.protocol !== "https:" || isPrivateOrLocalHostname(parsed.hostname)) {
+        return OFFICIAL_ESCROWPAY_HOST;
+      }
+      if (!ALLOWED_ESCROWPAY_HOSTNAMES.has(parsed.hostname.toLowerCase())) {
+        console.warn(`[ESCROWPAY CONFIG] Non-standard host "${parsed.hostname}" overridden to official host ${OFFICIAL_ESCROWPAY_HOST}`);
+        return OFFICIAL_ESCROWPAY_HOST;
+      }
+      return parsed.origin;
+    } catch {
+      return OFFICIAL_ESCROWPAY_HOST;
+    }
+  }
+
+  const ESCROWPAY_BASE_URL = resolveOfficialEscrowPayBaseUrl();
+
+  function getEscrowPayCredentialSnapshot() {
+    const explicitMode = String(process.env.ESCROWPAY_MODE || process.env.ESCROW_PAY_MODE || "").trim().toLowerCase();
+
+    const rawTestSecret = (
+      process.env.ESCROWPAY_TEST_SECRET_KEY ||
+      process.env.ESCROW_PAY_TEST_SECRET_KEY ||
+      ""
+    ).trim();
+
+    const rawLiveSecret = (
+      process.env.ESCROWPAY_LIVE_SECRET_KEY ||
+      process.env.ESCROW_PAY_LIVE_SECRET_KEY ||
+      ""
+    ).trim();
+
+    const genericSecret = (
+      process.env.ESCROWPAY_SECRET_KEY ||
+      process.env.ESCROW_PAY_SECRET_KEY ||
+      process.env.escrowpay_secret_key ||
+      process.env.ESCROWPAY_API_KEY ||
+      process.env.ESCROW_PAY_API_KEY ||
+      process.env.escrowpay_api_key ||
+      ""
+    ).trim();
+
+    const genericEnv = detectEscrowPayKeyEnv(genericSecret);
+
+    const testSecretKey =
+      (rawTestSecret && detectEscrowPayKeyEnv(rawTestSecret) !== "live" ? rawTestSecret : "") ||
+      (genericEnv === "test" ? genericSecret : "");
+
+    const liveSecretKey =
+      (rawLiveSecret && detectEscrowPayKeyEnv(rawLiveSecret) === "live" ? rawLiveSecret : "") ||
+      (genericEnv === "live" ? genericSecret : "");
+
+    const testPublicKey = (
+      process.env.ESCROWPAY_TEST_PUBLIC_KEY ||
+      process.env.ESCROWPAY_PUBLIC_KEY ||
+      ""
+    ).trim();
+
+    const webhookSecret = (
+      process.env.ESCROWPAY_WEBHOOK_SECRET ||
+      process.env.ESCROW_PAY_WEBHOOK_SECRET ||
+      ""
+    ).trim();
+
+    const webhookSecretPrevious = (
+      process.env.ESCROWPAY_WEBHOOK_SECRET_PREVIOUS ||
+      ""
+    ).trim();
+
+    // Default safely to TEST/SANDBOX whenever a test key exists or explicit mode !== "live"
+    let activeMode: EscrowPayEnvironment | "unconfigured" = "unconfigured";
+    if (explicitMode === "live") {
+      activeMode = liveSecretKey ? "live" : "unconfigured";
+    } else if (testSecretKey) {
+      activeMode = "test";
+    } else if (liveSecretKey) {
+      activeMode = "live";
+    } else if (genericSecret) {
+      // Ambiguous key prefix without _live_ is treated as test only if explicitMode !== "live"
+      activeMode = explicitMode === "live" ? "unconfigured" : "test";
+    }
+
+    const activeSecretKey =
+      activeMode === "live"
+        ? liveSecretKey
+        : activeMode === "test"
+        ? (testSecretKey || (genericEnv !== "live" ? genericSecret : ""))
+        : "";
+
+    const missingCredentials: string[] = [];
+    if (!testSecretKey && !(explicitMode === "live" && liveSecretKey)) {
+      missingCredentials.push("ESCROWPAY_TEST_SECRET_KEY (ep_test_sk_...)");
+    }
+    if (!webhookSecret) {
+      missingCredentials.push("ESCROWPAY_WEBHOOK_SECRET (whsec_...)");
+    }
+
+    return {
+      activeMode,
+      isTestMode: activeMode === "test",
+      isLiveMode: activeMode === "live",
+      configured: Boolean(activeSecretKey),
+      activeSecretKey,
+      testSecretKey,
+      liveSecretKey,
+      hasTestSecretKey: Boolean(testSecretKey),
+      hasLiveSecretKey: Boolean(liveSecretKey),
+      hasTestPublicKey: Boolean(testPublicKey),
+      hasWebhookSecret: Boolean(webhookSecret),
+      hasWebhookPreviousSecret: Boolean(webhookSecretPrevious),
+      webhookSecret,
+      webhookSecretPrevious,
+      explicitMode: explicitMode || "auto",
+      officialBaseUrl: `${ESCROWPAY_BASE_URL}/api/v1`,
+      missingCredentials
+    };
+  }
+
+  function resolveEscrowPayCredentialsForOperation(requestedEnv?: EscrowPayEnvironment): {
+    ok: boolean;
+    environment?: EscrowPayEnvironment;
+    apiKey?: string;
+    error?: string;
+    code?: string;
+  } {
+    const snap = getEscrowPayCredentialSnapshot();
+
+    if (!snap.configured || !snap.activeSecretKey || snap.activeMode === "unconfigured") {
+      return {
+        ok: false,
+        code: "ESCROWPAY_NOT_CONFIGURED",
+        error:
+          "EscrowPay API key is not configured on the server. Add ESCROWPAY_TEST_SECRET_KEY (ep_test_sk_...) for Sandbox Mode."
+      };
+    }
+
+    const keyEnv = detectEscrowPayKeyEnv(snap.activeSecretKey);
+
+    if (requestedEnv === "live") {
+      if (snap.activeMode !== "live" || !snap.liveSecretKey || keyEnv === "test") {
+        return {
+          ok: false,
+          code: "TEST_KEY_FORBIDDEN_FOR_LIVE",
+          error:
+            "Blocked: EscrowPay test credentials (ep_test_...) cannot be used for live/production transactions or live verification."
+        };
+      }
+      return { ok: true, environment: "live", apiKey: snap.liveSecretKey };
+    }
+
+    if (requestedEnv === "test") {
+      if (!snap.testSecretKey && keyEnv === "live") {
+        return {
+          ok: false,
+          code: "LIVE_KEY_FORBIDDEN_FOR_SANDBOX",
+          error: "Blocked: Live EscrowPay credentials cannot be used for sandbox-only test operations."
+        };
+      }
+      const key = snap.testSecretKey || snap.activeSecretKey;
+      if (detectEscrowPayKeyEnv(key) === "live") {
+        return {
+          ok: false,
+          code: "LIVE_KEY_FORBIDDEN_FOR_SANDBOX",
+          error: "Blocked: Cannot use a live key in sandbox mode."
+        };
+      }
+      return { ok: true, environment: "test", apiKey: key };
+    }
+
+    // Auto mode follows activeMode with strict prefix verification
+    if (snap.activeMode === "live" && keyEnv === "test") {
+      return {
+        ok: false,
+        code: "KEY_MODE_MISMATCH",
+        error: "Configuration mismatch: ESCROWPAY_MODE is live, but only a test API key is present."
+      };
+    }
+
+    return {
+      ok: true,
+      environment: snap.activeMode,
+      apiKey: snap.activeSecretKey
+    };
+  }
+
+  function sanitizeEscrowIdentifier(value: unknown): string {
+    if (typeof value !== "string") return "";
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    if (!/^[A-Za-z0-9._:-]{3,128}$/.test(trimmed)) return "";
+    return trimmed;
+  }
+
+  function isPrivateOrLocalHostname(hostname: string): boolean {
+    const h = hostname.toLowerCase();
+    if (
+      h === "localhost" ||
+      h === "0.0.0.0" ||
+      h === "::1" ||
+      h.endsWith(".local") ||
+      h.endsWith(".internal") ||
+      h.endsWith(".localhost")
+    ) {
+      return true;
+    }
+    if (/^127\./.test(h) || /^10\./.test(h) || /^169\.254\./.test(h) || /^192\.168\./.test(h)) {
+      return true;
+    }
+    const match172 = h.match(/^172\.(\d+)\./);
+    if (match172) {
+      const secondOctet = Number(match172[1]);
+      if (secondOctet >= 16 && secondOctet <= 31) return true;
+    }
+    return false;
+  }
+
+  function buildEscrowPayV1Url(apiPath: string): string {
+    const normalizedPath = apiPath.startsWith("/api/v1")
+      ? apiPath
+      : `/api/v1${apiPath.startsWith("/") ? apiPath : `/${apiPath}`}`;
+    const url = new URL(normalizedPath, ESCROWPAY_BASE_URL);
+    if (url.protocol !== "https:" || !ALLOWED_ESCROWPAY_HOSTNAMES.has(url.hostname.toLowerCase())) {
+      throw new Error("Disallowed EscrowPay target host");
+    }
+    return url.toString();
+  }
+
+  async function callEscrowPayApi<T = any>(options: {
+    method: "GET" | "POST" | "PATCH";
+    path: string;
+    apiKey: string;
+    body?: any;
+    params?: Record<string, any>;
+    idempotencyKey?: string;
+    timeoutMs?: number;
+  }): Promise<T> {
+    const url = buildEscrowPayV1Url(options.path);
+    const headers: Record<string, string> = {
+      Accept: "application/json",
+      "X-API-Key": options.apiKey
+    };
+    if (options.method !== "GET") {
+      headers["Content-Type"] = "application/json";
+    }
+    if (options.idempotencyKey) {
+      headers["Idempotency-Key"] = options.idempotencyKey;
+    }
+
+    const resp = await axios.request<T>({
+      method: options.method,
+      url,
+      headers,
+      data: options.body,
+      params: options.params,
+      timeout: options.timeoutMs ?? 15000
+    });
+    return resp.data;
+  }
+
+  function unwrapEscrowPayPayload(resp: any): any {
+    if (!resp || typeof resp !== "object") return resp;
+    return resp.data !== undefined ? resp.data : resp;
+  }
+
+  function mapEscrowPayStatus(rawStatus: unknown): CanonicalEscrowReturnStatus {
+    const normalized = String(rawStatus || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[\s-]+/g, "_");
+
+    // Only treat confirmed funded/released/settled statuses as "secured"
+    if (
+      [
+        "funded",
+        "released",
+        "releasing",
+        "secured",
+        "held",
+        "in_escrow",
+        "escrow_funded",
+        "escrow_secured",
+        "completed",
+        "settled",
+        "success",
+        "successful",
+        "succeeded",
+        "verified"
+      ].includes(normalized)
+    ) {
+      return "secured";
+    }
+
+    if (
+      [
+        "under_review",
+        "review",
+        "in_review",
+        "flagged",
+        "manual_review",
+        "disputed",
+        "administrative_hold",
+        "on_hold",
+        "hold",
+        "compliance_review",
+        "fraud_review",
+        "aml_hold",
+        "mismatch"
+      ].includes(normalized)
+    ) {
+      return "under_review";
+    }
+
+    if (
+      [
+        "failed",
+        "declined",
+        "cancelled",
+        "canceled",
+        "expired",
+        "abandoned",
+        "rejected",
+        "error",
+        "refunded",
+        "reversed",
+        "voided"
+      ].includes(normalized)
+    ) {
+      return "failed";
+    }
+
+    // draft, activated, pending, awaiting_funding, funding_started, partially_funded -> processing
+    return "processing";
+  }
+
+  function getEscrowStatusPresentation(status: CanonicalEscrowReturnStatus, customReason?: string) {
+    switch (status) {
+      case "secured":
+        return {
+          statusLabel: "Payment Secured",
+          statusMessage:
+            customReason ||
+            "Your payment has been verified with EscrowPay and is safely held in escrow until order fulfillment."
+        };
+      case "under_review":
+        return {
+          statusLabel: "Payment Under Review",
+          statusMessage:
+            customReason ||
+            "Your payment is currently undergoing security and verification review. Funds remain protected while verification finishes."
+        };
+      case "failed":
+        return {
+          statusLabel: "Payment Failed",
+          statusMessage:
+            customReason ||
+            "EscrowPay could not confirm this payment as completed. No funds have been released to the seller."
+        };
+      case "processing":
+      default:
+        return {
+          statusLabel: "Payment Processing",
+          statusMessage:
+            customReason ||
+            "We are confirming your escrow transaction with EscrowPay. Your order remains in Payment Processing until EscrowPay confirms funding."
+        };
+    }
+  }
+
+  function extractEscrowProviderDetails(
+    payload: any,
+    fallbackRef: string,
+    defaultEnv?: EscrowPayEnvironment
+  ) {
+    const unwrapped = unwrapEscrowPayPayload(payload);
+    const root =
+      unwrapped?.transaction ||
+      (Array.isArray(unwrapped?.items) ? unwrapped.items[0] : null) ||
+      (Array.isArray(unwrapped) ? unwrapped[0] : null) ||
+      unwrapped ||
+      payload ||
+      {};
+    const metadata = root?.metadata && typeof root.metadata === "object" ? root.metadata : {};
+
+    const rawStatus =
+      root?.status ||
+      root?.escrow_status ||
+      root?.escrowStatus ||
+      root?.payment_status ||
+      root?.paymentStatus ||
+      root?.state ||
+      payload?.status ||
+      "processing";
+
+    const currency = String(root?.currency || payload?.currency || "NGN").trim().toUpperCase();
+
+    const amountMinor = typeof root?.amount_minor === "number" && Number.isFinite(root.amount_minor)
+      ? root.amount_minor
+      : null;
+    const fundedMinor = typeof root?.funded_minor === "number" && Number.isFinite(root.funded_minor)
+      ? root.funded_minor
+      : 0;
+    const fundingFeeDeductedMinor =
+      typeof root?.funding_fee_deducted_minor === "number" && Number.isFinite(root.funding_fee_deducted_minor)
+        ? root.funding_fee_deducted_minor
+        : 0;
+
+    let parsedAmount: number | null = null;
+    if (amountMinor !== null) {
+      parsedAmount = amountMinor / 100;
+    } else if (typeof root?.amount_major === "number" && Number.isFinite(root.amount_major)) {
+      parsedAmount = root.amount_major;
+    } else if (typeof root?.amount === "number" && Number.isFinite(root.amount)) {
+      parsedAmount = root.amount;
+    }
+
+    // Per EscrowPay official docs: funded_minor = amount_minor - funding_fee_deducted_minor when business pays fees.
+    const grossFundedMinor =
+      fundedMinor > 0 ? fundedMinor + fundingFeeDeductedMinor : amountMinor || 0;
+    const grossFundedMajor = grossFundedMinor > 0 ? grossFundedMinor / 100 : parsedAmount;
+
+    const reference =
+      sanitizeEscrowIdentifier(
+        root?.external_reference ||
+          root?.reference ||
+          root?.tx_ref ||
+          root?.trxref ||
+          root?.paymentReference ||
+          metadata?.paymentReference ||
+          fallbackRef
+      ) || fallbackRef;
+
+    const transactionId = sanitizeEscrowIdentifier(
+      String(root?.id || root?.transaction_id || root?.transactionId || "")
+    );
+    const escrowId = sanitizeEscrowIdentifier(
+      String(root?.escrow_id || root?.escrowId || root?.id || "")
+    );
+    const orderId = sanitizeEscrowIdentifier(
+      String(
+        root?.order_id ||
+          root?.orderId ||
+          metadata?.order_id ||
+          metadata?.orderId ||
+          metadata?.unique_order_id ||
+          metadata?.uniqueOrderId ||
+          ""
+      )
+    );
+
+    const detectedEnv: EscrowPayEnvironment =
+      root?.environment === "live" || metadata?.environment === "live"
+        ? "live"
+        : root?.environment === "test" || metadata?.environment === "test"
+        ? "test"
+        : defaultEnv || "test";
+
+    return {
+      rawStatus: String(rawStatus || "processing"),
+      amount: parsedAmount,
+      amountMinor,
+      fundedMinor,
+      fundingFeeDeductedMinor,
+      grossFundedMajor,
+      currency,
+      reference,
+      transactionId: transactionId || reference,
+      escrowId: escrowId || transactionId || "",
+      orderId,
+      environment: detectedEnv,
+      isTestTransaction: detectedEnv === "test" || Boolean(metadata?.is_test_transaction),
+      channel: String(root?.channel || root?.payment_method || root?.paymentMethod || "bank_transfer"),
+      paidAt: String(root?.funded_at || root?.paid_at || root?.paidAt || root?.created_at || new Date().toISOString()),
+      reason: String(root?.failure_reason || root?.reason || root?.review_reason || root?.gateway_response || "").trim(),
+      customerEmail: String(root?.customer?.email || root?.buyerEmail || metadata?.buyerEmail || "").trim().toLowerCase(),
+      rawTransaction: root
+    };
+  }
+
+  async function verifyFirebaseBearerUid(
+    req: express.Request
+  ): Promise<{ uid: string | null; email: string | null; emailVerified: boolean; name: string | null }> {
+    try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return { uid: null, email: null, emailVerified: false, name: null };
+      }
+      const idToken = authHeader.slice(7).trim();
+      if (!idToken) return { uid: null, email: null, emailVerified: false, name: null };
+      const decoded = await admin.auth().verifyIdToken(idToken);
+      return {
+        uid: decoded.uid || null,
+        email: decoded.email ? decoded.email.toLowerCase() : null,
+        emailVerified: Boolean(decoded.email_verified),
+        name: typeof decoded.name === "string" ? decoded.name : null
+      };
+    } catch {
+      return { uid: null, email: null, emailVerified: false, name: null };
+    }
+  }
+
+  async function isVerifiedAdminCaller(caller: { uid: string | null; email: string | null }): Promise<boolean> {
+    if (!caller.uid) return false;
+    if (caller.email && ADMIN_ALLOWLIST_EMAILS.has(caller.email.toLowerCase())) {
+      return true;
+    }
+    if (firebaseAdminDb && isAdminDbAuthorized) {
+      try {
+        const userSnap = await firebaseAdminDb.collection("users").doc(caller.uid).get();
+        if (userSnap.exists && userSnap.data()?.role === "admin") {
+          return true;
+        }
+      } catch {
+        // Fallback to email allowlist only
+      }
+    }
+    return false;
+  }
+
+  async function ensureEscrowPayParty(params: {
+    apiKey: string;
+    environment: EscrowPayEnvironment;
+    uid: string;
+    role: "buyer" | "seller";
+    email: string;
+    name?: string;
+    phone?: string;
+    idType?: string;
+    idNumber?: string;
+    dateOfBirth?: string;
+  }): Promise<string> {
+    const extRef = `shopiversity_${params.environment}_${params.role}_${params.uid}`;
+
+    // 1. Check if party already exists by external_reference
+    try {
+      const existingResp = await callEscrowPayApi({
+        method: "GET",
+        path: "/parties",
+        apiKey: params.apiKey,
+        params: { external_reference: extRef, page_size: 5 }
+      });
+      const existingData = unwrapEscrowPayPayload(existingResp);
+      const list = Array.isArray(existingData?.items)
+        ? existingData.items
+        : Array.isArray(existingData?.parties)
+        ? existingData.parties
+        : Array.isArray(existingData)
+        ? existingData
+        : existingData?.id
+        ? [existingData]
+        : [];
+      const matched = list.find((p: any) => p?.id && (!p.external_reference || p.external_reference === extRef));
+      if (matched?.id) {
+        return String(matched.id);
+      }
+    } catch {
+      // Proceed to onboard if lookup returned 404 or empty
+    }
+
+    // 2. Resolve identity fields: Sandbox fixtures ONLY in test mode; real verified KYC in live mode
+    let identityType = "nin";
+    let identifier = params.idNumber || "";
+    let dateOfBirth = params.dateOfBirth || "";
+
+    if (params.environment === "test") {
+      const fixtureResp = await callEscrowPayApi({
+        method: "GET",
+        path: "/sandbox/identity-fixtures",
+        apiKey: params.apiKey
+      });
+      const fixtureData = unwrapEscrowPayPayload(fixtureResp);
+      const fixturesList = Array.isArray(fixtureData?.fixtures)
+        ? fixtureData.fixtures
+        : Array.isArray(fixtureData?.items)
+        ? fixtureData.items
+        : Array.isArray(fixtureData)
+        ? fixtureData
+        : [];
+      const picked =
+        fixturesList.find((f: any) => (f?.type === "nin" || f?.type === "bvn") && (f?.identifier || f?.value || f?.nin || f?.bvn)) ||
+        fixturesList[0];
+
+      if (!picked) {
+        throw new Error("EscrowPay sandbox identity fixtures unavailable for test onboarding");
+      }
+
+      identityType = String(picked.type || (picked.bvn ? "bvn" : "nin")).toLowerCase();
+      identifier = String(picked.identifier || picked.value || picked.nin || picked.bvn);
+      dateOfBirth = String(picked.date_of_birth || picked.dob || "1990-01-15");
+    } else {
+      if (!identifier || !dateOfBirth) {
+        throw new Error(
+          "Live EscrowPay onboarding requires verified NIN/BVN identity details (type, identifier, date_of_birth)."
+        );
+      }
+      identityType = String(params.idType || "nin").toLowerCase();
+    }
+
+    const onboardPayload: Record<string, any> = {
+      type: identityType,
+      identifier,
+      date_of_birth: dateOfBirth,
+      consent: true,
+      country_code: "NG",
+      email: params.email || `${params.role}.${params.uid}@sandbox.shopiversity.shop`,
+      external_reference: extRef,
+      name: params.name || (params.role === "buyer" ? "Shopiversity Buyer" : "Shopiversity Seller"),
+      ...(params.phone && /^\+?[\d\s-]{8,18}$/.test(params.phone) ? { phone: params.phone } : {}),
+      metadata: {
+        shopiversity_uid: params.uid,
+        shopiversity_role: params.role,
+        environment: params.environment
+      }
+    };
+
+    try {
+      const onboardResp = await callEscrowPayApi({
+        method: "POST",
+        path: "/parties/onboard",
+        apiKey: params.apiKey,
+        body: onboardPayload
+      });
+      const onboardData = unwrapEscrowPayPayload(onboardResp);
+      const createdId = onboardData?.party?.id || onboardData?.id;
+      if (!createdId) {
+        throw new Error("EscrowPay party onboarding did not return a party_id");
+      }
+      return String(createdId);
+    } catch (onboardErr: any) {
+      // Retry with unique role-scoped email / next sandbox fixture if duplicate email or validation collision in sandbox
+      const status = onboardErr?.response?.status;
+      if ((status === 400 || status === 409 || status === 422) && params.environment === "test") {
+        const retryPayload = {
+          ...onboardPayload,
+          email: `${params.role}.${params.uid.slice(0, 10)}.${Date.now().toString().slice(-4)}@sandbox.shopiversity.shop`
+        };
+        const retryResp = await callEscrowPayApi({
+          method: "POST",
+          path: "/parties/onboard",
+          apiKey: params.apiKey,
+          body: retryPayload
+        });
+        const retryData = unwrapEscrowPayPayload(retryResp);
+        const retryId = retryData?.party?.id || retryData?.id;
+        if (retryId) return String(retryId);
+      }
+      throw onboardErr;
+    }
+  }
+
+  async function resolveEscrowLinkedOrder(params: {
+    orderId?: string;
+    reference?: string;
+    transactionId?: string;
+    escrowId?: string;
+  }): Promise<{ id: string; data: any } | null> {
+    if (!firebaseAdminDb || !isAdminDbAuthorized) return null;
+
+    const candidateOrderIds = [params.orderId].filter(Boolean) as string[];
+    const candidateRefs = Array.from(
+      new Set([params.reference, params.transactionId, params.escrowId].filter(Boolean) as string[])
+    );
+
+    try {
+      for (const oid of candidateOrderIds) {
+        const directSnap = await firebaseAdminDb.collection("orders").doc(oid).get();
+        if (directSnap.exists) {
+          return { id: directSnap.id, data: directSnap.data() };
+        }
+        const uniqueSnap = await firebaseAdminDb
+          .collection("orders")
+          .where("uniqueOrderId", "==", oid)
+          .limit(1)
+          .get();
+        if (!uniqueSnap.empty) {
+          return { id: uniqueSnap.docs[0].id, data: uniqueSnap.docs[0].data() };
+        }
+      }
+
+      for (const ref of candidateRefs) {
+        const byRefSnap = await firebaseAdminDb
+          .collection("orders")
+          .where("paymentReference", "==", ref)
+          .limit(1)
+          .get();
+        if (!byRefSnap.empty) {
+          return { id: byRefSnap.docs[0].id, data: byRefSnap.docs[0].data() };
+        }
+        const byReceiptTxnSnap = await firebaseAdminDb
+          .collection("orders")
+          .where("paymentReceipt.transactionId", "==", ref)
+          .limit(1)
+          .get();
+        if (!byReceiptTxnSnap.empty) {
+          return { id: byReceiptTxnSnap.docs[0].id, data: byReceiptTxnSnap.docs[0].data() };
+        }
+      }
+    } catch (err: any) {
+      if (err?.code === 7 || err?.message?.includes("PERMISSION_DENIED")) {
+        isAdminDbAuthorized = false;
+      } else {
+        console.warn("[ESCROWPAY] Linked order lookup warning:", err?.message || err);
+      }
+    }
+
+    return null;
+  }
+
+  async function syncVerifiedEscrowOrder(params: {
+    linkedOrder: { id: string; data: any } | null;
+    canonicalStatus: CanonicalEscrowReturnStatus;
+    txDetails: ReturnType<typeof extractEscrowProviderDetails>;
+    verifiedByServer: boolean;
+  }): Promise<{ orderUpdatedByServer: boolean; syncPayload: Record<string, any> | null }> {
+    const { linkedOrder, canonicalStatus, txDetails, verifiedByServer } = params;
+    const now = new Date().toISOString();
+
+    const receiptNumber =
+      linkedOrder?.data?.paymentReceipt?.receiptNumber ||
+      (txDetails.isTestTransaction ? "ESC-TEST-" : "ESC-") +
+        Math.random().toString(36).substring(2, 8).toUpperCase() +
+        "-" +
+        Date.now().toString().slice(-4);
+
+    const rawLower = String(txDetails.rawStatus || "").toLowerCase();
+    const isReleased = rawLower === "released" || rawLower === "releasing";
+    const isRefunded = rawLower === "refunded";
+
+    const paymentReceipt = {
+      ...(linkedOrder?.data?.paymentReceipt || {}),
+      receiptNumber,
+      orderId: linkedOrder?.id || txDetails.orderId || "",
+      transactionId: txDetails.transactionId || txDetails.reference,
+      paymentReference: txDetails.reference,
+      paymentMethod: "online",
+      provider: "escrowpay",
+      environment: txDetails.environment,
+      isTestTransaction: txDetails.isTestTransaction,
+      escrowId: txDetails.escrowId || txDetails.transactionId || txDetails.reference,
+      amountPaid: txDetails.grossFundedMajor ?? txDetails.amount ?? linkedOrder?.data?.totalPrice ?? 0,
+      fundedMinor: txDetails.fundedMinor ?? 0,
+      fundingFeeDeductedMinor: txDetails.fundingFeeDeductedMinor ?? 0,
+      currency: txDetails.currency || "NGN",
+      platformFee: linkedOrder?.data?.commissionAmount || 0,
+      buyerName: linkedOrder?.data?.buyerName || "Buyer",
+      productName: linkedOrder?.data?.productName || "Shopiversity Order",
+      quantity: linkedOrder?.data?.quantity || 1,
+      deliveryType: linkedOrder?.data?.deliveryType || "delivery",
+      verificationTimestamp: now,
+      escrowStatus: isReleased
+        ? "released"
+        : isRefunded
+        ? "refunded"
+        : canonicalStatus === "secured" || canonicalStatus === "under_review"
+        ? "held"
+        : "not_applicable",
+      status:
+        canonicalStatus === "secured"
+          ? "verified"
+          : canonicalStatus === "under_review"
+          ? "under_review"
+          : canonicalStatus === "failed"
+          ? "failed"
+          : "processing",
+      verifiedStatus: canonicalStatus
+    };
+
+    const existingStatus = String(linkedOrder?.data?.status || "").toLowerCase();
+    const isTerminalOrder = ["completed", "cancelled", "refunded", "delivered"].includes(existingStatus);
+
+    let syncPayload: Record<string, any> | null = null;
+    if (verifiedByServer) {
+      if (canonicalStatus === "secured") {
+        syncPayload = {
+          paymentStatus: "paid",
+          escrowStatus: isReleased ? "released" : "held",
+          paymentReference: txDetails.reference,
+          paymentVerifiedAt: now,
+          settlementOnHold: false,
+          paymentReceipt,
+          updatedAt: now
+        };
+        if (isReleased) {
+          syncPayload.payoutStatus = "released";
+        }
+        if (!isTerminalOrder && (!existingStatus || ["awaiting_payment", "payment_required"].includes(existingStatus))) {
+          syncPayload.status = "pending";
+        }
+      } else if (canonicalStatus === "under_review") {
+        syncPayload = {
+          paymentStatus: linkedOrder?.data?.paymentStatus === "paid" ? "paid" : "pending",
+          escrowStatus: "held",
+          paymentReference: txDetails.reference,
+          settlementOnHold: true,
+          paymentReceipt,
+          updatedAt: now
+        };
+      } else if (canonicalStatus === "failed") {
+        if (linkedOrder?.data?.paymentStatus !== "paid" || isRefunded) {
+          syncPayload = {
+            paymentStatus: isRefunded ? "paid" : "failed",
+            escrowStatus: isRefunded ? "refunded" : "not_applicable",
+            paymentReference: txDetails.reference,
+            paymentReceipt,
+            updatedAt: now
+          };
+          if (isRefunded) {
+            syncPayload.refundStatus = "completed";
+          }
+        }
+      } else {
+        // Strictly keep unconfirmed transactions in Payment Processing (pending)
+        syncPayload = {
+          paymentStatus: linkedOrder?.data?.paymentStatus === "paid" ? "paid" : "pending",
+          paymentReference: txDetails.reference,
+          paymentReceipt,
+          updatedAt: now
+        };
+      }
+    }
+
+    if (!linkedOrder || !syncPayload || !firebaseAdminDb || !isAdminDbAuthorized) {
+      return { orderUpdatedByServer: false, syncPayload };
+    }
+
+    try {
+      await firebaseAdminDb.collection("orders").doc(linkedOrder.id).update(syncPayload);
+
+      const eventTypeMap: Record<CanonicalEscrowReturnStatus, string> = {
+        secured: isReleased ? "ESCROW_RELEASED" : "ESCROW_VERIFIED_SECURED",
+        under_review: "ESCROW_PAYMENT_UNDER_REVIEW",
+        failed: isRefunded ? "REFUND_COMPLETED" : "ESCROW_VERIFICATION_FAILED",
+        processing: "ESCROW_PAYMENT_PROCESSING"
+      };
+
+      const auditId = "EVT_" + Math.random().toString(36).substring(2, 12);
+      await firebaseAdminDb.collection("order_events").doc(auditId).set({
+        id: auditId,
+        orderId: linkedOrder.id,
+        eventType: eventTypeMap[canonicalStatus],
+        performedBy: "system",
+        role: "system",
+        notes: `EscrowPay (${txDetails.environment.toUpperCase()}) status: ${canonicalStatus} (${txDetails.rawStatus}). Ref: ${txDetails.reference}`,
+        metadata: {
+          reference: txDetails.reference,
+          transactionId: txDetails.transactionId,
+          escrowId: txDetails.escrowId,
+          environment: txDetails.environment,
+          isTestTransaction: txDetails.isTestTransaction,
+          verifiedStatus: canonicalStatus
+        },
+        timestamp: now
+      });
+
+      return { orderUpdatedByServer: true, syncPayload };
+    } catch (err: any) {
+      if (err?.code === 7 || err?.message?.includes("PERMISSION_DENIED")) {
+        isAdminDbAuthorized = false;
+      } else {
+        console.warn("[ESCROWPAY] Failed to update Firestore order:", err?.message || err);
+      }
+      return { orderUpdatedByServer: false, syncPayload };
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // 1. Config Status & Live Credential Context Check (Zero Secrets)
+  // ---------------------------------------------------------------
+  app.get("/api/payments/escrow/config-status", async (req, res) => {
+    const snap = getEscrowPayCredentialSnapshot();
+    const checkContext = String(req.query?.checkContext || "") === "1";
+
+    let liveCredentialContext: any = null;
+    let scopeCheck: any = null;
+    let contextError: string | null = null;
+
+    if (checkContext && snap.configured && snap.activeSecretKey) {
+      const caller = await verifyFirebaseBearerUid(req);
+      const isAdmin = await isVerifiedAdminCaller(caller);
+      if (isAdmin) {
+        try {
+          const [ctxResp, scopeResp] = await Promise.all([
+            callEscrowPayApi({ method: "GET", path: "/credential-context", apiKey: snap.activeSecretKey }),
+            callEscrowPayApi({ method: "GET", path: "/credential-context/scope-check", apiKey: snap.activeSecretKey }).catch(() => null)
+          ]);
+          liveCredentialContext = unwrapEscrowPayPayload(ctxResp);
+          scopeCheck = scopeResp ? unwrapEscrowPayPayload(scopeResp) : null;
+        } catch (ctxErr: any) {
+          contextError =
+            ctxErr?.response?.data?.message ||
+            ctxErr?.response?.data?.detail ||
+            ctxErr?.message ||
+            "Failed to query EscrowPay /api/v1/credential-context";
+        }
+      }
+    }
+
+    return res.status(200).json({
+      configured: snap.configured,
+      activeMode: snap.activeMode,
+      isTestMode: snap.isTestMode,
+      isLiveMode: snap.isLiveMode,
+      officialBaseUrl: snap.officialBaseUrl,
+      hasTestSecretKey: snap.hasTestSecretKey,
+      hasLiveSecretKey: snap.hasLiveSecretKey,
+      hasTestPublicKey: snap.hasTestPublicKey,
+      hasWebhookSecret: snap.hasWebhookSecret,
+      hasWebhookPreviousSecret: snap.hasWebhookPreviousSecret,
+      missingCredentials: snap.missingCredentials,
+      webhookEndpointPath: "/api/payments/escrow/webhook",
+      liveCredentialContext,
+      scopeCheck,
+      contextError
+    });
+  });
+
+  // ---------------------------------------------------------------
+  // 2. Admin-Only Sandbox Identity Fixtures Viewer (Test Mode Only)
+  // ---------------------------------------------------------------
+  app.get("/api/payments/escrow/sandbox/fixtures", async (req, res) => {
+    try {
+      const caller = await verifyFirebaseBearerUid(req);
+      if (!(await isVerifiedAdminCaller(caller))) {
+        return res.status(403).json({ success: false, error: "Admin authorization required" });
+      }
+      const creds = resolveEscrowPayCredentialsForOperation("test");
+      if (!creds.ok || !creds.apiKey) {
+        return res.status(400).json({ success: false, error: creds.error });
+      }
+      const fixturesResp = await callEscrowPayApi({
+        method: "GET",
+        path: "/sandbox/identity-fixtures",
+        apiKey: creds.apiKey
+      });
+      return res.status(200).json({
+        success: true,
+        environment: "test",
+        fixtures: unwrapEscrowPayPayload(fixturesResp)
+      });
+    } catch (err: any) {
+      return res.status(err?.response?.status || 500).json({
+        success: false,
+        error: err?.response?.data?.message || err?.message || "Failed to fetch sandbox identity fixtures"
+      });
+    }
+  });
+
+  // ---------------------------------------------------------------
+  // 3. Create & Activate EscrowPay Transaction + Checkout Session
+  //    Never marks order as paid — leaves status in Payment Processing
+  // ---------------------------------------------------------------
+  app.post("/api/payments/escrow/create", async (req, res) => {
+    try {
+      const caller = await verifyFirebaseBearerUid(req);
+      if (!caller.uid) {
+        return res.status(401).json({ success: false, error: "Authentication required to start EscrowPay checkout." });
+      }
+      if (!caller.emailVerified) {
+        return res.status(403).json({ success: false, error: "Please verify your email address before initiating payment." });
+      }
+
+      const {
+        orderId,
+        uniqueOrderId,
+        amountNgn,
+        description,
+        sellerId,
+        sellerEmail,
+        sellerName,
+        sellerPhone,
+        buyerName,
+        buyerPhone,
+        commissionRate = 0.05,
+        isOneDollar = false,
+        requestedMode,
+        returnOrigin
+      } = req.body || {};
+
+      const cleanOrderId = sanitizeEscrowIdentifier(String(orderId || ""));
+      if (!cleanOrderId) {
+        return res.status(400).json({ success: false, error: "Valid orderId is required." });
+      }
+
+      const numericAmount = Number(amountNgn);
+      if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+        return res.status(400).json({ success: false, error: "Valid positive amountNgn is required." });
+      }
+      const amountMinor = Math.round(numericAmount * 100);
+
+      // Strict test/live isolation: reject live checkout requests when only test credentials exist
+      const explicitEnv =
+        requestedMode === "live" ? "live" : requestedMode === "test" ? "test" : undefined;
+      const creds = resolveEscrowPayCredentialsForOperation(explicitEnv);
+      if (!creds.ok || !creds.apiKey || !creds.environment) {
+        return res.status(creds.code === "ESCROWPAY_NOT_CONFIGURED" ? 503 : 403).json({
+          success: false,
+          code: creds.code,
+          error: creds.error
+        });
+      }
+
+      const environment = creds.environment;
+      const isTestTransaction = environment === "test";
+      const safeOrigin =
+        typeof returnOrigin === "string" &&
+        (returnOrigin.startsWith("https://") ||
+          returnOrigin.startsWith("http://localhost") ||
+          returnOrigin.startsWith("http://127.0.0.1"))
+          ? returnOrigin.replace(/\/+$/, "")
+          : "https://shopiversity.shop";
+
+      const paymentReference = `${isTestTransaction ? "ESC_TEST" : "ESC_LIVE"}_${cleanOrderId}_${Date.now()}`;
+
+      // Look up seller profile from Firestore if available for accurate email/name
+      let resolvedSellerEmail = String(sellerEmail || "").trim().toLowerCase();
+      let resolvedSellerName = String(sellerName || "").trim() || "Shopiversity Merchant";
+      let resolvedSellerPhone = String(sellerPhone || "").trim();
+      const resolvedSellerUid = String(sellerId || "").trim() || "merchant";
+
+      if ((!resolvedSellerEmail || !resolvedSellerName) && firebaseAdminDb && isAdminDbAuthorized) {
+        try {
+          const sSnap = await firebaseAdminDb.collection("users").doc(resolvedSellerUid).get();
+          if (sSnap.exists) {
+            const sd = sSnap.data() || {};
+            if (!resolvedSellerEmail && sd.email) resolvedSellerEmail = String(sd.email).toLowerCase();
+            if (!sellerName && sd.displayName) resolvedSellerName = String(sd.displayName);
+            if (!resolvedSellerPhone && (sd.phoneNumber || sd.phone)) resolvedSellerPhone = String(sd.phoneNumber || sd.phone);
+          }
+        } catch {}
+      }
+
+      const [buyerPartyId, sellerPartyId] = await Promise.all([
+        ensureEscrowPayParty({
+          apiKey: creds.apiKey,
+          environment,
+          uid: caller.uid,
+          role: "buyer",
+          email: caller.email || `buyer.${caller.uid}@sandbox.shopiversity.shop`,
+          name: String(buyerName || caller.name || "Shopiversity Buyer"),
+          phone: typeof buyerPhone === "string" ? buyerPhone : undefined
+        }),
+        ensureEscrowPayParty({
+          apiKey: creds.apiKey,
+          environment,
+          uid: resolvedSellerUid,
+          role: "seller",
+          email: resolvedSellerEmail || `seller.${resolvedSellerUid}@sandbox.shopiversity.shop`,
+          name: resolvedSellerName,
+          phone: resolvedSellerPhone || undefined
+        })
+      ]);
+
+      const bps = Math.max(0, Math.min(5000, Math.round(Number(commissionRate || 0.05) * 10000)));
+
+      // 1. Create Draft EscrowPay Transaction
+      const createResp = await callEscrowPayApi({
+        method: "POST",
+        path: "/transactions",
+        apiKey: creds.apiKey,
+        idempotencyKey: `create_${cleanOrderId}_${paymentReference}`,
+        body: {
+          type: "standard",
+          amount_minor: amountMinor,
+          currency: "NGN",
+          funding_mode: "exact",
+          payer: { party_type: "party", party_id: buyerPartyId },
+          beneficiary: { party_type: "party", party_id: sellerPartyId },
+          release_policy: "manual_only",
+          refund_policy: "manual_only",
+          payout_preference: "retain_in_wallet",
+          marketplace_commission_bps: bps,
+          external_reference: paymentReference,
+          description: String(description || `Shopiversity Order ${uniqueOrderId || cleanOrderId}`).slice(0, 200),
+          metadata: {
+            order_id: cleanOrderId,
+            unique_order_id: String(uniqueOrderId || cleanOrderId),
+            buyer_uid: caller.uid,
+            seller_uid: resolvedSellerUid,
+            environment,
+            is_test_transaction: isTestTransaction,
+            is_one_dollar: Boolean(isOneDollar),
+            paymentReference
+          }
+        }
+      });
+
+      const createdTx = unwrapEscrowPayPayload(createResp)?.transaction || unwrapEscrowPayPayload(createResp);
+      const transactionId = String(createdTx?.id || createdTx?.transaction_id || "");
+      if (!transactionId) {
+        throw new Error("EscrowPay did not return a transaction ID.");
+      }
+
+      // 2. Activate Transaction
+      await callEscrowPayApi({
+        method: "POST",
+        path: `/transactions/${encodeURIComponent(transactionId)}/activate`,
+        apiKey: creds.apiKey,
+        idempotencyKey: `activate_${transactionId}_${createdTx?.version ?? 1}`,
+        body: { version: Number(createdTx?.version ?? 1) }
+      });
+
+      const returnUrl = `${safeOrigin}/payment/escrow/return?transactionId=${encodeURIComponent(transactionId)}&orderId=${encodeURIComponent(cleanOrderId)}&reference=${encodeURIComponent(paymentReference)}`;
+
+      // 3. Create Checkout Session (if domain allowlisted) & Temporary Bank Transfer Account
+      let checkoutSessionId: string | null = null;
+      let checkoutUrl: string | null = null;
+      let virtualAccount: any = null;
+
+      const [sessionResult, accountResult] = await Promise.allSettled([
+        callEscrowPayApi({
+          method: "POST",
+          path: `/transactions/${encodeURIComponent(transactionId)}/checkout-sessions`,
+          apiKey: creds.apiKey,
+          idempotencyKey: `session_${transactionId}_${Date.now()}`,
+          body: {
+            allowed_channels: ["bank_transfer"],
+            success_url: returnUrl,
+            cancel_url: returnUrl
+          }
+        }),
+        callEscrowPayApi({
+          method: "POST",
+          path: `/transactions/${encodeURIComponent(transactionId)}/payment-accounts`,
+          apiKey: creds.apiKey,
+          idempotencyKey: `acct_${transactionId}`,
+          body: {
+            type: "transaction_temporary",
+            expected_amount_minor: amountMinor,
+            currency: "NGN"
+          }
+        })
+      ]);
+
+      if (sessionResult.status === "fulfilled") {
+        const sData = unwrapEscrowPayPayload(sessionResult.value);
+        const sess = sData?.checkout_session || sData?.session || sData;
+        checkoutSessionId = sess?.id || sess?.session_id || null;
+        checkoutUrl = sess?.checkout_url || sess?.url || sess?.redirect_url || null;
+      } else {
+        console.warn(
+          "[ESCROWPAY] Checkout session notice (domain may need allowlisting in EscrowPay dashboard):",
+          sessionResult.reason?.response?.data?.message || sessionResult.reason?.message
+        );
+      }
+
+      if (accountResult.status === "fulfilled") {
+        const aData = unwrapEscrowPayPayload(accountResult.value);
+        const acct = aData?.payment_account || aData?.account || aData;
+        const acctNum = acct?.account_number || acct?.accountNumber || acct?.nuban;
+        if (acctNum) {
+          virtualAccount = {
+            accountNumber: String(acctNum),
+            bankName: String(acct?.bank_name || acct?.bankName || acct?.bank || "EscrowPay Partner Bank"),
+            accountName: String(acct?.account_name || acct?.accountName || "Shopiversity Escrow"),
+            ...(acct?.expires_at || acct?.expiresAt ? { expiresAt: acct.expires_at || acct.expiresAt } : {}),
+            expectedAmount: numericAmount
+          };
+        }
+      }
+
+      // Sync non-paid processing reference to Firestore order if Admin DB is active
+      if (firebaseAdminDb && isAdminDbAuthorized) {
+        try {
+          await firebaseAdminDb.collection("orders").doc(cleanOrderId).set(
+            {
+              paymentReference,
+              paymentStatus: "pending",
+              paymentReceipt: {
+                receiptNumber: `${isTestTransaction ? "ESC-TEST-" : "ESC-"}${Date.now().toString().slice(-6)}`,
+                orderId: cleanOrderId,
+                transactionId,
+                paymentReference,
+                paymentMethod: "online",
+                provider: "escrowpay",
+                environment,
+                isTestTransaction,
+                escrowId: transactionId,
+                ...(checkoutSessionId ? { checkoutSessionId } : {}),
+                ...(checkoutUrl ? { checkoutUrl } : {}),
+                ...(virtualAccount ? { virtualAccount } : {}),
+                amountPaid: numericAmount,
+                currency: "NGN",
+                platformFee: 0,
+                buyerName: String(buyerName || caller.name || "Buyer"),
+                productName: String(description || "Shopiversity Order"),
+                quantity: 1,
+                deliveryType: "delivery",
+                verificationTimestamp: new Date().toISOString(),
+                escrowStatus: "not_applicable",
+                status: "processing",
+                verifiedStatus: "processing"
+              },
+              updatedAt: new Date().toISOString()
+            },
+            { merge: true }
+          );
+        } catch (dbErr: any) {
+          if (dbErr?.code === 7 || dbErr?.message?.includes("PERMISSION_DENIED")) {
+            isAdminDbAuthorized = false;
+          }
+        }
+      }
+
+      return res.status(201).json({
+        success: true,
+        environment,
+        isTestTransaction,
+        transactionId,
+        reference: paymentReference,
+        payerPartyId: buyerPartyId,
+        sellerPartyId,
+        checkoutSessionId,
+        checkoutUrl,
+        virtualAccount,
+        amountMinor,
+        amountNgn: numericAmount,
+        currency: "NGN",
+        returnUrl
+      });
+    } catch (err: any) {
+      const respData = err?.response?.data;
+      const detailMsg = Array.isArray(respData?.detail)
+        ? respData.detail
+            .map((d: any) =>
+              d?.msg ? `${Array.isArray(d.loc) ? d.loc.slice(-1)[0] : "field"}: ${d.msg}` : JSON.stringify(d)
+            )
+            .join("; ")
+        : typeof respData?.detail === "string"
+        ? respData.detail
+        : null;
+      const apiMsg =
+        respData?.message ||
+        detailMsg ||
+        respData?.error?.message ||
+        (typeof respData?.error === "string" ? respData.error : null) ||
+        (Array.isArray(respData?.errors) ? respData.errors[0]?.message : null) ||
+        err?.message ||
+        "Unable to initialize EscrowPay checkout";
+      console.error("[ESCROWPAY CREATE] Error:", apiMsg, respData || "");
+      return res.status(err?.response?.status || 500).json({
+        success: false,
+        error: apiMsg
+      });
+    }
+  });
+
+  // ---------------------------------------------------------------
+  // 4. Verify EscrowPay Transaction Status (Server-to-Server GET)
+  // ---------------------------------------------------------------
+  async function handleEscrowVerificationRequest(req: express.Request, res: express.Response) {
+    try {
+      const source = req.method === "GET" ? req.query : req.body || {};
+
+      const reference = sanitizeEscrowIdentifier(
+        source.reference || source.trxref || source.tx_ref || source.paymentReference
+      );
+      const transactionId = sanitizeEscrowIdentifier(
+        source.transactionId || source.transaction_id || source.sessionId || source.session_id
+      );
+      const escrowId = sanitizeEscrowIdentifier(source.escrowId || source.escrow_id);
+      const orderId = sanitizeEscrowIdentifier(source.orderId || source.order_id);
+
+      // Zero-trust rule: never read or trust a URL/client `status` flag
+      const lookupRef = transactionId || reference || escrowId || orderId;
+      if (!lookupRef) {
+        return res.status(400).json({
+          success: false,
+          verified: false,
+          status: "failed",
+          statusLabel: "Payment Failed",
+          statusMessage:
+            "Missing valid EscrowPay transaction or order reference. Please return from your order details page or contact support.",
+          error: "Missing transaction reference"
+        });
+      }
+
+      const caller = await verifyFirebaseBearerUid(req);
+      const linkedOrder = await resolveEscrowLinkedOrder({
+        orderId,
+        reference,
+        transactionId,
+        escrowId
+      });
+
+      const isAdminCaller = await isVerifiedAdminCaller(caller);
+      const isOrderParticipant = Boolean(
+        linkedOrder &&
+          caller.uid &&
+          (linkedOrder.data?.buyerId === caller.uid || linkedOrder.data?.sellerId === caller.uid || isAdminCaller)
+      );
+
+      const buildOrderConnection = (
+        order: { id: string; data: any } | null,
+        syncPayload: Record<string, any> | null,
+        orderUpdatedByServer: boolean
+      ) => {
+        if (!order) {
+          return {
+            matched: false,
+            orderId: orderId || null,
+            authorizedView: false,
+            requiresSignIn: !caller.uid,
+            orderUpdatedByServer: false,
+            syncPayload: null
+          };
+        }
+
+        if (!isOrderParticipant) {
+          return {
+            matched: true,
+            orderId: order.id,
+            uniqueOrderId: order.data?.uniqueOrderId || null,
+            authorizedView: false,
+            requiresSignIn: !caller.uid,
+            orderUpdatedByServer,
+            syncPayload: null
+          };
+        }
+
+        return {
+          matched: true,
+          orderId: order.id,
+          uniqueOrderId: order.data?.uniqueOrderId || null,
+          productName: order.data?.productName || "Shopiversity Order",
+          productImageUrl: order.data?.productImageUrl || null,
+          quantity: order.data?.quantity || 1,
+          totalPrice: order.data?.totalPrice ?? 0,
+          sellerName: order.data?.sellerName || "Shopiversity Seller",
+          deliveryType: order.data?.deliveryType || "delivery",
+          orderStatus: syncPayload?.status || order.data?.status || "pending",
+          paymentStatus: syncPayload?.paymentStatus || order.data?.paymentStatus || "pending",
+          escrowStatus: syncPayload?.escrowStatus || order.data?.escrowStatus || "not_applicable",
+          createdAt: order.data?.createdAt || null,
+          isOneDollar: Boolean(order.data?.isOneDollar),
+          authorizedView: true,
+          requiresSignIn: false,
+          orderUpdatedByServer,
+          syncPayload: orderUpdatedByServer ? null : syncPayload
+        };
+      };
+
+      // Enforce test vs live isolation based on linked order environment if known
+      const orderEnv =
+        linkedOrder?.data?.paymentReceipt?.environment === "live"
+          ? "live"
+          : linkedOrder?.data?.paymentReceipt?.environment === "test"
+          ? "test"
+          : undefined;
+
+      const creds = resolveEscrowPayCredentialsForOperation(orderEnv);
+      if (!creds.ok || !creds.apiKey || !creds.environment) {
+        if (creds.code === "TEST_KEY_FORBIDDEN_FOR_LIVE" || creds.code === "LIVE_KEY_FORBIDDEN_FOR_SANDBOX") {
+          const presentation = getEscrowStatusPresentation("under_review", creds.error);
+          return res.status(403).json({
+            success: false,
+            verified: false,
+            verificationSource: "environment_isolation_guard",
+            status: "under_review",
+            statusLabel: presentation.statusLabel,
+            statusMessage: presentation.statusMessage,
+            retryable: false,
+            transaction: {
+              reference: reference || lookupRef,
+              transactionId: transactionId || lookupRef,
+              escrowId: escrowId || "",
+              amount: null,
+              currency: "NGN",
+              channel: "escrowpay",
+              environment: orderEnv,
+              isTestTransaction: orderEnv === "test",
+              providerStatus: "environment_mismatch"
+            },
+            orderConnection: buildOrderConnection(linkedOrder, null, false)
+          });
+        }
+
+        // Credentials missing on server: NEVER assume paid on return redirect!
+        const alreadyVerifiedInDb = Boolean(
+          linkedOrder &&
+            linkedOrder.data?.paymentStatus === "paid" &&
+            linkedOrder.data?.escrowStatus === "held" &&
+            linkedOrder.data?.paymentVerifiedAt &&
+            (!reference || linkedOrder.data?.paymentReference === reference)
+        );
+
+        const fallbackStatus: CanonicalEscrowReturnStatus = alreadyVerifiedInDb
+          ? linkedOrder?.data?.settlementOnHold
+            ? "under_review"
+            : "secured"
+          : "processing";
+
+        const presentation = getEscrowStatusPresentation(
+          fallbackStatus,
+          alreadyVerifiedInDb
+            ? undefined
+            : "EscrowPay API credentials are not configured yet on the server. Order remains safely in Payment Processing and is never marked paid without EscrowPay confirmation."
+        );
+
+        return res.status(200).json({
+          success: fallbackStatus === "secured",
+          verified: alreadyVerifiedInDb,
+          verificationSource: alreadyVerifiedInDb ? "server_record" : "awaiting_gateway_configuration",
+          status: fallbackStatus,
+          statusLabel: presentation.statusLabel,
+          statusMessage: presentation.statusMessage,
+          retryable: fallbackStatus === "processing",
+          verifiedAt: linkedOrder?.data?.paymentVerifiedAt || new Date().toISOString(),
+          transaction: {
+            reference: reference || linkedOrder?.data?.paymentReference || lookupRef,
+            transactionId: transactionId || linkedOrder?.data?.paymentReceipt?.transactionId || lookupRef,
+            escrowId: escrowId || linkedOrder?.data?.paymentReceipt?.escrowId || "",
+            amount: linkedOrder?.data?.totalPrice ?? null,
+            currency: "NGN",
+            channel: "escrowpay",
+            environment: linkedOrder?.data?.paymentReceipt?.environment || "test",
+            isTestTransaction: linkedOrder?.data?.paymentReceipt?.isTestTransaction ?? true,
+            providerStatus: fallbackStatus
+          },
+          orderConnection: buildOrderConnection(linkedOrder, null, false)
+        });
+      }
+
+      // Query official EscrowPay Merchant API v1 via X-API-Key
+      const resolvedTxId =
+        sanitizeEscrowIdentifier(
+          transactionId || linkedOrder?.data?.paymentReceipt?.transactionId || escrowId
+        ) || "";
+
+      let providerResponseData: any = null;
+      try {
+        if (resolvedTxId && !resolvedTxId.startsWith("ESC_") && !resolvedTxId.startsWith("ORD")) {
+          providerResponseData = await callEscrowPayApi({
+            method: "GET",
+            path: `/transactions/${encodeURIComponent(resolvedTxId)}`,
+            apiKey: creds.apiKey
+          });
+        } else {
+          const extLookupRef = reference || linkedOrder?.data?.paymentReference || lookupRef;
+          providerResponseData = await callEscrowPayApi({
+            method: "GET",
+            path: "/transactions",
+            apiKey: creds.apiKey,
+            params: { external_reference: extLookupRef, page_size: 1 }
+          });
+        }
+      } catch (gatewayErr: any) {
+        const httpStatus = gatewayErr?.response?.status;
+        const providerBody = gatewayErr?.response?.data;
+        console.warn("[ESCROWPAY VERIFY] Provider notice:", httpStatus || gatewayErr?.code || gatewayErr?.message);
+
+        if (httpStatus === 404 || httpStatus === 400 || httpStatus === 422) {
+          const mappedErrStatus: CanonicalEscrowReturnStatus =
+            httpStatus === 404 ? "processing" : "under_review";
+
+          const txFallback = extractEscrowProviderDetails(
+            providerBody || {},
+            reference || lookupRef,
+            creds.environment
+          );
+
+          const presentation = getEscrowStatusPresentation(
+            mappedErrStatus,
+            httpStatus === 404
+              ? "EscrowPay could not match that transaction ID yet. Your order remains in Payment Processing until confirmed."
+              : "EscrowPay returned a validation notice while checking this transaction."
+          );
+
+          return res.status(200).json({
+            success: false,
+            verified: false,
+            verificationSource: "escrowpay_api",
+            status: mappedErrStatus,
+            statusLabel: presentation.statusLabel,
+            statusMessage: presentation.statusMessage,
+            retryable: true,
+            verifiedAt: new Date().toISOString(),
+            transaction: {
+              reference: txFallback.reference,
+              transactionId: txFallback.transactionId,
+              escrowId: txFallback.escrowId,
+              amount: txFallback.amount,
+              currency: txFallback.currency,
+              channel: txFallback.channel,
+              environment: creds.environment,
+              isTestTransaction: creds.environment === "test",
+              providerStatus: txFallback.rawStatus
+            },
+            orderConnection: buildOrderConnection(linkedOrder, null, false)
+          });
+        }
+
+        const presentation = getEscrowStatusPresentation(
+          "processing",
+          "EscrowPay verification timed out or is temporarily busy. Please refresh to check again."
+        );
+        return res.status(200).json({
+          success: false,
+          verified: false,
+          verificationSource: "escrowpay_transient_retry",
+          status: "processing",
+          statusLabel: presentation.statusLabel,
+          statusMessage: presentation.statusMessage,
+          retryable: true,
+          verifiedAt: new Date().toISOString(),
+          transaction: {
+            reference: reference || lookupRef,
+            transactionId: transactionId || lookupRef,
+            escrowId: escrowId || "",
+            amount: linkedOrder?.data?.totalPrice ?? null,
+            currency: "NGN",
+            channel: "escrowpay",
+            environment: creds.environment,
+            isTestTransaction: creds.environment === "test",
+            providerStatus: "processing"
+          },
+          orderConnection: buildOrderConnection(linkedOrder, null, false)
+        });
+      }
+
+      const txDetails = extractEscrowProviderDetails(
+        providerResponseData,
+        reference || lookupRef,
+        creds.environment
+      );
+
+      // If list lookup returned empty items, keep in processing (never assume paid or fail prematurely)
+      const listCheck = unwrapEscrowPayPayload(providerResponseData);
+      if (Array.isArray(listCheck?.items) && listCheck.items.length === 0) {
+        const presentation = getEscrowStatusPresentation(
+          "processing",
+          "Transaction not yet confirmed by EscrowPay. Order remains in Payment Processing."
+        );
+        return res.status(200).json({
+          success: false,
+          verified: false,
+          verificationSource: "escrowpay_api_empty_lookup",
+          status: "processing",
+          statusLabel: presentation.statusLabel,
+          statusMessage: presentation.statusMessage,
+          retryable: true,
+          verifiedAt: new Date().toISOString(),
+          transaction: {
+            reference: reference || lookupRef,
+            transactionId: transactionId || lookupRef,
+            escrowId: escrowId || "",
+            amount: linkedOrder?.data?.totalPrice ?? null,
+            currency: "NGN",
+            channel: "bank_transfer",
+            environment: creds.environment,
+            isTestTransaction: creds.environment === "test",
+            providerStatus: "awaiting_funding"
+          },
+          orderConnection: buildOrderConnection(linkedOrder, null, false)
+        });
+      }
+
+      const resolvedOrder =
+        linkedOrder ||
+        (txDetails.orderId ? await resolveEscrowLinkedOrder({ orderId: txDetails.orderId }) : null);
+
+      let canonicalStatus = mapEscrowPayStatus(txDetails.rawStatus);
+      let reviewOverrideReason = txDetails.reason;
+
+      // Cross-check amount using funded_minor + funding_fee_deducted_minor per EscrowPay webhook/funding docs
+      if (resolvedOrder && canonicalStatus === "secured") {
+        const expectedTotal = Number(resolvedOrder.data?.totalPrice || 0);
+        const effectivePaidAmount = txDetails.grossFundedMajor ?? txDetails.amount;
+        if (
+          effectivePaidAmount !== null &&
+          expectedTotal > 0 &&
+          txDetails.currency === "NGN" &&
+          effectivePaidAmount + 1 < expectedTotal
+        ) {
+          canonicalStatus = "under_review";
+          reviewOverrideReason =
+            "Funded amount reported by EscrowPay does not match the Shopiversity order total. Settlement has been placed under review.";
+        }
+
+        if (
+          txDetails.orderId &&
+          txDetails.orderId !== resolvedOrder.id &&
+          txDetails.orderId !== resolvedOrder.data?.uniqueOrderId
+        ) {
+          canonicalStatus = "under_review";
+          reviewOverrideReason =
+            "Transaction order metadata differs from the linked Shopiversity order and requires verification review.";
+        }
+      }
+
+      const { orderUpdatedByServer, syncPayload } = await syncVerifiedEscrowOrder({
+        linkedOrder: resolvedOrder,
+        canonicalStatus,
+        txDetails,
+        verifiedByServer: true
+      });
+
+      const presentation = getEscrowStatusPresentation(canonicalStatus, reviewOverrideReason);
+
+      return res.status(200).json({
+        success: canonicalStatus === "secured",
+        verified: true,
+        verificationSource: `escrowpay_${creds.environment}_api`,
+        status: canonicalStatus,
+        statusLabel: presentation.statusLabel,
+        statusMessage: presentation.statusMessage,
+        retryable: canonicalStatus === "processing" || canonicalStatus === "under_review",
+        verifiedAt: new Date().toISOString(),
+        transaction: {
+          reference: txDetails.reference,
+          transactionId: txDetails.transactionId,
+          escrowId: txDetails.escrowId,
+          amount: txDetails.grossFundedMajor ?? txDetails.amount ?? resolvedOrder?.data?.totalPrice ?? null,
+          fundedMinor: txDetails.fundedMinor,
+          fundingFeeDeductedMinor: txDetails.fundingFeeDeductedMinor,
+          currency: txDetails.currency,
+          channel: txDetails.channel,
+          paidAt: txDetails.paidAt,
+          environment: creds.environment,
+          isTestTransaction: creds.environment === "test",
+          providerStatus: txDetails.rawStatus
+        },
+        orderConnection: buildOrderConnection(resolvedOrder, syncPayload, orderUpdatedByServer)
+      });
+    } catch (error: any) {
+      console.error("[ESCROWPAY] Unexpected verify error:", error?.message || error);
+      return res.status(500).json({
+        success: false,
+        verified: false,
+        status: "processing",
+        statusLabel: "Payment Processing",
+        statusMessage: "We encountered a temporary verification issue. Please refresh in a moment to check your payment status.",
+        error: "Verification temporarily unavailable"
+      });
+    }
+  }
+
+  app.post("/api/payments/escrow/verify", handleEscrowVerificationRequest);
+  app.get("/api/payments/escrow/verify", handleEscrowVerificationRequest);
+
+  // ---------------------------------------------------------------
+  // 5. Official Webhook Verification (EscrowPay-Signature: t=...,v1=...)
+  //    Per official docs: validates |now - t| <= 300s, HMAC-SHA256 of `${t}.${rawBody}`,
+  //    deduplicates EscrowPay-Event-Id, and re-reads GET /api/v1/transactions/{object_id}
+  // ---------------------------------------------------------------
+  const processedEscrowWebhookEvents = new Set<string>();
+
+  function parseEscrowPaySignatureHeader(header: string): { t: string; v1: string } | null {
+    const parts = header.split(",").map((p) => p.trim());
+    let t = "";
+    let v1 = "";
+    for (const part of parts) {
+      const idx = part.indexOf("=");
+      if (idx === -1) continue;
+      const k = part.slice(0, idx).trim();
+      const v = part.slice(idx + 1).trim();
+      if (k === "t") t = v;
+      if (k === "v1") v1 = v;
+    }
+    return t && v1 ? { t, v1 } : null;
+  }
+
+  function verifyEscrowPayHmacSignature(
+    rawBody: Buffer,
+    t: string,
+    v1Hex: string,
+    secrets: string[]
+  ): boolean {
+    const signedPayload = Buffer.concat([
+      Buffer.from(`${t}.`, "utf8"),
+      rawBody
+    ]);
+
+    for (const secret of secrets) {
+      if (!secret) continue;
+      const expectedHex = crypto
+        .createHmac("sha256", secret)
+        .update(signedPayload)
+        .digest("hex");
+      const a = Buffer.from(expectedHex.toLowerCase(), "utf8");
+      const b = Buffer.from(v1Hex.toLowerCase(), "utf8");
+      if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  app.post("/api/payments/escrow/webhook", async (req: any, res) => {
+    try {
+      const snap = getEscrowPayCredentialSnapshot();
+      const secrets = [snap.webhookSecret, snap.webhookSecretPrevious].filter(Boolean);
+      if (secrets.length === 0) {
+        return res.status(503).json({ received: false, error: "ESCROWPAY_WEBHOOK_SECRET not configured" });
+      }
+
+      const officialSigHeader = String(req.headers["escrowpay-signature"] || "").trim();
+      const rawBodyBuf: Buffer | null = Buffer.isBuffer(req.rawBody)
+        ? req.rawBody
+        : Buffer.isBuffer(req.body)
+        ? req.body
+        : typeof req.body === "string"
+        ? Buffer.from(req.body, "utf8")
+        : null;
+
+      if (!officialSigHeader || !rawBodyBuf) {
+        return res.status(401).json({ received: false, error: "Missing EscrowPay-Signature header or raw payload" });
+      }
+
+      const parsed = parseEscrowPaySignatureHeader(officialSigHeader);
+      if (!parsed) {
+        return res.status(401).json({ received: false, error: "Malformed EscrowPay-Signature header (expected t=...,v1=...)" });
+      }
+
+      const timestampSec = Number(parsed.t);
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (!Number.isFinite(timestampSec) || Math.abs(nowSec - timestampSec) > 300) {
+        return res.status(401).json({ received: false, error: "Expired webhook signature timestamp (> 300s)" });
+      }
+
+      if (!verifyEscrowPayHmacSignature(rawBodyBuf, parsed.t, parsed.v1, secrets)) {
+        return res.status(401).json({ received: false, error: "Invalid EscrowPay webhook signature" });
+      }
+
+      const eventId = String(req.headers["escrowpay-event-id"] || req.body?.id || "").trim();
+      if (eventId) {
+        if (processedEscrowWebhookEvents.has(eventId)) {
+          return res.status(200).json({ received: true, duplicate: true, eventId });
+        }
+        processedEscrowWebhookEvents.add(eventId);
+        if (processedEscrowWebhookEvents.size > 1000) {
+          const oldest = processedEscrowWebhookEvents.values().next().value;
+          if (oldest) processedEscrowWebhookEvents.delete(oldest);
+        }
+      }
+
+      const eventType = String(req.body?.type || "").trim();
+      const objectKind = String(req.body?.object || "").trim();
+      const objectId = sanitizeEscrowIdentifier(String(req.body?.object_id || req.body?.data?.transaction_id || ""));
+
+      // Per official EscrowPay docs: webhook data snapshot can be minimal ({}), so re-read the transaction via X-API-Key
+      let txDetails: ReturnType<typeof extractEscrowProviderDetails> | null = null;
+      const creds = resolveEscrowPayCredentialsForOperation();
+
+      if (objectId && (objectKind === "transaction" || objectId.startsWith("TXN_")) && creds.ok && creds.apiKey && creds.environment) {
+        try {
+          const txResp = await callEscrowPayApi({
+            method: "GET",
+            path: `/transactions/${encodeURIComponent(objectId)}`,
+            apiKey: creds.apiKey
+          });
+          txDetails = extractEscrowProviderDetails(txResp, objectId, creds.environment);
+        } catch (readErr: any) {
+          console.warn("[ESCROWPAY WEBHOOK] Secondary GET transaction lookup notice:", readErr?.message);
+        }
+      }
+
+      if (!txDetails) {
+        txDetails = extractEscrowProviderDetails(
+          req.body || {},
+          objectId || "webhook",
+          creds.environment || "test"
+        );
+        if (eventType === "transaction.funded" && !txDetails.rawStatus) {
+          txDetails.rawStatus = "funded";
+        }
+      }
+
+      const linkedOrder = await resolveEscrowLinkedOrder({
+        orderId: txDetails.orderId,
+        reference: txDetails.reference,
+        transactionId: txDetails.transactionId,
+        escrowId: txDetails.escrowId
+      });
+
+      const canonicalStatus = mapEscrowPayStatus(txDetails.rawStatus);
+      await syncVerifiedEscrowOrder({
+        linkedOrder,
+        canonicalStatus,
+        txDetails,
+        verifiedByServer: true
+      });
+
+      return res.status(200).json({
+        received: true,
+        eventId: eventId || null,
+        eventType: eventType || null,
+        status: canonicalStatus,
+        orderId: linkedOrder?.id || null
+      });
+    } catch (err: any) {
+      console.error("[ESCROWPAY WEBHOOK] Processing error:", err?.message || err);
+      return res.status(500).json({ received: false, error: "Webhook processing failed" });
+    }
+  });
+
+  // ---------------------------------------------------------------
+  // 6. Admin Sandbox & Lifecycle Testing Endpoints
+  // ---------------------------------------------------------------
+  app.get("/api/payments/escrow/transactions/:transactionId", async (req, res) => {
+    try {
+      const caller = await verifyFirebaseBearerUid(req);
+      if (!(await isVerifiedAdminCaller(caller))) {
+        return res.status(403).json({ success: false, error: "Admin authorization required" });
+      }
+      const txId = sanitizeEscrowIdentifier(req.params.transactionId);
+      if (!txId) {
+        return res.status(400).json({ success: false, error: "Valid transactionId required" });
+      }
+      const creds = resolveEscrowPayCredentialsForOperation();
+      if (!creds.ok || !creds.apiKey) {
+        return res.status(503).json({ success: false, error: creds.error });
+      }
+
+      const [txResp, fundingResp, timelineResp] = await Promise.all([
+        callEscrowPayApi({ method: "GET", path: `/transactions/${encodeURIComponent(txId)}`, apiKey: creds.apiKey }),
+        callEscrowPayApi({ method: "GET", path: `/transactions/${encodeURIComponent(txId)}/funding-records`, apiKey: creds.apiKey }).catch(() => null),
+        callEscrowPayApi({ method: "GET", path: `/transactions/${encodeURIComponent(txId)}/timeline`, apiKey: creds.apiKey }).catch(() => null)
+      ]);
+
+      return res.status(200).json({
+        success: true,
+        environment: creds.environment,
+        isTestTransaction: creds.environment === "test",
+        transaction: unwrapEscrowPayPayload(txResp),
+        fundingRecords: fundingResp ? unwrapEscrowPayPayload(fundingResp) : null,
+        timeline: timelineResp ? unwrapEscrowPayPayload(timelineResp) : null
+      });
+    } catch (err: any) {
+      return res.status(err?.response?.status || 500).json({
+        success: false,
+        error: err?.response?.data?.message || err?.message || "Failed to inspect EscrowPay transaction"
+      });
+    }
+  });
+
+  // Sandbox Charge / Funding Simulation (STRICTLY TEST MODE ONLY)
+  app.post("/api/payments/escrow/sandbox/simulate-funding", async (req, res) => {
+    try {
+      const caller = await verifyFirebaseBearerUid(req);
+      if (!(await isVerifiedAdminCaller(caller))) {
+        return res.status(403).json({ success: false, error: "Admin authorization required" });
+      }
+
+      const creds = resolveEscrowPayCredentialsForOperation("test");
+      if (!creds.ok || !creds.apiKey || creds.environment !== "test") {
+        return res.status(403).json({
+          success: false,
+          error: creds.error || "Simulated funding is strictly restricted to EscrowPay Sandbox (Test Mode)."
+        });
+      }
+
+      const { transactionId, orderId } = req.body || {};
+      const cleanTxId = sanitizeEscrowIdentifier(String(transactionId || ""));
+      if (!cleanTxId) {
+        return res.status(400).json({ success: false, error: "Valid EscrowPay transactionId is required." });
+      }
+
+      // 1. Read authoritative transaction from EscrowPay Sandbox
+      const txResp = await callEscrowPayApi({
+        method: "GET",
+        path: `/transactions/${encodeURIComponent(cleanTxId)}`,
+        apiKey: creds.apiKey
+      });
+      const txRaw = unwrapEscrowPayPayload(txResp)?.transaction || unwrapEscrowPayPayload(txResp);
+      const payerPartyId = txRaw?.payer?.party_id || txRaw?.payer_party_id;
+      const amountMinor = Number(txRaw?.amount_minor || 0);
+
+      if (!payerPartyId || !amountMinor) {
+        return res.status(400).json({
+          success: false,
+          error: "Sandbox transaction is missing payer party_id or amount_minor."
+        });
+      }
+
+      // 2. Initiate Server Charge in Sandbox (POST /api/v1/charges)
+      const chargeResp = await callEscrowPayApi({
+        method: "POST",
+        path: "/charges",
+        apiKey: creds.apiKey,
+        idempotencyKey: `sbx_charge_${cleanTxId}_${Date.now()}`,
+        body: {
+          transaction_id: cleanTxId,
+          party_id: payerPartyId,
+          channel: "bank_transfer",
+          amount_minor: amountMinor,
+          currency: txRaw?.currency || "NGN",
+          merchant_reference: `SBX_CHG_${cleanTxId}_${Date.now()}`
+        }
+      });
+
+      // 3. Re-read transaction to observe real EscrowPay status (never fabricate funded status!)
+      const refreshedResp = await callEscrowPayApi({
+        method: "GET",
+        path: `/transactions/${encodeURIComponent(cleanTxId)}`,
+        apiKey: creds.apiKey
+      });
+      const txDetails = extractEscrowProviderDetails(refreshedResp, txRaw?.external_reference || cleanTxId, "test");
+      const canonicalStatus = mapEscrowPayStatus(txDetails.rawStatus);
+
+      const linkedOrder = await resolveEscrowLinkedOrder({
+        orderId: sanitizeEscrowIdentifier(String(orderId || txDetails.orderId || "")),
+        transactionId: cleanTxId,
+        reference: txDetails.reference
+      });
+
+      const { orderUpdatedByServer, syncPayload } = await syncVerifiedEscrowOrder({
+        linkedOrder,
+        canonicalStatus,
+        txDetails,
+        verifiedByServer: true
+      });
+
+      return res.status(200).json({
+        success: true,
+        environment: "test",
+        isTestTransaction: true,
+        charge: unwrapEscrowPayPayload(chargeResp),
+        status: canonicalStatus,
+        providerStatus: txDetails.rawStatus,
+        orderUpdatedByServer,
+        syncPayload
+      });
+    } catch (err: any) {
+      const apiMsg =
+        err?.response?.data?.message ||
+        err?.response?.data?.detail ||
+        err?.message ||
+        "Sandbox funding request failed";
+      return res.status(err?.response?.status || 500).json({
+        success: false,
+        error: apiMsg,
+        providerDetails: err?.response?.data || null
+      });
+    }
+  });
+
+  // Admin EscrowPay Release Funds (POST /api/v1/transactions/{id}/releases)
+  app.post("/api/payments/escrow/release", async (req, res) => {
+    try {
+      const caller = await verifyFirebaseBearerUid(req);
+      if (!(await isVerifiedAdminCaller(caller))) {
+        return res.status(403).json({ success: false, error: "Admin authorization required" });
+      }
+
+      const { transactionId, orderId, amountMinor, beneficiaryPartyId, reason } = req.body || {};
+      const cleanTxId = sanitizeEscrowIdentifier(String(transactionId || ""));
+      if (!cleanTxId) {
+        return res.status(400).json({ success: false, error: "Valid transactionId is required." });
+      }
+
+      const linkedOrder = await resolveEscrowLinkedOrder({
+        orderId: sanitizeEscrowIdentifier(String(orderId || "")),
+        transactionId: cleanTxId
+      });
+      const orderEnv =
+        linkedOrder?.data?.paymentReceipt?.environment === "live"
+          ? "live"
+          : linkedOrder?.data?.paymentReceipt?.environment === "test"
+          ? "test"
+          : undefined;
+
+      const creds = resolveEscrowPayCredentialsForOperation(orderEnv);
+      if (!creds.ok || !creds.apiKey || !creds.environment) {
+        return res.status(403).json({ success: false, error: creds.error });
+      }
+
+      const txResp = await callEscrowPayApi({
+        method: "GET",
+        path: `/transactions/${encodeURIComponent(cleanTxId)}`,
+        apiKey: creds.apiKey
+      });
+      const txRaw = unwrapEscrowPayPayload(txResp)?.transaction || unwrapEscrowPayPayload(txResp);
+      const releaseAmountMinor =
+        Number(amountMinor) > 0
+          ? Math.round(Number(amountMinor))
+          : Number(txRaw?.funded_minor || txRaw?.amount_minor || 0);
+
+      if (!releaseAmountMinor || releaseAmountMinor <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: "EscrowPay transaction has no positive releasable minor balance yet."
+        });
+      }
+
+      const releaseResp = await callEscrowPayApi({
+        method: "POST",
+        path: `/transactions/${encodeURIComponent(cleanTxId)}/releases`,
+        apiKey: creds.apiKey,
+        idempotencyKey: `rel_${cleanTxId}_${Date.now()}`,
+        body: {
+          amount_minor: releaseAmountMinor,
+          ...(beneficiaryPartyId ? { beneficiary_party_id: String(beneficiaryPartyId) } : {}),
+          reason: String(reason || "Shopiversity admin escrow release verification").slice(0, 200)
+        }
+      });
+
+      const releaseData = unwrapEscrowPayPayload(releaseResp);
+      const refreshedResp = await callEscrowPayApi({
+        method: "GET",
+        path: `/transactions/${encodeURIComponent(cleanTxId)}`,
+        apiKey: creds.apiKey
+      }).catch(() => txResp);
+
+      const txDetails = extractEscrowProviderDetails(
+        refreshedResp,
+        txRaw?.external_reference || cleanTxId,
+        creds.environment
+      );
+      const canonicalStatus = mapEscrowPayStatus(txDetails.rawStatus);
+      const { orderUpdatedByServer, syncPayload } = await syncVerifiedEscrowOrder({
+        linkedOrder,
+        canonicalStatus,
+        txDetails,
+        verifiedByServer: true
+      });
+
+      return res.status(200).json({
+        success: true,
+        environment: creds.environment,
+        isTestTransaction: creds.environment === "test",
+        release: releaseData,
+        providerStatus: txDetails.rawStatus,
+        orderUpdatedByServer,
+        syncPayload
+      });
+    } catch (err: any) {
+      return res.status(err?.response?.status || 500).json({
+        success: false,
+        error: err?.response?.data?.message || err?.message || "Failed to release EscrowPay funds",
+        providerDetails: err?.response?.data || null
+      });
+    }
+  });
+
+  // Admin EscrowPay Refund Buyer (POST /api/v1/transactions/{id}/refunds)
+  app.post("/api/payments/escrow/refund", async (req, res) => {
+    try {
+      const caller = await verifyFirebaseBearerUid(req);
+      if (!(await isVerifiedAdminCaller(caller))) {
+        return res.status(403).json({ success: false, error: "Admin authorization required" });
+      }
+
+      const { transactionId, orderId, amountMinor, source = "escrow_held", reason } = req.body || {};
+      const cleanTxId = sanitizeEscrowIdentifier(String(transactionId || ""));
+      if (!cleanTxId) {
+        return res.status(400).json({ success: false, error: "Valid transactionId is required." });
+      }
+
+      const linkedOrder = await resolveEscrowLinkedOrder({
+        orderId: sanitizeEscrowIdentifier(String(orderId || "")),
+        transactionId: cleanTxId
+      });
+      const orderEnv =
+        linkedOrder?.data?.paymentReceipt?.environment === "live"
+          ? "live"
+          : linkedOrder?.data?.paymentReceipt?.environment === "test"
+          ? "test"
+          : undefined;
+
+      const creds = resolveEscrowPayCredentialsForOperation(orderEnv);
+      if (!creds.ok || !creds.apiKey || !creds.environment) {
+        return res.status(403).json({ success: false, error: creds.error });
+      }
+
+      const txResp = await callEscrowPayApi({
+        method: "GET",
+        path: `/transactions/${encodeURIComponent(cleanTxId)}`,
+        apiKey: creds.apiKey
+      });
+      const txRaw = unwrapEscrowPayPayload(txResp)?.transaction || unwrapEscrowPayPayload(txResp);
+      const refundAmountMinor =
+        Number(amountMinor) > 0
+          ? Math.round(Number(amountMinor))
+          : Number(txRaw?.funded_minor || txRaw?.amount_minor || 0);
+
+      if (!refundAmountMinor || refundAmountMinor <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: "EscrowPay transaction has no positive refundable balance."
+        });
+      }
+
+      const allowedSource = ["escrow_held", "wallet_available", "reserve"].includes(String(source))
+        ? String(source)
+        : "escrow_held";
+
+      const refundResp = await callEscrowPayApi({
+        method: "POST",
+        path: `/transactions/${encodeURIComponent(cleanTxId)}/refunds`,
+        apiKey: creds.apiKey,
+        idempotencyKey: `ref_${cleanTxId}_${Date.now()}`,
+        body: {
+          amount_minor: refundAmountMinor,
+          source: allowedSource,
+          reason: String(reason || "Shopiversity admin escrow refund").slice(0, 200)
+        }
+      });
+
+      const refundData = unwrapEscrowPayPayload(refundResp);
+      const refreshedResp = await callEscrowPayApi({
+        method: "GET",
+        path: `/transactions/${encodeURIComponent(cleanTxId)}`,
+        apiKey: creds.apiKey
+      }).catch(() => txResp);
+
+      const txDetails = extractEscrowProviderDetails(
+        refreshedResp,
+        txRaw?.external_reference || cleanTxId,
+        creds.environment
+      );
+      const canonicalStatus = mapEscrowPayStatus(txDetails.rawStatus);
+      const { orderUpdatedByServer, syncPayload } = await syncVerifiedEscrowOrder({
+        linkedOrder,
+        canonicalStatus,
+        txDetails,
+        verifiedByServer: true
+      });
+
+      return res.status(200).json({
+        success: true,
+        environment: creds.environment,
+        isTestTransaction: creds.environment === "test",
+        refund: refundData,
+        providerStatus: txDetails.rawStatus,
+        orderUpdatedByServer,
+        syncPayload
+      });
+    } catch (err: any) {
+      return res.status(err?.response?.status || 500).json({
+        success: false,
+        error: err?.response?.data?.message || err?.message || "Failed to refund EscrowPay transaction",
+        providerDetails: err?.response?.data || null
+      });
+    }
+  });
+
+  // ===============================================================
   // ONE DOLLAR ($1 USD -> NGN Daily Exchange Rate & Checkout Guard)
   // ===============================================================
   interface CachedOneDollarRate {
@@ -3692,7 +5872,7 @@ Return ONLY a JSON object:
 
   app.post("/api/one-dollar/validate-checkout", async (req, res) => {
     try {
-      const { items, paymentReference, paymentMethod, totalCartAmountNgn } = req.body || {};
+      const { items, paymentReference, paymentMethod, paymentProvider, totalCartAmountNgn } = req.body || {};
       if (!Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ success: false, error: "No One Dollar items provided for validation." });
       }
@@ -3757,7 +5937,13 @@ Return ONLY a JSON object:
         });
       }
 
-      if (paymentMethod === "online") {
+      // Only verify Paystack reference when the buyer actually paid via Paystack.
+      // When paymentProvider === "escrowpay", EscrowPay verifies funding separately after checkout creation.
+      const isEscrowPayPreCheckout =
+        paymentProvider === "escrowpay" ||
+        (typeof paymentReference === "string" && paymentReference.startsWith("ESC_PRE_"));
+
+      if (paymentMethod === "online" && !isEscrowPayPreCheckout) {
         if (!paymentReference || typeof paymentReference !== "string") {
           return res.status(400).json({ success: false, error: "Payment reference is required for online One Dollar checkout." });
         }
@@ -3801,10 +5987,11 @@ Return ONLY a JSON object:
         }
       });
     } catch (error: any) {
+      const upstreamMsg = error?.response?.data?.message || error?.message || "Failed to validate One Dollar checkout.";
       console.error("[ONE DOLLAR CHECKOUT VALIDATE] Error:", error?.response?.data || error?.message);
-      return res.status(500).json({
+      return res.status(error?.response?.status === 400 ? 400 : 500).json({
         success: false,
-        error: error?.message || "Failed to validate One Dollar checkout."
+        error: upstreamMsg
       });
     }
   });

@@ -109,7 +109,7 @@ export default function ShopiversityLoader({
               />
             </motion.svg>
 
-            {/* Levitating 3D S-Bag Brand Emblem with Sheen Sweep */}
+            {/* Levitating Graduation Cap + Cart Brand Emblem with Sheen Sweep */}
             <motion.div
               initial={{ scale: 0.78, opacity: 0 }}
               animate={{
@@ -122,12 +122,12 @@ export default function ShopiversityLoader({
                 scale: { duration: 2.4, repeat: Infinity, ease: "easeInOut" },
                 y: { duration: 2.4, repeat: Infinity, ease: "easeInOut" },
               }}
-              className="relative flex items-center justify-center w-20 h-20 sm:w-22 sm:h-22 rounded-3xl overflow-hidden"
+              className="relative flex items-center justify-center w-20 h-20 sm:w-22 sm:h-22 rounded-3xl overflow-hidden dark:bg-white/95 dark:p-2 dark:shadow-lg"
             >
               <img
                 src="/shopiversity-logo.png"
                 alt="Shopiversity Official Logo"
-                className="w-16 h-16 sm:w-20 sm:h-20 object-contain drop-shadow-[0_10px_22px_rgba(255,107,0,0.34)] select-none"
+                className="w-16 h-16 sm:w-20 sm:h-20 object-contain drop-shadow-[0_10px_22px_rgba(255,107,0,0.28)] select-none"
                 draggable={false}
               />
 
@@ -146,64 +146,28 @@ export default function ShopiversityLoader({
             </motion.div>
           </div>
 
-          {/* Official Brand Wordmark & Swoosh Reveal */}
+          {/* Official Brand Wordmark Reveal */}
           <motion.div
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
             className="flex flex-col items-center"
           >
-            <h1 className="flex items-center justify-center font-display text-[26px] sm:text-[32px] font-black uppercase tracking-[0.04em] leading-none">
-              <span className="bg-gradient-to-r from-[#ff8800] via-[#ff6b00] to-[#ff4d00] bg-clip-text text-transparent">
-                SHOPI
-              </span>
-              <span className="relative inline-flex items-center justify-center mx-[1px]">
+            <h1 className="flex items-baseline justify-center font-display text-[30px] sm:text-[36px] font-black tracking-[-0.03em] leading-none">
+              <span className="text-[#141414] dark:text-white">Shop</span>
+              <span className="relative inline-block leading-none">
+                <span className="text-[#141414] dark:text-white">ı</span>
                 <span
                   aria-hidden="true"
-                  className="absolute -top-[2px] w-[7px] h-[5px] bg-[#ff7a00]"
-                  style={{ clipPath: "polygon(0 0, 100% 0, 50% 100%)" }}
+                  className="absolute left-1/2 -translate-x-1/2 top-[0.06em] w-[0.23em] h-[0.23em] rounded-full bg-[#ff7a00]"
                 />
-                <span className="bg-gradient-to-b from-[#ff7a00] to-[#ff4d00] bg-clip-text text-transparent">
-                  V
-                </span>
               </span>
-              <span className="bg-gradient-to-r from-[#ff6b00] via-[#ff5500] to-[#ff7a00] bg-clip-text text-transparent">
-                ERSITY
-              </span>
+              <span className="text-[#ff7a00]">versity</span>
             </h1>
 
-            {/* Tagline flanked by tapering orange bars */}
-            <div className="flex items-center justify-center gap-2 mt-2">
-              <motion.span
-                initial={{ scaleX: 0, opacity: 0 }}
-                animate={{ scaleX: 1, opacity: 1 }}
-                transition={{ duration: 0.45, delay: 0.15 }}
-                className="origin-right h-[2px] w-6 sm:w-8 rounded-full bg-gradient-to-r from-transparent to-[#ff6b00]"
-              />
-              <p className="text-[11px] sm:text-xs italic font-semibold tracking-[0.015em] text-slate-800 dark:text-slate-200 whitespace-nowrap">
-                The Marketplace at Your Finger Tips
-              </p>
-              <motion.span
-                initial={{ scaleX: 0, opacity: 0 }}
-                animate={{ scaleX: 1, opacity: 1 }}
-                transition={{ duration: 0.45, delay: 0.15 }}
-                className="origin-left h-[2px] w-6 sm:w-8 rounded-full bg-gradient-to-l from-transparent to-[#ff6b00]"
-              />
-            </div>
-
-            {/* Animated curved swoosh arc */}
-            <svg viewBox="0 0 180 12" className="w-40 sm:w-48 h-2.5 mt-1 overflow-visible" aria-hidden="true">
-              <motion.path
-                d="M 8 10 Q 90 1 172 10"
-                fill="none"
-                stroke="#ff6b00"
-                strokeWidth="2.6"
-                strokeLinecap="round"
-                initial={{ pathLength: 0, opacity: 0 }}
-                animate={{ pathLength: 1, opacity: 1 }}
-                transition={{ duration: 0.7, delay: 0.2, ease: [0.16, 1, 0.3, 1] }}
-              />
-            </svg>
+            <p className="text-[11px] sm:text-xs italic font-semibold tracking-[0.01em] text-slate-700 dark:text-slate-300 whitespace-nowrap mt-1.5">
+              the marketplace at your finger tips
+            </p>
           </motion.div>
 
           {/* Sleek Dual-Beam Progress Track */}

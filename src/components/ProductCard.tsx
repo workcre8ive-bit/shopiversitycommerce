@@ -1,9 +1,10 @@
 import React from "react";
-import { Product } from "../types";
+import { CartItem, Product } from "../types";
 import { ShoppingCart, Tag, User as UserIcon, Package, AlertTriangle, Truck, MapPin, Star, Layout, Zap, Globe, Store, MessageSquare, Trash2, ChevronLeft, ChevronRight, Heart, Phone } from "lucide-react";
 import { motion } from "motion/react";
 import { cn } from "../lib/utils";
 import { mergeSellerPublicContact } from "../lib/publicContact";
+import { getInCartQuantity, resolveAvailableStockForProduct } from "../lib/cartStock";
 import ReportModal from "./ReportModal";
 import ProductDetail from "./ProductDetail";
 import { db } from "../firebase";
@@ -19,9 +20,10 @@ interface ProductCardProps {
   currentUser: UserProfile | null;
   customColor?: string;
   sellersMap?: Record<string, UserProfile>;
+  cart?: CartItem[];
 }
 
-export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, isOwner, currentUser, customColor, sellersMap }) => {
+export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, isOwner, currentUser, customColor, sellersMap, cart }) => {
   if (product.type === "service") {
     return null;
   }
@@ -229,40 +231,54 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                 </div>
 
                 {/* Quick action button inside the card bottom-right styled with seller's storefront primary color */}
-                {!isOwner ? (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (product.category === "Food & Drinks" && product.menuItems && product.menuItems.length > 0) {
-                        window.dispatchEvent(new CustomEvent('view-product-detail', { detail: product }));
-                      } else {
-                        onAddToCart(product);
+                {!isOwner ? (() => {
+                  const hasMenuOptions = product.category === "Food & Drinks" && product.menuItems && product.menuItems.length > 0;
+                  const availableStock = resolveAvailableStockForProduct(product);
+                  const inCartQty = getInCartQuantity(cart, { productId: product.id, isOneDollar: false });
+                  const isOutOfStock = product.stock === 0 || product.status === "inactive";
+                  const isAtCartLimit = !hasMenuOptions && availableStock !== undefined && availableStock > 0 && inCartQty >= availableStock;
+                  const isDisabled = isOutOfStock || isAtCartLimit;
+
+                  return (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (isDisabled) return;
+                        if (hasMenuOptions) {
+                          window.dispatchEvent(new CustomEvent('view-product-detail', { detail: product }));
+                        } else {
+                          onAddToCart(product);
+                        }
+                      }}
+                      disabled={isDisabled}
+                      className={cn(
+                        "h-[36px] w-full sm:w-auto px-3.5 rounded-xl flex items-center justify-center font-bold text-xs gap-1.5 transition-all duration-300 shadow-sm shrink-0 border-none",
+                        isDisabled
+                          ? "bg-slate-200 dark:bg-zinc-800 text-slate-400 dark:text-zinc-500 cursor-not-allowed opacity-75 shadow-none"
+                          : "hover:scale-105 active:scale-95 cursor-pointer text-white"
+                      )}
+                      style={{
+                        backgroundColor: isDisabled ? undefined : brandColor,
+                      }}
+                      title={
+                        isOutOfStock
+                          ? "Inactive to Buy - Out of Stock"
+                          : isAtCartLimit
+                          ? `Maximum inventory reached (${availableStock} in cart)`
+                          : (hasMenuOptions ? "Explore options" : "Add to cart")
                       }
-                    }}
-                    disabled={product.stock === 0 || product.status === "inactive"}
-                    className={cn(
-                      "h-[36px] w-full sm:w-auto px-3.5 rounded-xl flex items-center justify-center font-bold text-xs gap-1.5 transition-all duration-300 shadow-sm shrink-0 border-none",
-                      (product.stock === 0 || product.status === "inactive")
-                        ? "bg-slate-300 dark:bg-zinc-800 text-slate-500 dark:text-zinc-500 cursor-not-allowed opacity-75"
-                        : "hover:scale-105 active:scale-95 cursor-pointer text-white"
-                    )}
-                    style={{
-                      backgroundColor: (product.stock === 0 || product.status === "inactive") ? undefined : brandColor,
-                    }}
-                    title={
-                      (product.stock === 0 || product.status === "inactive") 
-                        ? "Inactive to Buy - Out of Stock" 
-                        : (product.category === "Food & Drinks" && product.menuItems && product.menuItems.length > 0 ? "Explore options" : "Add to cart")
-                    }
-                  >
-                    <ShoppingCart className="w-3.5 h-3.5" />
-                    <span>
-                      {(product.stock === 0 || product.status === "inactive")
-                        ? "Sold Out"
-                        : (product.category === "Food & Drinks" && product.menuItems && product.menuItems.length > 0 ? "Explore" : "Add")}
-                    </span>
-                  </button>
-                ) : (
+                    >
+                      <ShoppingCart className="w-3.5 h-3.5" />
+                      <span>
+                        {isOutOfStock
+                          ? "Sold Out"
+                          : isAtCartLimit
+                          ? "Max in Cart"
+                          : (hasMenuOptions ? "Explore" : "Add")}
+                      </span>
+                    </button>
+                  );
+                })() : (
                   <span className="text-[9px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400 self-start sm:self-auto shrink-0">
                     My Item
                   </span>

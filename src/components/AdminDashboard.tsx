@@ -41,7 +41,8 @@ import {
   ShoppingBag,
   SlidersHorizontal,
   SortAsc,
-  SortDesc
+  SortDesc,
+  CreditCard
 } from "lucide-react";
 import { collection, onSnapshot, query, doc, updateDoc, deleteDoc, addDoc, getDoc, limit } from "firebase/firestore";
 import { db } from "../firebase";
@@ -54,6 +55,7 @@ import AdminAnalyticsCharts from "./AdminAnalyticsCharts";
 import AdminSecurityRenewalModal from "./AdminSecurityRenewalModal";
 import AdminEmailBrevoSettings from "./AdminEmailBrevoSettings";
 import AdminOneDollarTab from "./AdminOneDollarTab";
+import AdminEscrowPayTab from "./AdminEscrowPayTab";
 import { triggerTemplatedEmail } from "../utils/orderEmailNotifications";
 import { cascadeDeleteUserAccount } from "../utils/accountCleanup";
 
@@ -63,7 +65,7 @@ interface AdminDashboardProps {
 }
 
 export default function AdminDashboard({ currentUser, onBack }: AdminDashboardProps) {
-  const [activeTab, setActiveTab] = useState<"analytics" | "users" | "products" | "one-dollar" | "payouts" | "reports" | "moderation" | "email">("analytics");
+  const [activeTab, setActiveTab] = useState<"analytics" | "users" | "products" | "one-dollar" | "escrowpay" | "payouts" | "reports" | "moderation" | "email">("analytics");
   
   // Real Firestore Collections State
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -639,6 +641,19 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
         >
           <ShieldAlert className="w-4 h-4 text-red-500" />
           Contact Logs ({moderationLogs.length})
+        </button>
+
+        <button
+          onClick={() => setActiveTab("escrowpay")}
+          className={cn(
+            "px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 cursor-pointer",
+            activeTab === "escrowpay"
+              ? "bg-amber-600 text-white shadow-md shadow-amber-600/20"
+              : "bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-950/60 border border-amber-200/70 dark:border-amber-800/40"
+          )}
+        >
+          <CreditCard className="w-4 h-4" />
+          EscrowPay Sandbox
         </button>
 
         <button
@@ -1436,6 +1451,17 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
         <AdminOneDollarTab
           currentUser={currentUser}
           users={users}
+          orders={orders}
+          onActionSuccess={(msg) => {
+            setActionSuccessMessage(msg);
+            setTimeout(() => setActionSuccessMessage(null), 3500);
+          }}
+        />
+      )}
+
+      {/* TAB 9: ESCROWPAY SANDBOX & LIVE MANAGEMENT */}
+      {activeTab === "escrowpay" && (
+        <AdminEscrowPayTab
           orders={orders}
           onActionSuccess={(msg) => {
             setActionSuccessMessage(msg);
