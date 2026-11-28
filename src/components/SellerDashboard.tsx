@@ -29,6 +29,7 @@ import {
   checkCanDeleteSellerAccount,
   cancelUnacceptedPendingOrdersBeforeDelete
 } from "../utils/deletionGuards";
+import { releaseExpiredOrdersInventoryBatch } from "../lib/orderInventoryLifecycle";
 import { 
   LayoutDashboard, 
   LayoutGrid,
@@ -207,16 +208,15 @@ export default function SellerDashboard({
   const [productToDelete, setProductToDelete] = React.useState<string | null>(null);
   const [deleteError, setDeleteError] = React.useState<string | null>(null);
   const [deleteLoading, setDeleteLoading] = React.useState(false);
-  const [showClearOrdersConfirm, setShowClearOrdersConfirm] = React.useState(false);
   const [showClearAllDataConfirm, setShowClearAllDataConfirm] = React.useState(false);
   const [clearingAllData, setClearingAllData] = React.useState(false);
   const [showPermanentDeleteConfirm, setShowPermanentDeleteConfirm] = React.useState(false);
-  const [clearingOrders, setClearingOrders] = React.useState(false);
   const [restoringProduct, setRestoringProduct] = React.useState<string | null>(null);
   const [showCompleteProfile, setShowCompleteProfile] = React.useState(false);
   const [productActiveType, setProductActiveType] = React.useState<"all" | "good" | "service" | "drafts" | "event">("all");
   const [draftToDelete, setDraftToDelete] = React.useState<string | null>(null);
   const [draftDeleteLoading, setDraftDeleteLoading] = React.useState(false);
+  const [draftSavedBanner, setDraftSavedBanner] = React.useState<string | null>(null);
 
   const isDraftProduct = React.useCallback((p: any) => p?.isDraft === true || p?.status === "draft", []);
 
@@ -510,6 +510,15 @@ export default function SellerDashboard({
     const timer = setInterval(() => setCurrentTime(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  React.useEffect(() => {
+    if (orders.length === 0) return;
+    void releaseExpiredOrdersInventoryBatch(orders);
+    const interval = setInterval(() => {
+      void releaseExpiredOrdersInventoryBatch(orders);
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [orders]);
 
   const updateOrderStatus = async (orderId: string, status: string, order: Order) => {
     try {
@@ -843,21 +852,6 @@ export default function SellerDashboard({
     }
   };
 
-  const handleClearOrders = async () => {
-    setClearingOrders(true);
-    try {
-      const promises = orders.map(order => 
-        updateDoc(doc(db, "orders", order.id), { hiddenFromSeller: true })
-      );
-      await Promise.all(promises);
-      setShowClearOrdersConfirm(false);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, "orders/clear-all");
-    } finally {
-      setClearingOrders(false);
-    }
-  };
-
   const handleConfirmReceived = async (payoutId: string) => {
     try {
       await updateDoc(doc(db, "payoutRequests", payoutId), {
@@ -1144,8 +1138,8 @@ export default function SellerDashboard({
                       </div>
                       <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                         {profileProgress.percentage === 0 
-                          ? "You haven't completed your profile yet (buyers will see 'Verification Pending'). Setup is optional and does not block selling."
-                          : "Finish remaining details to unlock the 'Verification Complete' badge for campus buyers."}
+                          ? "You haven't completed your profile yet (buyers will see 'Unverified'). Setup is optional and does not block selling."
+                          : "Finish remaining details to replace 'Unverified' with the 'Verified' badge for campus buyers."}
                       </p>
                     </div>
                   </div>
@@ -1485,11 +1479,23 @@ export default function SellerDashboard({
           >
             <AddProductForm 
               onSuccess={() => {
+                setDraftSavedBanner(null);
                 setProductActiveType("all");
                 setActiveSubTab("my-products");
                 setEditingProduct(null);
                 setEditInitialStep("details");
                 setEditFocusField(null);
+              }}
+              onDraftUpserted={(draftProd: Product) => {
+                setProducts((prev) => {
+                  const filtered = prev.filter((p) => p.id !== draftProd.id);
+                  const next = [draftProd, ...filtered].sort(
+                    (a: any, b: any) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+                  );
+                  const uid = userProfile?.uid || auth.currentUser?.uid;
+                  if (uid) setCachedSellerProducts(uid, next);
+                  return next;
+                });
               }}
               onDraftSaved={() => {
                 setProductActiveType("drafts");
@@ -1497,6 +1503,7 @@ export default function SellerDashboard({
                 setEditingProduct(null);
                 setEditInitialStep("details");
                 setEditFocusField(null);
+                setDraftSavedBanner("Draft saved! You can finish and publish it anytime from your Drafts tab.");
               }}
               onDraftDiscarded={() => {
                 setProductActiveType("drafts");
@@ -1530,6 +1537,22 @@ export default function SellerDashboard({
             exit={{ opacity: 0, y: -10 }}
             className="space-y-8"
           >
+            {draftSavedBanner && (
+              <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/35 border border-amber-200 dark:border-amber-800/60 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 text-xs font-bold text-amber-900 dark:text-amber-200">
+                  <CheckCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                  <span>{draftSavedBanner}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDraftSavedBanner(null)}
+                  className="p-1 text-amber-700 hover:text-amber-900 dark:text-amber-300 cursor-pointer"
+                  aria-label="Dismiss draft notice"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
               <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-2xl w-full sm:w-fit overflow-x-auto scrollbar-none">
                 {[
@@ -1669,18 +1692,6 @@ export default function SellerDashboard({
               <div>
                 <h3 className="text-xl font-bold text-slate-900 dark:text-white">Order Management</h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400">View real-time customer purchases and track order deliveries.</p>
-              </div>
-              <div className="flex items-center gap-2">
-                {orders.length > 0 && (
-                  <button 
-                    type="button"
-                    onClick={() => setShowClearOrdersConfirm(true)}
-                    className="flex items-center gap-1.5 px-4 h-10 text-xs font-bold text-red-600 hover:bg-red-50 dark:hover:bg-red-900/10 rounded-xl transition-colors uppercase tracking-widest border border-red-50 dark:border-red-900/20"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    Clear All
-                  </button>
-                )}
               </div>
             </div>
             {orders.length === 0 ? (
@@ -1911,43 +1922,6 @@ export default function SellerDashboard({
               </button>
             </div>
           </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Clear Orders Confirmation Modal */}
-      <AnimatePresence>
-        {showClearOrdersConfirm && (
-          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 max-w-sm w-full shadow-2xl border border-slate-100 dark:border-slate-800"
-            >
-              <div className="w-16 h-16 bg-red-50 dark:bg-red-900/20 rounded-2xl flex items-center justify-center text-red-600 dark:text-red-500 mx-auto mb-6">
-                <Trash2 className="w-8 h-8" />
-              </div>
-              <h3 className="text-xl font-bold text-slate-900 dark:text-white text-center mb-2">Clear All Orders?</h3>
-              <p className="text-sm text-slate-500 dark:text-slate-400 text-center mb-8">This will hide all orders from your dashboard. This action is irreversible.</p>
-              
-              <div className="flex gap-3">
-                <button 
-                  onClick={() => setShowClearOrdersConfirm(false)}
-                  disabled={clearingOrders}
-                  className="flex-1 py-4 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl font-bold text-sm hover:bg-slate-100 dark:hover:bg-slate-700 transition-all disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button 
-                  onClick={handleClearOrders}
-                  disabled={clearingOrders}
-                  className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-bold text-sm hover:bg-red-700 transition-all shadow-lg shadow-red-100 dark:shadow-red-900/20 flex items-center justify-center gap-2 disabled:opacity-50"
-                >
-                  {clearingOrders ? <Loader2 className="w-4 h-4 animate-spin" /> : "Clear All"}
-                </button>
-              </div>
-            </motion.div>
-          </div>
         )}
       </AnimatePresence>
 
@@ -4475,6 +4449,7 @@ export function getDynamicFieldsForCategory(category: string): ServiceCategoryMa
 
 function AddProductForm({
   onSuccess,
+  onDraftUpserted,
   onDraftSaved,
   onDraftDiscarded,
   onEditCreatedProduct,
@@ -4518,10 +4493,14 @@ function AddProductForm({
   const [category, setCategory] = React.useState(editingProduct?.category || (initialType === "service" || (editingProduct?.type || initialType) === "service" ? "" : "Electronics"));
   const [stock, setStock] = React.useState(editingProduct?.stock?.toString() || "1");
   const stockInputRef = React.useRef<HTMLInputElement | null>(null);
+  const topErrorRef = React.useRef<HTMLDivElement | null>(null);
+  const bottomErrorRef = React.useRef<HTMLDivElement | null>(null);
   const [savingDraft, setSavingDraft] = React.useState(false);
   const { rateInfo: oneDollarRate } = useOneDollarRate();
   const [addToOneDollar, setAddToOneDollar] = React.useState<boolean>(Boolean(editingProduct?.addToOneDollar));
   const [oneDollarDeliveryNote, setOneDollarDeliveryNote] = React.useState<string>(editingProduct?.oneDollarDeliveryNote || "");
+  const [syncOneDollarAddressWithLogistics, setSyncOneDollarAddressWithLogistics] = React.useState<boolean>(false);
+  const [oneDollarSyncFeedback, setOneDollarSyncFeedback] = React.useState<string | null>(null);
   const [existingOneDollarListing, setExistingOneDollarListing] = React.useState<any | null>(null);
   const [addedToOneDollarSuccess, setAddedToOneDollarSuccess] = React.useState<boolean>(false);
 
@@ -4797,6 +4776,41 @@ function AddProductForm({
       setLocation(compiled);
     }
   }, [addrState, addrLga, resolvedPickupSchool, schoolAddress, schoolLocationPreset, schoolLocationCustom, buildCompiledPickupAddress]);
+
+  const compiledLogisticsPickupAddress = React.useMemo(() => {
+    const locName = schoolLocationPreset === "✍️ Other / Custom School Location..."
+      ? (schoolLocationCustom || "Campus Area")
+      : schoolLocationPreset;
+    const compiled = buildCompiledPickupAddress(
+      locName,
+      schoolAddress,
+      resolvedPickupSchool,
+      addrLga,
+      addrState
+    );
+    return (compiled || location.trim() || currentUser?.deliveryAddress?.trim() || "").slice(0, 300);
+  }, [schoolLocationPreset, schoolLocationCustom, schoolAddress, resolvedPickupSchool, addrLga, addrState, location, currentUser?.deliveryAddress, buildCompiledPickupAddress]);
+
+  React.useEffect(() => {
+    if (!syncOneDollarAddressWithLogistics) return;
+    if (compiledLogisticsPickupAddress && compiledLogisticsPickupAddress !== oneDollarDeliveryNote) {
+      setOneDollarDeliveryNote(compiledLogisticsPickupAddress);
+    }
+  }, [syncOneDollarAddressWithLogistics, compiledLogisticsPickupAddress, oneDollarDeliveryNote]);
+
+  const handleUseLogisticsPickupAddressForOneDollar = () => {
+    hasInteractedRef.current = true;
+    if (!compiledLogisticsPickupAddress) {
+      setOneDollarSyncFeedback("empty");
+      return;
+    }
+    setOneDollarDeliveryNote(compiledLogisticsPickupAddress);
+    setSyncOneDollarAddressWithLogistics(true);
+    setOneDollarSyncFeedback("synced");
+    setTimeout(() => {
+      setOneDollarSyncFeedback((prev) => (prev === "synced" ? null : prev));
+    }, 3000);
+  };
 
   const [images, setImages] = React.useState<string[]>(editingProduct?.imageUrls || (editingProduct?.imageUrl ? [editingProduct.imageUrl] : []));
   
@@ -5247,7 +5261,7 @@ function AddProductForm({
       menuItems: (isFoodAndDrinks || type === "service") ? menuItems : [],
       sellerId: auth.currentUser?.uid || currentUser?.uid || "",
       sellerName: currentUser?.displayName || auth.currentUser?.displayName || "Campus Seller",
-      sellerVerified: Boolean(currentUser?.isVerified),
+      sellerVerified: calculateVendorProfileProgress(currentUser).isFullyComplete,
       createdAt: editingProduct?.createdAt || draftCreatedAtRef.current,
       isHibernated: false,
       serialNumber: editingProduct?.serialNumber || draftSerialRef.current,
@@ -5356,13 +5370,44 @@ function AddProductForm({
     return null;
   };
 
+  const stripUndefinedDeep = (input: any): any => {
+    if (Array.isArray(input)) {
+      return input.map((item) => stripUndefinedDeep(item)).filter((item) => item !== undefined);
+    }
+    if (input !== null && typeof input === "object") {
+      const cleaned: Record<string, any> = {};
+      Object.entries(input).forEach(([k, v]) => {
+        if (v !== undefined) {
+          cleaned[k] = stripUndefinedDeep(v);
+        }
+      });
+      return cleaned;
+    }
+    return input;
+  };
+
+  const revealError = (msg: string) => {
+    setError(msg);
+    setTimeout(() => {
+      (bottomErrorRef.current || topErrorRef.current)?.scrollIntoView({
+        behavior: "smooth",
+        block: "center"
+      });
+    }, 60);
+  };
+
   const persistDraftDocument = async (redirectOnSuccess: boolean) => {
-    if (!auth.currentUser) return;
+    if (!auth.currentUser) {
+      if (redirectOnSuccess) {
+        revealError("Please wait until you are signed in before saving a draft.");
+      }
+      return;
+    }
     const contactViolation = validatePublicListingInputs();
     if (contactViolation) {
       if (redirectOnSuccess) {
         setFormStep(contactViolation.step);
-        setError(`🚫 ${contactViolation.message}`);
+        revealError(`🚫 ${contactViolation.message}`);
         void logBlockedAttempt({
           senderId: auth.currentUser.uid,
           senderName: currentUser?.displayName || "Seller",
@@ -5383,10 +5428,16 @@ function AddProductForm({
       const targetId = activeDraftIdRef.current || (isEditingExistingDraft ? editingProduct.id : null) || doc(collection(db, "products")).id;
       activeDraftIdRef.current = targetId;
       const draftRef = doc(db, "products", targetId);
-      const draftData = buildProductPayload(true, targetId);
+      const rawDraftData = buildProductPayload(true, targetId);
+      const draftData = stripUndefinedDeep({
+        ...rawDraftData,
+        sellerId: auth.currentUser.uid,
+        createdAt: editingProduct?.createdAt || draftCreatedAtRef.current || new Date().toISOString()
+      });
       await setDoc(draftRef, draftData, { merge: true });
       if (redirectOnSuccess) {
         isPublishedRef.current = true; // prevent duplicate unmount save after manual save & leave
+        onDraftUpserted?.(draftData);
         onDraftSaved?.();
       }
     } catch (err) {
@@ -5395,7 +5446,7 @@ function AddProductForm({
         if (isFirestoreQuotaError(err)) {
           notifyFirestoreQuotaExceeded(`products/${activeDraftIdRef.current || "draft"}`);
         }
-        setError(getFirestoreErrorMessage(err) || "Could not save draft. Please try again.");
+        revealError(getFirestoreErrorMessage(err) || "Could not save draft. Please try again.");
       }
     } finally {
       if (redirectOnSuccess) {
@@ -5639,7 +5690,7 @@ function AddProductForm({
         doc(collection(db, "products")).id;
       const productRef = doc(db, "products", targetId);
       const productId = productRef.id;
-      const productData = buildProductPayload(false, productId);
+      const productData = stripUndefinedDeep(buildProductPayload(false, productId));
 
       await setDoc(productRef, productData, { merge: true });
       isPublishedRef.current = true;
@@ -5668,7 +5719,7 @@ function AddProductForm({
             currentUser?.storefrontSettings?.businessName ||
             currentUser?.displayName ||
             "Campus Store",
-          sellerVerified: Boolean(currentUser?.isVerified),
+          sellerVerified: calculateVendorProfileProgress(currentUser).isFullyComplete,
           productName: productData.name,
           description: productData.description || "",
           category: productData.category || "Other",
@@ -5791,7 +5842,7 @@ function AddProductForm({
         className="space-y-8 relative z-10"
       >
         {error && (
-          <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/30 rounded-2xl text-red-600 dark:text-red-400 text-xs font-bold">
+          <div ref={topErrorRef} className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/30 rounded-2xl text-red-600 dark:text-red-400 text-xs font-bold">
             {error}
           </div>
         )}
@@ -6407,14 +6458,64 @@ function AddProductForm({
                       </label>
 
                       {addToOneDollar && (
-                        <input
-                          type="text"
-                          maxLength={300}
-                          value={oneDollarDeliveryNote}
-                          onChange={(e) => setOneDollarDeliveryNote(e.target.value)}
-                          placeholder="Optional One Dollar vendor pickup / delivery note for buyers..."
-                          className="w-full h-10 px-3.5 rounded-xl bg-white dark:bg-zinc-900 border border-orange-200/80 dark:border-zinc-700 text-xs text-slate-900 dark:text-white outline-none focus:border-[#ff6b00]"
-                        />
+                        <div className="space-y-2 pt-1">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <label className="text-[10px] font-black text-slate-600 dark:text-zinc-300 uppercase tracking-wider">
+                              One Dollar Pickup Address / Vendor Note
+                            </label>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={handleUseLogisticsPickupAddressForOneDollar}
+                                className={cn(
+                                  "px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer border",
+                                  syncOneDollarAddressWithLogistics && oneDollarDeliveryNote.trim() === compiledLogisticsPickupAddress && compiledLogisticsPickupAddress
+                                    ? "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/60"
+                                    : "bg-white dark:bg-zinc-900 hover:bg-orange-100 dark:hover:bg-orange-950/40 text-[#ff6b00] border-orange-300 dark:border-orange-800/60 shadow-2xs"
+                                )}
+                              >
+                                <MapPin className="w-3 h-3 shrink-0" />
+                                <span>
+                                  {syncOneDollarAddressWithLogistics && oneDollarDeliveryNote.trim() === compiledLogisticsPickupAddress && compiledLogisticsPickupAddress
+                                    ? "Synced with Logistics ✓"
+                                    : "Use Logistics Pickup Address"}
+                                </span>
+                              </button>
+                            </div>
+                          </div>
+
+                          <input
+                            type="text"
+                            maxLength={300}
+                            value={oneDollarDeliveryNote}
+                            onChange={(e) => {
+                              hasInteractedRef.current = true;
+                              setSyncOneDollarAddressWithLogistics(false);
+                              if (oneDollarSyncFeedback) setOneDollarSyncFeedback(null);
+                              setOneDollarDeliveryNote(e.target.value);
+                            }}
+                            placeholder="Enter One Dollar pickup address or tap 'Use Logistics Pickup Address'..."
+                            className="w-full h-10 px-3.5 rounded-xl bg-white dark:bg-zinc-900 border border-orange-200/80 dark:border-zinc-700 text-xs text-slate-900 dark:text-white outline-none focus:border-[#ff6b00]"
+                          />
+
+                          {oneDollarSyncFeedback === "synced" && (
+                            <p className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300">
+                              ✓ Copied pickup address from your Logistics section (auto-sync active).
+                            </p>
+                          )}
+                          {oneDollarSyncFeedback === "empty" && (
+                            <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 text-[11px] font-semibold text-amber-800 dark:text-amber-200">
+                              <span>No pickup address found in Logistics yet.</span>
+                              <button
+                                type="button"
+                                onClick={() => setFormStep("logistics")}
+                                className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-black uppercase tracking-wider cursor-pointer"
+                              >
+                                Fill in Logistics
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                   )}
@@ -7350,6 +7451,13 @@ function AddProductForm({
           </div>
         )}
         </div>
+
+        {error && (
+          <div ref={bottomErrorRef} className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-900/40 rounded-2xl text-red-600 dark:text-red-400 text-xs font-bold flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
 
         {/* Foot Navigation / Submit Button */}
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 pt-4 border-t border-slate-100 dark:border-zinc-800">

@@ -33,10 +33,58 @@ export function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
+export const DEFAULT_PUBLIC_WEBSITE_ORIGIN = "https://shopiversity.app";
+
+export function isNonPublicStudioOrigin(rawUrl?: string): boolean {
+  const clean = (rawUrl || "").trim();
+  if (!clean) return true;
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(clean) ? clean : `https://${clean}`);
+    const host = parsed.hostname.toLowerCase();
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "0.0.0.0" ||
+      host === "::1" ||
+      host.endsWith(".aistudio.google.com") ||
+      host === "aistudio.google.com" ||
+      host.startsWith("ais-dev-") ||
+      host.startsWith("ais-pre-") ||
+      host.endsWith(".run.app") ||
+      host.includes("webcontainer") ||
+      host.includes("stackblitz")
+    );
+  } catch {
+    return true;
+  }
+}
+
+export function resolvePublicWebsiteOrigin(candidateOrigin?: string, fallbackOrigin = DEFAULT_PUBLIC_WEBSITE_ORIGIN): string {
+  const safeFallback = !isNonPublicStudioOrigin(fallbackOrigin)
+    ? fallbackOrigin.trim().replace(/\/+$/, "")
+    : DEFAULT_PUBLIC_WEBSITE_ORIGIN;
+
+  const clean = (candidateOrigin || "").trim().replace(/\/+$/, "");
+  if (clean && /^https?:\/\//i.test(clean) && !isNonPublicStudioOrigin(clean)) {
+    return clean;
+  }
+  return safeFallback;
+}
+
+function sanitizeEmailUrl(rawUrl: string, publicOrigin: string): string {
+  const clean = rawUrl.trim();
+  if (!clean || !/^https?:\/\//i.test(clean)) return clean;
+  if (!isNonPublicStudioOrigin(clean)) return clean;
+  try {
+    const parsed = new URL(clean);
+    return `${publicOrigin}${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return publicOrigin;
+  }
+}
+
 function normalizeOrigin(origin?: string): string {
-  const clean = (origin || "").trim().replace(/\/+$/, "");
-  if (clean && /^https?:\/\//i.test(clean)) return clean;
-  return "https://shopiversity.app";
+  return resolvePublicWebsiteOrigin(origin, DEFAULT_PUBLIC_WEBSITE_ORIGIN);
 }
 
 export function buildDefaultEmailVariables(
@@ -44,7 +92,9 @@ export function buildDefaultEmailVariables(
   origin?: string
 ): Record<string, string> {
   const appOrigin = normalizeOrigin(
-    typeof overrides.app_origin === "string" ? overrides.app_origin : origin
+    typeof overrides.app_origin === "string" && !isNonPublicStudioOrigin(overrides.app_origin)
+      ? overrides.app_origin
+      : origin
   );
   const supportEmail = String(
     overrides.support_email || "shopiversitycommerce@gmail.com"
@@ -71,8 +121,9 @@ export function buildDefaultEmailVariables(
 
   for (const [key, rawVal] of Object.entries(overrides)) {
     if (rawVal === undefined || rawVal === null) continue;
-    base[key] = String(rawVal);
+    base[key] = sanitizeEmailUrl(String(rawVal), appOrigin);
   }
+  base.app_origin = appOrigin;
 
   // Alias normalization so callers & templates match seamlessly
   if (!base.stock_count && base.stock_remaining) base.stock_count = base.stock_remaining;

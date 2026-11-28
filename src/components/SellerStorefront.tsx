@@ -28,6 +28,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/utils";
 import { ProductCard, ProductCardSkeleton } from "./ProductCard";
 import VendorVerificationBadge from "./VendorVerificationBadge";
+import { calculateVendorProfileProgress } from "../utils/vendorVerification";
 
 interface SellerStorefrontProps {
   sellerId: string;
@@ -264,7 +265,7 @@ export default function SellerStorefront({ sellerId, currentUser, previewSetting
               alt={seller.displayName} 
               className="w-full h-full object-cover rounded-[1.25rem]"
             />
-            {seller.isVerified && (
+            {calculateVendorProfileProgress(seller).isFullyComplete && (
               <div className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full flex items-center justify-center text-white border-2 border-white dark:border-slate-900" style={{ backgroundColor: colors.primary }}>
                 <ShieldCheck className="w-3.5 h-3.5" />
               </div>
@@ -417,6 +418,7 @@ export default function SellerStorefront({ sellerId, currentUser, previewSetting
                     isOwner={currentUser?.uid === product.sellerId}
                     currentUser={currentUser}
                     customColor={colors.primary}
+                    sellersMap={seller ? { [seller.uid || sellerId]: seller } : undefined}
                     cart={cart}
                   />
                 </motion.div>

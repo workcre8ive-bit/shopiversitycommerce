@@ -40,6 +40,16 @@ import OrderAuditTrailModal from "./OrderAuditTrailModal";
 import OrderDisputeModal from "./OrderDisputeModal";
 import { Star, MessageSquare, AlertTriangle, ExternalLink as ExternalLinkIcon, Shield, History, Undo2, KeyRound, Lock } from "lucide-react";
 import { notifyOrderCompleted } from "../utils/orderEmailNotifications";
+import {
+  releaseOrderInventoryAfter24h,
+  releaseExpiredOrdersInventoryBatch,
+  fetchOrderLiveAvailableStock,
+  reclaimOrderInventoryOnPost24hPayment,
+  reduceUnpaidOrderQuantityToAvailable,
+  calculateReducedOrderMetrics,
+  shouldReleaseOrderInventoryAfter24h,
+  isOrderOver24HoursUncompleted
+} from "../lib/orderInventoryLifecycle";
 
 interface OrderTrackingProps {
   setActiveTab: (tab: string) => void;
@@ -80,6 +90,10 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
   const [auditModalOrder, setAuditModalOrder] = React.useState<Order | null>(null);
   const [paymentError, setPaymentError] = React.useState<string | null>(null);
   const [paymentNotice, setPaymentNotice] = React.useState<string | null>(null);
+  const [stockConflictByOrder, setStockConflictByOrder] = React.useState<
+    Record<string, { availableStock: number; isDeleted: boolean; requestedQty: number; checkedAt: number }>
+  >({});
+  const [resolvingStockOrderId, setResolvingStockOrderId] = React.useState<string | null>(null);
 
   const basePaystackConfig = {
     reference: `ORD_${Date.now()}`,
@@ -94,11 +108,155 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
     void triggerPaystackPayment(order);
   };
 
+  const handleWaitForRefill = async (order: Order) => {
+    if (!auth.currentUser) return;
+    setResolvingStockOrderId(order.id);
+    setPaymentError(null);
+    try {
+      const nowIso = new Date().toISOString();
+      await updateDoc(doc(db, "orders", order.id), {
+        waitingForRefill: true,
+        waitingForRefillAt: nowIso,
+        updatedAt: nowIso
+      });
+      if (order.sellerId) {
+        const conflict = stockConflictByOrder[order.id];
+        await addDoc(collection(db, "notifications"), {
+          userId: order.sellerId,
+          title: "Buyer Waiting for Stock Refill",
+          message: `${order.buyerName || "A buyer"} wants to pay for ${order.quantity}x ${order.productName}, but only ${conflict?.availableStock ?? 0} unit(s) are currently in stock. Refill inventory so they can complete payment.`,
+          type: "stock",
+          isRead: false,
+          createdAt: nowIso
+        }).catch(() => {});
+      }
+      setPaymentNotice(`Order kept active! You are now waiting for ${order.sellerName || "the seller"} to refill ${order.productName}.`);
+    } catch (err: any) {
+      console.error("Failed to mark waiting for refill:", err);
+      setPaymentError(err?.message || "Could not update order refill preference.");
+    } finally {
+      setResolvingStockOrderId(null);
+    }
+  };
+
+  const handleReduceOrderToAvailableAndPay = async (order: Order, availableStock: number) => {
+    if (!auth.currentUser || availableStock <= 0) return;
+    setResolvingStockOrderId(order.id);
+    setPaymentError(null);
+    try {
+      const updatedOrder = await reduceUnpaidOrderQuantityToAvailable(order, availableStock);
+      setStockConflictByOrder((prev) => {
+        const next = { ...prev };
+        delete next[order.id];
+        return next;
+      });
+      setPaymentNotice(`Order quantity adjusted to ${availableStock} unit(s) (₦${updatedOrder.totalPrice.toLocaleString()}). Opening Paystack...`);
+      await triggerPaystackPayment(updatedOrder);
+    } catch (err: any) {
+      console.error("Failed to reduce order quantity:", err);
+      setPaymentError(err?.message || "Could not reduce order quantity. Please try again.");
+    } finally {
+      setResolvingStockOrderId(null);
+    }
+  };
+
+  const handleCancelAfter24hStockShortage = async (order: Order) => {
+    if (!auth.currentUser) return;
+    setResolvingStockOrderId(order.id);
+    setPaymentError(null);
+    try {
+      const nowIso = new Date().toISOString();
+      await updateDoc(doc(db, "orders", order.id), {
+        status: "cancelled",
+        cancelledAt: nowIso,
+        cancellationReason: "Cancelled by buyer due to stock shortage after 24-hour hold",
+        waitingForRefill: false,
+        updatedAt: nowIso
+      });
+      if (order.sellerId) {
+        await addDoc(collection(db, "notifications"), {
+          userId: order.sellerId,
+          title: "Order Cancelled After 24h Hold",
+          message: `${order.buyerName || "Buyer"} cancelled their uncompleted order for ${order.productName} due to insufficient stock after the 24-hour hold.`,
+          type: "order",
+          isRead: false,
+          createdAt: nowIso
+        }).catch(() => {});
+      }
+      setStockConflictByOrder((prev) => {
+        const next = { ...prev };
+        delete next[order.id];
+        return next;
+      });
+      setOrderToPay(null);
+      setPaymentNotice(`Order for ${order.productName} has been cancelled.`);
+    } catch (err: any) {
+      console.error("Failed to cancel order:", err);
+      setPaymentError(err?.message || "Could not cancel this order. Please try again.");
+    } finally {
+      setResolvingStockOrderId(null);
+    }
+  };
+
   const triggerPaystackPayment = async (order: Order) => {
     if (!auth.currentUser) return;
-    setOrderToPay(order);
     setPaymentError(null);
     setPaymentNotice(null);
+
+    let activeOrder = order;
+    let releasedAt24h = Boolean(activeOrder.inventoryReleasedAfter24h);
+
+    // Ensure 24-hour inventory return runs before checking live stock if hold elapsed
+    if (shouldReleaseOrderInventoryAfter24h(activeOrder)) {
+      const justReleased = await releaseOrderInventoryAfter24h(activeOrder);
+      if (justReleased) {
+        releasedAt24h = true;
+        activeOrder = { ...activeOrder, inventoryReleasedAfter24h: true };
+      }
+    }
+
+    const isPost24hUnpaidGood =
+      activeOrder.type !== "service" &&
+      !activeOrder.ticketTierId &&
+      activeOrder.paymentStatus !== "paid" &&
+      (releasedAt24h || isOrderOver24HoursUncompleted(activeOrder));
+
+    if (isPost24hUnpaidGood && !activeOrder.inventoryReclaimedAfter24h) {
+      try {
+        const liveStock = await fetchOrderLiveAvailableStock(activeOrder);
+        const requestedQty = Math.max(1, Math.floor(Number(activeOrder.quantity || 1)));
+        if (liveStock.isDeleted || liveStock.availableStock < requestedQty) {
+          setStockConflictByOrder((prev) => ({
+            ...prev,
+            [activeOrder.id]: {
+              availableStock: liveStock.availableStock,
+              isDeleted: liveStock.isDeleted,
+              requestedQty,
+              checkedAt: Date.now()
+            }
+          }));
+          setOrderToPay(null);
+          setMarkingId(null);
+          setIsVerifyingPayment(false);
+          setPaymentError(
+            liveStock.isDeleted || liveStock.availableStock <= 0
+              ? `"${activeOrder.productName}" is currently out of stock after the 24-hour hold. You can wait for refills or cancel the order.`
+              : `Only ${liveStock.availableStock} unit(s) of "${activeOrder.productName}" are currently available (you ordered ${requestedQty}). Choose to wait for refills, reduce to ${liveStock.availableStock}, or cancel.`
+          );
+          return;
+        }
+        setStockConflictByOrder((prev) => {
+          if (!prev[activeOrder.id]) return prev;
+          const next = { ...prev };
+          delete next[activeOrder.id];
+          return next;
+        });
+      } catch (stockCheckErr) {
+        console.warn("Live stock check notice:", stockCheckErr);
+      }
+    }
+
+    setOrderToPay(activeOrder);
 
     const activePublicKey = await getPaystackPublicKey();
     if (!activePublicKey) {
@@ -111,8 +269,8 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
     }
 
     const buyerEmail = auth.currentUser?.email || currentUser?.email || "buyer@shopiversity.edu";
-    const ref = `ORD_${order.id}_${Date.now()}`;
-    const amountInKobo = Math.round(order.totalPrice * 100);
+    const ref = `ORD_${activeOrder.id}_${Date.now()}`;
+    const amountInKobo = Math.round(activeOrder.totalPrice * 100);
 
     initializePayment({
       publicKey: activePublicKey,
@@ -120,13 +278,13 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
       email: buyerEmail,
       reference: ref,
       metadata: {
-        orderId: order.id,
-        productId: order.productId,
-        productName: order.productName,
+        orderId: activeOrder.id,
+        productId: activeOrder.productId,
+        productName: activeOrder.productName,
         buyerId: auth.currentUser?.uid,
-        sellerId: order.sellerId,
-        deliveryType: order.deliveryType || "pickup",
-        fulfillmentStatus: order.paymentMethod === "pod" ? "Delivery Received - Payment Required" : "Order Paid via Paystack"
+        sellerId: activeOrder.sellerId,
+        deliveryType: activeOrder.deliveryType || "pickup",
+        fulfillmentStatus: activeOrder.paymentMethod === "pod" ? "Delivery Received - Payment Required" : "Order Paid via Paystack"
       },
       onSuccess: async (response: any) => {
         setIsVerifyingPayment(true);
@@ -144,17 +302,27 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
             }
           }
 
+          // Reclaim inventory on post-24h payment when units had returned to live stock
+          if (releasedAt24h && !activeOrder.inventoryReclaimedAfter24h) {
+            await reclaimOrderInventoryOnPost24hPayment(
+              { ...activeOrder, inventoryReleasedAfter24h: true },
+              activeOrder.quantity
+            ).catch((reclaimErr) => {
+              console.warn("Post-24h inventory reclaim notice:", reclaimErr);
+            });
+          }
+
           // If it's a Pay on Delivery order, trigger server-side POD verification
-          if (order.paymentMethod === "pod") {
+          if (activeOrder.paymentMethod === "pod") {
             try {
               await fetch("/api/orders/verify-pod-payment", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                  orderId: order.id,
+                  orderId: activeOrder.id,
                   paymentReference: response.reference,
                   buyerId: auth.currentUser?.uid,
-                  amountExpected: order.totalPrice,
+                  amountExpected: activeOrder.totalPrice,
                   buyerDeliveryConfirmed: true,
                 }),
               });
@@ -163,57 +331,58 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
             }
           }
 
-          const eff = getEffectiveStatus(order);
+          const eff = getEffectiveStatus(activeOrder);
           const isDeliverySettled =
-            order.paymentMethod === "pod" ||
-            Boolean(order.buyerDeliveryConfirmed) ||
-            Boolean(order.handoverVerified) ||
-            Boolean(order.courierHandedOver) ||
-            order.type === "service" ||
+            activeOrder.paymentMethod === "pod" ||
+            Boolean(activeOrder.buyerDeliveryConfirmed) ||
+            Boolean(activeOrder.handoverVerified) ||
+            Boolean(activeOrder.courierHandedOver) ||
+            activeOrder.type === "service" ||
             eff === "payment_required" ||
             eff === "delivered";
 
           if (isDeliverySettled) {
-            await processDeliveryConfirmation(order, response.reference);
-            setPaymentNotice(`Payment of ₦${order.totalPrice.toLocaleString()} confirmed! Funds are securely settled through SHOPIVERSITY Escrow.`);
+            await processDeliveryConfirmation(activeOrder, response.reference);
+            setPaymentNotice(`Payment of ₦${activeOrder.totalPrice.toLocaleString()} confirmed! Funds are securely settled through SHOPIVERSITY Escrow.`);
           } else {
             const nowIso = new Date().toISOString();
-            const nextStatus = order.ticketTierId
+            const nextStatus = activeOrder.ticketTierId
               ? "acquired"
-              : order.type === "service"
+              : activeOrder.type === "service"
                 ? "accepted"
                 : "Pending Seller Acceptance";
-            await updateDoc(doc(db, "orders", order.id), {
+            await updateDoc(doc(db, "orders", activeOrder.id), {
               paymentStatus: "paid",
               paymentReference: response.reference,
-              escrowSelected: order.isOneDollar ? true : order.escrowSelected,
+              escrowSelected: activeOrder.isOneDollar ? true : activeOrder.escrowSelected,
               escrowStatus: "held",
               payoutStatus: "escrow",
               status: nextStatus,
+              waitingForRefill: false,
               paymentVerifiedAt: nowIso,
               updatedAt: nowIso,
               paymentReceipt: {
-                ...(order.paymentReceipt || {}),
-                receiptNumber: order.paymentReceipt?.receiptNumber || `PSK-${Date.now().toString().slice(-6)}`,
-                orderId: order.id,
+                ...(activeOrder.paymentReceipt || {}),
+                receiptNumber: activeOrder.paymentReceipt?.receiptNumber || `PSK-${Date.now().toString().slice(-6)}`,
+                orderId: activeOrder.id,
                 transactionId: response.reference,
                 paymentReference: response.reference,
                 paymentMethod: "online",
                 provider: "paystack",
-                amountPaid: order.totalPrice,
+                amountPaid: activeOrder.totalPrice,
                 currency: "NGN",
-                platformFee: order.commissionAmount || 0,
-                buyerName: order.buyerName || "Buyer",
-                productName: order.productName,
-                quantity: order.quantity || 1,
-                deliveryType: order.deliveryType || "delivery",
+                platformFee: activeOrder.commissionAmount || 0,
+                buyerName: activeOrder.buyerName || "Buyer",
+                productName: activeOrder.productName,
+                quantity: activeOrder.quantity || 1,
+                deliveryType: activeOrder.deliveryType || "delivery",
                 verificationTimestamp: nowIso,
                 escrowStatus: "held",
                 status: "paid",
                 verifiedStatus: "paid"
               }
             });
-            setPaymentNotice(`Payment of ₦${order.totalPrice.toLocaleString()} confirmed via Paystack! Funds are securely held in SHOPIVERSITY Escrow.`);
+            setPaymentNotice(`Payment of ₦${activeOrder.totalPrice.toLocaleString()} confirmed via Paystack! Funds are securely held in SHOPIVERSITY Escrow.`);
           }
 
           setOrderToPay(null);
@@ -229,7 +398,7 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
         setMarkingId(null);
         setIsVerifyingPayment(false);
         setPaymentError(
-          order.paymentMethod === "pod"
+          activeOrder.paymentMethod === "pod"
             ? "Payment pending. Your package handover is confirmed, and requires Paystack payment settlement to complete the transaction."
             : "Payment window closed. Order remains awaiting payment confirmation."
         );
@@ -286,6 +455,15 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
 
     return () => unsubscribe();
   }, [userProfile?.uid]);
+
+  React.useEffect(() => {
+    if (orders.length === 0) return;
+    void releaseExpiredOrdersInventoryBatch(orders);
+    const interval = setInterval(() => {
+      void releaseExpiredOrdersInventoryBatch(orders);
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [orders]);
 
   React.useEffect(() => {
     if (!initialOrderId || loading || orders.length === 0) return;
@@ -1679,6 +1857,101 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
                       </button>
                     </div>
                   )}
+
+                  {/* 24-Hour Inventory Return Notice & Stock Conflict Resolution (visible across desktop & mobile) */}
+                  {order.status !== "completed" && order.status !== "cancelled" && order.paymentStatus !== "paid" && (Boolean(order.inventoryReleasedAfter24h) || Boolean(stockConflictByOrder[order.id]) || Boolean(order.waitingForRefill)) && (
+                    <div className={cn(
+                      "p-4 rounded-2xl border-2 space-y-3",
+                      stockConflictByOrder[order.id]
+                        ? "bg-red-50/90 dark:bg-red-950/30 border-red-300 dark:border-red-800/70"
+                        : "bg-amber-50/80 dark:bg-amber-950/25 border-amber-200 dark:border-amber-800/60"
+                    )}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <AlertTriangle className={cn("w-4 h-4 shrink-0", stockConflictByOrder[order.id] ? "text-red-600 dark:text-red-400" : "text-amber-600 dark:text-amber-400")} />
+                          <span className={cn("text-xs font-black uppercase tracking-wide", stockConflictByOrder[order.id] ? "text-red-900 dark:text-red-200" : "text-amber-900 dark:text-amber-200")}>
+                            {stockConflictByOrder[order.id]
+                              ? (stockConflictByOrder[order.id].availableStock <= 0 ? "Out of Stock After 24h Hold" : "Limited Stock Available")
+                              : order.waitingForRefill
+                                ? "Waiting for Seller Refill"
+                                : "24h Stock Hold Ended (Order Still Active)"}
+                          </span>
+                        </div>
+                        {stockConflictByOrder[order.id] && (
+                          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 shrink-0">
+                            {stockConflictByOrder[order.id].availableStock} / {stockConflictByOrder[order.id].requestedQty} left
+                          </span>
+                        )}
+                      </div>
+
+                      <p className={cn("text-xs leading-relaxed font-medium", stockConflictByOrder[order.id] ? "text-red-800 dark:text-red-200" : "text-amber-800 dark:text-amber-200")}>
+                        {stockConflictByOrder[order.id]
+                          ? stockConflictByOrder[order.id].availableStock <= 0 || stockConflictByOrder[order.id].isDeleted
+                            ? `Reserved units returned to inventory after 24 hours and none are left right now. Choose whether to wait for refills or cancel this order.`
+                            : `Reserved units returned to inventory after 24 hours. Only ${stockConflictByOrder[order.id].availableStock} unit(s) remain for your ${stockConflictByOrder[order.id].requestedQty}-unit order. Reduce quantity to pay immediately, wait for refills, or cancel.`
+                          : order.waitingForRefill
+                            ? `This order and its payment stage remain active while waiting for ${order.sellerName || "the seller"} to refill inventory. Tap Check Stock & Pay anytime.`
+                            : `Because this order was not completed within 24 hours, reserved units returned to live store stock without cancelling your order or revoking payment. You can still pay anytime while stock is available.`}
+                      </p>
+
+                      {stockConflictByOrder[order.id] ? (
+                        <div className="flex flex-col sm:flex-row flex-wrap gap-2 pt-1">
+                          {stockConflictByOrder[order.id].availableStock > 0 && !stockConflictByOrder[order.id].isDeleted && (
+                            <button
+                              type="button"
+                              onClick={() => handleReduceOrderToAvailableAndPay(order, stockConflictByOrder[order.id].availableStock)}
+                              disabled={resolvingStockOrderId === order.id}
+                              className="flex-1 min-w-[180px] py-2.5 px-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-[11px] uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                            >
+                              {resolvingStockOrderId === order.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CreditCard className="w-3.5 h-3.5" />}
+                              <span>
+                                Reduce to {stockConflictByOrder[order.id].availableStock} &amp; Pay (₦{calculateReducedOrderMetrics(order, stockConflictByOrder[order.id].availableStock).totalPrice.toLocaleString()})
+                              </span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleWaitForRefill(order)}
+                            disabled={resolvingStockOrderId === order.id}
+                            className="py-2.5 px-3.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-black text-[11px] uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          >
+                            <Clock className="w-3.5 h-3.5" />
+                            <span>{order.waitingForRefill ? "Waiting for Refills ✓" : "Wait for Refills"}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleCancelAfter24hStockShortage(order)}
+                            disabled={resolvingStockOrderId === order.id}
+                            className="py-2.5 px-3.5 bg-white dark:bg-slate-900 hover:bg-red-100 dark:hover:bg-red-950/50 text-red-600 dark:text-red-400 border border-red-300 dark:border-red-800 rounded-xl font-black text-[11px] uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Cancel Order</span>
+                          </button>
+                        </div>
+                      ) : order.waitingForRefill ? (
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => triggerOrderPayment(order)}
+                            disabled={isVerifyingPayment || resolvingStockOrderId === order.id}
+                            className="py-2 px-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-[11px] uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          >
+                            <CreditCard className="w-3.5 h-3.5" />
+                            <span>Check Stock &amp; Pay</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleCancelAfter24hStockShortage(order)}
+                            disabled={resolvingStockOrderId === order.id}
+                            className="py-2 px-3.5 bg-white dark:bg-slate-900 hover:bg-red-100 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded-xl font-black text-[11px] uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Cancel Order</span>
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
                 </div>
 
                 <div className="w-full lg:w-72 space-y-6">
@@ -2146,6 +2419,54 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
                         <div className="p-3 bg-emerald-50 dark:bg-[#10b981]/10 border border-emerald-100 dark:border-[#10b981]/25 rounded-xl mb-1">
                           <p className="text-[10px] font-black uppercase tracking-widest text-emerald-600">Ready for Pickup</p>
                           <p className="text-xs font-semibold text-slate-600 dark:text-slate-400 mt-1">Please meet the seller to pickup your order! No verification code needed.</p>
+                        </div>
+                      )}
+
+                      {stockConflictByOrder[order.id] && order.paymentStatus !== "paid" && (
+                        <div className="p-3.5 rounded-2xl bg-red-50 dark:bg-red-950/35 border-2 border-red-300 dark:border-red-800/70 space-y-2.5">
+                          <p className="text-[11px] font-black text-red-900 dark:text-red-200 uppercase tracking-wide flex items-center gap-1.5">
+                            <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                            <span>
+                              {stockConflictByOrder[order.id].availableStock <= 0 || stockConflictByOrder[order.id].isDeleted
+                                ? "Out of Stock After 24h Hold"
+                                : `Only ${stockConflictByOrder[order.id].availableStock} Left (Ordered ${stockConflictByOrder[order.id].requestedQty})`}
+                            </span>
+                          </p>
+                          <div className="flex flex-col gap-2">
+                            {stockConflictByOrder[order.id].availableStock > 0 && !stockConflictByOrder[order.id].isDeleted && (
+                              <button
+                                type="button"
+                                onClick={() => handleReduceOrderToAvailableAndPay(order, stockConflictByOrder[order.id].availableStock)}
+                                disabled={resolvingStockOrderId === order.id}
+                                className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-[11px] uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                              >
+                                {resolvingStockOrderId === order.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CreditCard className="w-3.5 h-3.5" />}
+                                <span>
+                                  Reduce to {stockConflictByOrder[order.id].availableStock} &amp; Pay (₦{calculateReducedOrderMetrics(order, stockConflictByOrder[order.id].availableStock).totalPrice.toLocaleString()})
+                                </span>
+                              </button>
+                            )}
+                            <div className="grid grid-cols-2 gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleWaitForRefill(order)}
+                                disabled={resolvingStockOrderId === order.id}
+                                className="py-2.5 px-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-black text-[10px] uppercase tracking-wider transition-all flex items-center justify-center gap-1 cursor-pointer disabled:opacity-50"
+                              >
+                                <Clock className="w-3 h-3 shrink-0" />
+                                <span>{order.waitingForRefill ? "Waiting ✓" : "Wait for Refills"}</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleCancelAfter24hStockShortage(order)}
+                                disabled={resolvingStockOrderId === order.id}
+                                className="py-2.5 px-2 bg-white dark:bg-slate-900 hover:bg-red-100 text-red-600 dark:text-red-400 border border-red-300 dark:border-red-800 rounded-xl font-black text-[10px] uppercase tracking-wider transition-all flex items-center justify-center gap-1 cursor-pointer disabled:opacity-50"
+                              >
+                                <Trash2 className="w-3 h-3 shrink-0" />
+                                <span>Cancel Order</span>
+                              </button>
+                            </div>
+                          </div>
                         </div>
                       )}
 

@@ -547,24 +547,14 @@ export default function OneDollarSection({
                       <span className="text-sm font-bold text-slate-900 dark:text-white truncate">
                         {selectedListing.storeName || selectedListing.sellerName}
                       </span>
-                      {selectedListing.sellerVerified && (
-                        <VendorVerificationBadge
-                          user={
-                            (sellersMap instanceof Map
-                              ? sellersMap.get(selectedListing.sellerId)
-                              : sellersMap?.[selectedListing.sellerId]) || ({
-                              uid: selectedListing.sellerId,
-                              displayName: selectedListing.sellerName,
-                              email: "",
-                              role: "seller",
-                              isVerified: true,
-                              profileCompleted: true,
-                              businessName: selectedListing.storeName || selectedListing.sellerName,
-                            } as UserProfile)
-                          }
-                          size="sm"
-                        />
-                      )}
+                      <VendorVerificationBadge
+                        user={
+                          (sellersMap instanceof Map
+                            ? sellersMap.get(selectedListing.sellerId)
+                            : sellersMap?.[selectedListing.sellerId]) || undefined
+                        }
+                        size="sm"
+                      />
                     </div>
                     {selectedListing.campus && (
                       <p className="text-[11px] text-slate-500 dark:text-zinc-400 truncate">

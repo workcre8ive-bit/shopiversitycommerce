@@ -1,6 +1,6 @@
 import React from "react";
 import { CartItem, Product } from "../types";
-import { ShoppingCart, Tag, User as UserIcon, Package, AlertTriangle, Truck, MapPin, Star, Layout, Zap, Globe, Store, MessageSquare, Trash2, ChevronLeft, ChevronRight, Heart } from "lucide-react";
+import { ShoppingCart, Tag, User as UserIcon, Package, AlertTriangle, Truck, MapPin, Star, Layout, Zap, Globe, Store, MessageSquare, Trash2, ChevronLeft, ChevronRight, Heart, Sparkles } from "lucide-react";
 import { motion } from "motion/react";
 import { cn } from "../lib/utils";
 import { getInCartQuantity, resolveAvailableStockForProduct } from "../lib/cartStock";
@@ -168,6 +168,30 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
 
             {/* Product info details */}
             <div className="flex flex-col flex-grow">
+              {/* Prominent Promo & Collection Type Highlight Strip */}
+              {((product.collectionType && product.collectionType.trim().length > 0) || (product.promoCode && product.promoCode.trim().length > 0)) && (
+                <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                  {product.collectionType && product.collectionType.trim().length > 0 && (
+                    <span
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[9.5px] sm:text-[10px] font-black uppercase tracking-wider text-white shadow-sm max-w-full truncate bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500"
+                      title={`Collection / Promo: ${product.collectionType.trim()}`}
+                    >
+                      <Sparkles className="w-3 h-3 shrink-0" />
+                      <span className="truncate">{product.collectionType.trim()}</span>
+                    </span>
+                  )}
+                  {product.promoCode && product.promoCode.trim().length > 0 && (
+                    <span
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider font-mono border border-dashed border-orange-500 dark:border-orange-400 bg-orange-50 dark:bg-orange-950/50 text-orange-700 dark:text-orange-300 max-w-full truncate"
+                      title={`Use Promo Code: ${product.promoCode.trim()}`}
+                    >
+                      <Tag className="w-2.5 h-2.5 shrink-0" />
+                      <span className="truncate">PROMO: {product.promoCode.trim()}</span>
+                    </span>
+                  )}
+                </div>
+              )}
+
               {/* Title */}
               <h3 className="text-sm font-bold text-slate-800 dark:text-zinc-100 line-clamp-2 leading-snug mb-2 font-sans">
                 {product.category === "Food & Drinks" ? product.businessName : product.name}
@@ -187,7 +211,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
                 </span>
                 {discountPct > 0 && (
                   <span className="text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 border border-rose-200/60 dark:border-rose-900/40">
-                    -{discountPct}%
+                    -{discountPct}% OFF
                   </span>
                 )}
               </div>
@@ -273,74 +297,79 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart, 
               </div>
 
               {/* Seller and actions footer capsules */}
-              <div className="flex items-center justify-between text-[10px] pt-3 mt-3 border-t border-slate-100 dark:border-zinc-800">
-                <div 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (product.sellerId && product.category !== "Logistics & Errands" && product.category !== "Logistics") {
-                      window.dispatchEvent(new CustomEvent('view-seller-store', { detail: product.sellerId }));
-                    }
-                  }}
-                  className={cn(
-                    "flex items-center gap-1.5 min-w-0 text-slate-700 dark:text-zinc-300 transition-colors",
-                    (product.category !== "Logistics & Errands" && product.category !== "Logistics") ? "cursor-pointer group/seller" : "cursor-default"
-                  )}
-                  title={(product.category !== "Logistics & Errands" && product.category !== "Logistics") ? `View ${product.sellerName}'s store` : undefined}
-                >
+              <div className="flex flex-col gap-2 pt-3 mt-3 border-t border-slate-100 dark:border-zinc-800">
+                <div className="flex items-center justify-between gap-1.5 text-[10px]">
                   <div 
-                    className="w-4 h-4 rounded-full flex items-center justify-center shrink-0 transition-colors"
-                    style={{
-                      backgroundColor: `${brandColor}15`,
-                      color: brandColor
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (product.sellerId && product.category !== "Logistics & Errands" && product.category !== "Logistics") {
+                        window.dispatchEvent(new CustomEvent('view-seller-store', { detail: product.sellerId }));
+                      }
                     }}
+                    className={cn(
+                      "flex items-center gap-1.5 min-w-0 flex-1 text-slate-700 dark:text-zinc-300 transition-colors",
+                      (product.category !== "Logistics & Errands" && product.category !== "Logistics") ? "cursor-pointer group/seller" : "cursor-default"
+                    )}
+                    title={(product.category !== "Logistics & Errands" && product.category !== "Logistics") ? `View ${product.sellerName}'s store` : undefined}
                   >
-                    <UserIcon className="w-2.5 h-2.5" style={{ color: brandColor }} />
+                    <div 
+                      className="w-4 h-4 rounded-full flex items-center justify-center shrink-0 transition-colors"
+                      style={{
+                        backgroundColor: `${brandColor}15`,
+                        color: brandColor
+                      }}
+                    >
+                      <UserIcon className="w-2.5 h-2.5" style={{ color: brandColor }} />
+                    </div>
+                    <span 
+                      className="truncate font-bold transition-colors"
+                      style={{
+                        color: isHovered ? brandColor : undefined
+                      }}
+                    >
+                      {product.sellerName}
+                    </span>
                   </div>
-                  <span 
-                    className="truncate max-w-[65px] font-bold transition-colors"
-                    style={{
-                      color: isHovered ? brandColor : undefined
-                    }}
-                  >
-                    {product.sellerName}
-                  </span>
-                  <VendorVerificationBadge 
-                    user={sellerProfile || ((product as any).sellerVerified ? { isVerified: true, profileCompleted: true } as any : undefined)}
-                    size="xs"
-                    showIconOnly={true}
-                  />
+
+                  {/* Quick link action capsules */}
+                  <div className="flex items-center gap-1 shrink-0">
+                    {product.sellerId && product.category !== "Logistics & Errands" && product.category !== "Logistics" && (
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          window.dispatchEvent(new CustomEvent('view-seller-store', { detail: product.sellerId }));
+                        }}
+                        className="text-[9px] font-black px-2 py-0.5 rounded-full border transition-colors duration-300 cursor-pointer"
+                        style={{
+                          color: brandColor,
+                          borderColor: `${brandColor}35`,
+                          backgroundColor: `${brandColor}10`
+                        }}
+                      >
+                        STORE
+                      </button>
+                    )}
+                    {!isOwner && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsReportModalOpen(true);
+                        }}
+                        className="p-1 text-slate-400 hover:text-red-500 transition-colors cursor-pointer"
+                        title="Report Product or Seller"
+                      >
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
-                {/* Quick link action capsules */}
-                <div className="flex items-center gap-1.5 shrink-0">
-                  {product.sellerId && product.category !== "Logistics & Errands" && product.category !== "Logistics" && (
-                    <button 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        window.dispatchEvent(new CustomEvent('view-seller-store', { detail: product.sellerId }));
-                      }}
-                      className="text-[9px] font-black px-2 py-0.5 rounded-full border transition-colors duration-300 cursor-pointer"
-                      style={{
-                        color: brandColor,
-                        borderColor: `${brandColor}35`,
-                        backgroundColor: `${brandColor}10`
-                      }}
-                    >
-                      STORE
-                    </button>
-                  )}
-                  {!isOwner && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setIsReportModalOpen(true);
-                      }}
-                      className="p-1 text-slate-400 hover:text-red-500 transition-colors cursor-pointer"
-                      title="Report Product or Seller"
-                    >
-                      <AlertTriangle className="w-3.5 h-3.5" />
-                    </button>
-                  )}
+                {/* Explicit Verified / Unverified vendor profile tag */}
+                <div className="flex items-center justify-between gap-2">
+                  <VendorVerificationBadge 
+                    user={sellerProfile}
+                    size="xs"
+                  />
                 </div>
               </div>
             </div>

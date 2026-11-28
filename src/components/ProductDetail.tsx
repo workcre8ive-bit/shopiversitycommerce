@@ -1139,7 +1139,7 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                     <div className="flex flex-wrap items-center gap-2">
                        <span className="text-xs font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">by {product.sellerName}</span>
                        <VendorVerificationBadge 
-                         user={sellerProfile || ((product as any).sellerVerified ? { isVerified: true, profileCompleted: true } as any : undefined)}
+                         user={sellerProfile}
                          size="sm"
                        />
                        {product.category !== "Logistics & Errands" && product.category !== "Logistics" && (
@@ -1300,7 +1300,7 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                         <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Vendor Verification</p>
                         <div className="mt-1">
                           <VendorVerificationBadge 
-                            user={sellerProfile || ((product as any).sellerVerified ? { isVerified: true, profileCompleted: true } as any : undefined)}
+                            user={sellerProfile}
                             size="xs"
                           />
                         </div>

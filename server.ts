@@ -2027,12 +2027,69 @@ ${trimmed}
     }
   }
 
-  function resolveRequestOrigin(req?: express.Request): string {
-    if (!req) return process.env.APP_URL || "https://shopiversity.app";
-    const proto = (req.headers["x-forwarded-proto"] as string)?.split(",")[0] || req.protocol || "https";
-    const host = (req.headers["x-forwarded-host"] as string)?.split(",")[0] || req.get("host");
-    if (host) return `${proto}://${host}`;
-    return process.env.APP_URL || "https://shopiversity.app";
+  function isPreviewOrLocalOrigin(rawUrl?: string): boolean {
+    const clean = (rawUrl || "").trim();
+    if (!clean) return true;
+    try {
+      const parsed = new URL(/^https?:\/\//i.test(clean) ? clean : `https://${clean}`);
+      const host = parsed.hostname.toLowerCase();
+      return (
+        host === "localhost" ||
+        host === "127.0.0.1" ||
+        host === "0.0.0.0" ||
+        host === "::1" ||
+        host.endsWith(".aistudio.google.com") ||
+        host === "aistudio.google.com" ||
+        host.startsWith("ais-dev-") ||
+        host.startsWith("ais-pre-") ||
+        host.endsWith(".run.app") ||
+        host.includes("webcontainer") ||
+        host.includes("stackblitz")
+      );
+    } catch {
+      return true;
+    }
+  }
+
+  function resolveRequestOrigin(req?: express.Request, candidateOrigin?: string): string {
+    const envCandidates = [
+      process.env.PUBLIC_WEBSITE_URL,
+      process.env.WEBSITE_URL,
+      process.env.SITE_URL,
+      process.env.APP_URL,
+      process.env.VITE_PUBLIC_SITE_URL,
+      process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : undefined,
+    ];
+    for (const envUrl of envCandidates) {
+      const clean = (envUrl || "").trim().replace(/\/+$/, "");
+      if (clean && /^https?:\/\//i.test(clean) && !isPreviewOrLocalOrigin(clean)) {
+        return clean;
+      }
+    }
+
+    if (candidateOrigin) {
+      const cleanCandidate = candidateOrigin.trim().replace(/\/+$/, "");
+      if (/^https?:\/\//i.test(cleanCandidate) && !isPreviewOrLocalOrigin(cleanCandidate)) {
+        return cleanCandidate;
+      }
+    }
+
+    if (req) {
+      const reqOrigin = typeof req.headers.origin === "string" ? req.headers.origin.trim().replace(/\/+$/, "") : "";
+      if (reqOrigin && /^https?:\/\//i.test(reqOrigin) && !isPreviewOrLocalOrigin(reqOrigin)) {
+        return reqOrigin;
+      }
+      const proto = (req.headers["x-forwarded-proto"] as string)?.split(",")[0]?.trim() || req.protocol || "https";
+      const host = (req.headers["x-forwarded-host"] as string)?.split(",")[0]?.trim() || req.get("host");
+      if (host) {
+        const assembled = `${proto}://${host}`.replace(/\/+$/, "");
+        if (!isPreviewOrLocalOrigin(assembled)) {
+          return assembled;
+        }
+      }
+    }
+
+    return "https://shopiversity.app";
   }
 
   function persistEmailPrefsToDisk() {
@@ -2254,15 +2311,16 @@ ${trimmed}
       }
     }
 
-    const sampleVars = options.isTest ? getSampleEmailVariables(template.id, options.origin) : {};
+    const publicOrigin = resolveRequestOrigin(undefined, options.origin);
+    const sampleVars = options.isTest ? getSampleEmailVariables(template.id, publicOrigin) : {};
     const mergedVars: EmailVariableMap = {
       ...sampleVars,
       ...(options.variables || {}),
       recipient_email: resolvedEmail
     };
-    const rendered = renderShopiversityEmail(template, mergedVars, options.origin);
+    const rendered = renderShopiversityEmail(template, mergedVars, publicOrigin);
     const marketingUnsubUrl = template.classification === "marketing"
-      ? `${(options.origin || "https://shopiversity.app").replace(/\/+$/, "")}/api/emails/unsubscribe?email=${encodeURIComponent(resolvedEmail)}`
+      ? `${publicOrigin.replace(/\/+$/, "")}/api/emails/unsubscribe?email=${encodeURIComponent(resolvedEmail)}`
       : undefined;
 
     let sendRes = await sendBrevoOrFallbackEmail({
@@ -2839,7 +2897,7 @@ ${trimmed}
       createdAt: renewalTimestamp
     });
 
-    const appOrigin = clientOrigin || req.headers.origin || (req.headers.host ? `https://${req.headers.host}` : "https://ais-dev-zemcvduum7mi5awdo3ul26-328655255867.europe-west1.run.app");
+    const appOrigin = resolveRequestOrigin(req, typeof clientOrigin === "string" ? clientOrigin : undefined);
     const directLoginLink = `${appOrigin}/?admin_portal=true&passkey=${encodeURIComponent(passkeyDisplay)}&email=${encodeURIComponent(primaryTargetEmail)}`;
 
     console.log(`[ADMIN SECURITY] Renewing admin login session (${triggerReason || "Manual Request"}). Dispatching credentials to ${recipients.join(", ")}`);

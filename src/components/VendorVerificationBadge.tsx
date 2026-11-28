@@ -1,5 +1,5 @@
 import React from "react";
-import { ShieldCheck, Shield, Clock } from "lucide-react";
+import { ShieldCheck, ShieldAlert } from "lucide-react";
 import { UserProfile } from "../types";
 import { calculateVendorProfileProgress } from "../utils/vendorVerification";
 import { cn } from "../lib/utils";
@@ -19,11 +19,7 @@ export default function VendorVerificationBadge({
 }: VendorVerificationBadgeProps) {
   const progress = calculateVendorProfileProgress(user);
 
-  const IconComponent = progress.tier === "complete" 
-    ? ShieldCheck 
-    : progress.tier === "fairly" 
-    ? Shield 
-    : Clock;
+  const IconComponent = progress.isFullyComplete ? ShieldCheck : ShieldAlert;
 
   const sizeClasses = {
     xs: {

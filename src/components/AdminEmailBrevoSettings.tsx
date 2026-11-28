@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { resolvePublicWebsiteOrigin } from "../../shared/emailTemplates";
 import { 
   Mail, 
   KeyRound, 
@@ -159,7 +160,7 @@ export default function AdminEmailBrevoSettings() {
           email: testRecipient.trim(),
           code: "739201",
           userName: "Account Owner",
-          resetLink: `${window.location.origin}/?tab=auth&mode=login`
+          resetLink: `${resolvePublicWebsiteOrigin(window.location.origin)}/?tab=auth&mode=login`
         };
       } else if (testType === "receipt") {
         endpoint = "/api/send-receipt";

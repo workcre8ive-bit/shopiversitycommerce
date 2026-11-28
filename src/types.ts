@@ -344,6 +344,17 @@ export interface Order {
   courierHandedOverAt?: string;
   productHandedOver?: boolean;
   productHandedOverAt?: string;
+  itemSubtotal?: number;
+  pickupStationName?: string;
+  inventoryReleasedAfter24h?: boolean;
+  inventoryReleasedAt?: string;
+  inventoryReleasedQty?: number;
+  inventoryReclaimedAfter24h?: boolean;
+  inventoryReclaimedAt?: string;
+  waitingForRefill?: boolean;
+  waitingForRefillAt?: string;
+  postExpiryReducedFromQty?: number;
+  cancellationReason?: string;
 }
 
 export interface RefundRequest {

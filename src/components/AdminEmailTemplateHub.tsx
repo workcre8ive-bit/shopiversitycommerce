@@ -27,7 +27,8 @@ import {
   EmailRecipientCategory,
   EmailTemplateDefinition,
   getSampleEmailVariables,
-  renderShopiversityEmail
+  renderShopiversityEmail,
+  resolvePublicWebsiteOrigin
 } from "../../shared/emailTemplates";
 
 interface EmailLogItem {
@@ -118,7 +119,8 @@ export default function AdminEmailTemplateHub({
   }, [filteredTemplates, selectedId]);
 
   const renderedPreview = useMemo(() => {
-    const origin = typeof window !== "undefined" ? window.location.origin : "https://shopiversity.app";
+    const rawOrigin = typeof window !== "undefined" ? window.location.origin : "https://shopiversity.app";
+    const origin = resolvePublicWebsiteOrigin(rawOrigin);
     const sampleVars = getSampleEmailVariables(selectedTemplate.id, origin);
     return renderShopiversityEmail(selectedTemplate, sampleVars, origin);
   }, [selectedTemplate]);

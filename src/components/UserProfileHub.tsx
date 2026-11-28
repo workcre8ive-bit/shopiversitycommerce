@@ -27,6 +27,7 @@ import {
 import { motion } from "motion/react";
 import { cn } from "../lib/utils";
 import BrevoConnectionModal from "./BrevoConnectionModal";
+import { isUserAccountProfileVerified } from "../utils/vendorVerification";
 
 interface UserProfileHubProps {
   user: any;
@@ -168,10 +169,15 @@ export default function UserProfileHub({
         <div className="flex-1 min-w-0 text-left">
           <div className="flex items-center gap-1.5 flex-wrap">
             <h3 className="font-extrabold text-slate-800 dark:text-white text-base truncate">{user?.displayName || "Campus User"}</h3>
-            {user?.isVerified && (
-              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-full text-[8px] font-black uppercase tracking-wider">
+            {isUserAccountProfileVerified(user, activeRole) ? (
+              <span className="inline-flex items-center gap-0.5 px-2 py-0.5 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 rounded-full text-[8.5px] font-black uppercase tracking-wider">
                 <ShieldCheck className="w-2.5 h-2.5 fill-current" />
                 Verified
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-0.5 px-2 py-0.5 bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20 rounded-full text-[8.5px] font-black uppercase tracking-wider">
+                <ShieldAlert className="w-2.5 h-2.5" />
+                Unverified
               </span>
             )}
           </div>

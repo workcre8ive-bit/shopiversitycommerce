@@ -106,8 +106,10 @@ service cloud.firestore {
 
     function isSeller() {
       return isAuthenticated() && 
-             exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['seller', 'both'];
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) && (
+               get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') in ['seller', 'both'] ||
+               get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('activeRole', '') == 'seller'
+             );
     }
 
     function isValidEmail(email) {
@@ -276,7 +278,11 @@ service cloud.firestore {
         'productHandedOver', 'productHandedOverAt',
         // One Dollar fields
         'isOneDollar', 'oneDollarListingId', 'usdPrice', 'exchangeRateUsdToNgn',
-        'exchangeRateSource', 'exchangeRateUpdatedAt', 'escrowSelected', 'deliveryHandledBy'
+        'exchangeRateSource', 'exchangeRateUpdatedAt', 'escrowSelected', 'deliveryHandledBy',
+        // 24h inventory hold & post-expiry fields
+        'inventoryReleasedAfter24h', 'inventoryReleasedAt', 'inventoryReleasedQty',
+        'inventoryReclaimedAfter24h', 'inventoryReclaimedAt', 'waitingForRefill',
+        'waitingForRefillAt', 'postExpiryReducedFromQty', 'cancellationReason'
       ]) &&
              data.buyerId is string &&
              (!('buyerName' in data) || data.buyerName is string) &&
@@ -354,7 +360,16 @@ service cloud.firestore {
              (!('sellerHandoverPin' in data) || data.sellerHandoverPin is string) &&
              (!('sellerHandoverOtp' in data) || data.sellerHandoverOtp is string) &&
              (!('sellerHandoverVerified' in data) || data.sellerHandoverVerified is bool) &&
-             (!('sellerHandoverVerifiedAt' in data) || data.sellerHandoverVerifiedAt == null || isValidDateString(data.sellerHandoverVerifiedAt));
+             (!('sellerHandoverVerifiedAt' in data) || data.sellerHandoverVerifiedAt == null || isValidDateString(data.sellerHandoverVerifiedAt)) &&
+             (!('inventoryReleasedAfter24h' in data) || data.inventoryReleasedAfter24h is bool) &&
+             (!('inventoryReleasedAt' in data) || data.inventoryReleasedAt == null || isValidDateString(data.inventoryReleasedAt)) &&
+             (!('inventoryReleasedQty' in data) || (data.inventoryReleasedQty is number && data.inventoryReleasedQty >= 0)) &&
+             (!('inventoryReclaimedAfter24h' in data) || data.inventoryReclaimedAfter24h is bool) &&
+             (!('inventoryReclaimedAt' in data) || data.inventoryReclaimedAt == null || isValidDateString(data.inventoryReclaimedAt)) &&
+             (!('waitingForRefill' in data) || data.waitingForRefill is bool) &&
+             (!('waitingForRefillAt' in data) || data.waitingForRefillAt == null || isValidDateString(data.waitingForRefillAt)) &&
+             (!('postExpiryReducedFromQty' in data) || (data.postExpiryReducedFromQty is number && data.postExpiryReducedFromQty > 0)) &&
+             (!('cancellationReason' in data) || data.cancellationReason is string);
     }
 
     function isValidNotification(data) {
@@ -487,9 +502,10 @@ service cloud.firestore {
                     ) || (
                       request.auth != null &&
                       request.resource.data.diff(resource.data).affectedKeys().hasAny(['stock']) && 
-                      request.resource.data.diff(resource.data).affectedKeys().size() == 1 &&
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'status', 'outOfStockAt', 'updatedAt']) &&
                       request.resource.data.stock is number &&
-                      request.resource.data.stock >= 0
+                      request.resource.data.stock >= 0 &&
+                      (!('status' in request.resource.data.diff(resource.data).affectedKeys()) || request.resource.data.status in ['active', 'inactive'])
                     );
       allow delete: if isAuthenticated() && (resource.data.sellerId == request.auth.uid || isAdmin() || !exists(/databases/$(database)/documents/users/$(resource.data.sellerId)));
     }
@@ -518,7 +534,16 @@ service cloud.firestore {
           request.resource.data.buyerId == resource.data.buyerId &&
           request.resource.data.sellerId == resource.data.sellerId &&
           request.resource.data.productId == resource.data.productId &&
-          request.resource.data.quantity == resource.data.quantity &&
+          (
+            request.resource.data.quantity == resource.data.quantity ||
+            (
+              request.auth.uid == resource.data.buyerId &&
+              resource.data.get('paymentStatus', 'pending') != 'paid' &&
+              request.resource.data.quantity is number &&
+              request.resource.data.quantity > 0 &&
+              request.resource.data.quantity <= resource.data.quantity
+            )
+          ) &&
           request.resource.data.createdAt == resource.data.createdAt
         ) || (
           // Allow logistics or system updates to only change status & tracking details
@@ -700,8 +725,7 @@ service cloud.firestore {
                         (
                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock', 'updatedAt']) &&
                           request.resource.data.stock is number &&
-                          request.resource.data.stock >= 0 &&
-                          request.resource.data.stock <= resource.data.stock
+                          request.resource.data.stock >= 0
                         )
                       );
       allow delete: if isAdmin() || (isAuthenticated() && resource.data.sellerId == request.auth.uid);

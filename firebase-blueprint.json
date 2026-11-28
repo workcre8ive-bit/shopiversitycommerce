@@ -215,7 +215,17 @@
         "exchangeRateSource": { "type": "string" },
         "exchangeRateUpdatedAt": { "type": "string", "format": "date-time" },
         "escrowSelected": { "type": "boolean" },
-        "deliveryHandledBy": { "type": "string", "enum": ["vendor", "logistics"] }
+        "deliveryHandledBy": { "type": "string", "enum": ["vendor", "logistics"] },
+        "itemSubtotal": { "type": "number" },
+        "inventoryReleasedAfter24h": { "type": "boolean" },
+        "inventoryReleasedAt": { "type": "string", "format": "date-time" },
+        "inventoryReleasedQty": { "type": "number" },
+        "inventoryReclaimedAfter24h": { "type": "boolean" },
+        "inventoryReclaimedAt": { "type": "string", "format": "date-time" },
+        "waitingForRefill": { "type": "boolean" },
+        "waitingForRefillAt": { "type": "string", "format": "date-time" },
+        "postExpiryReducedFromQty": { "type": "number" },
+        "cancellationReason": { "type": "string" }
       },
       "required": ["buyerId", "buyerName", "buyerPhone", "sellerId", "productId", "quantity", "totalPrice", "deliveryType", "paymentMethod", "status"]
     },

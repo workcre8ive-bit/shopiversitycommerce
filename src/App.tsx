@@ -17,6 +17,7 @@ import {
   limit
 } from "firebase/firestore";
 import { Product, UserProfile, CartItem, Notification, OneDollarListing } from "./types";
+import { resolvePublicWebsiteOrigin } from "../shared/emailTemplates";
 import { useOneDollarRate, getCachedOneDollarListings, setCachedOneDollarListings, clampOneDollarUsd, computeOneDollarNgn, formatUsd } from "./lib/oneDollarRate";
 import {
   isCartItemExpired,
@@ -2011,7 +2012,7 @@ export default function App() {
             adminName: currentUser?.displayName || "Executive Super-Admin",
             targetNotificationEmail: "fashinaayomide2005@gmail.com",
             triggerReason: "Automatic Fresh Credentials on Logout",
-            origin: window.location.origin
+            origin: resolvePublicWebsiteOrigin(window.location.origin)
           })
         }).catch((err) => console.warn("Auto logout renewal error:", err));
       } catch (e) {}

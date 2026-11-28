@@ -14,7 +14,7 @@ export interface VendorVerificationProgress {
   completedCount: number;
   totalSections: number;
   tier: "pending" | "fairly" | "complete";
-  badgeText: "Verification Pending" | "Fairly Verified" | "Verification Complete";
+  badgeText: "Unverified" | "Verified";
   badgeTheme: {
     bg: string;
     text: string;
@@ -26,10 +26,9 @@ export interface VendorVerificationProgress {
 
 /**
  * Calculates a vendor's profile completion percentage and determines
- * the three-tier verification badge for buyers:
- * - < 40%: "Verification Pending"
- * - 40% to 99%: "Fairly Verified"
- * - 100%: "Verification Complete" (Strict 100% profile requirement with verification badge)
+ * whether the account holds a Verified or Unverified badge:
+ * - < 100%: "Unverified" (until all profile details are finished)
+ * - 100%: "Verified" (strict 100% profile completion)
  */
 export function calculateVendorProfileProgress(user: UserProfile | null | undefined): VendorVerificationProgress {
   if (!user) {
@@ -40,13 +39,13 @@ export function calculateVendorProfileProgress(user: UserProfile | null | undefi
       completedCount: 0,
       totalSections: 5,
       tier: "pending",
-      badgeText: "Verification Pending",
+      badgeText: "Unverified",
       badgeTheme: {
-        bg: "bg-amber-50 dark:bg-amber-950/30",
-        text: "text-amber-700 dark:text-amber-400",
-        border: "border-amber-200 dark:border-amber-800",
-        iconColor: "text-amber-600 dark:text-amber-400",
-        dotColor: "bg-amber-500",
+        bg: "bg-red-50 dark:bg-red-950/30",
+        text: "text-red-700 dark:text-red-400",
+        border: "border-red-200 dark:border-red-800",
+        iconColor: "text-red-600 dark:text-red-400",
+        dotColor: "bg-red-500",
       }
     };
   }
@@ -65,15 +64,17 @@ export function calculateVendorProfileProgress(user: UserProfile | null | undefi
     (user.phone && user.phone.trim().length >= 8)
   );
 
-  // Section 3: Campus / Location
-  const hasLocation = Boolean(
+  // Section 3: Campus / Location (requires both campus/school and state/city/location)
+  const hasSchool = Boolean(
     (user.schoolName && user.schoolName.trim().length > 0) ||
     (user.campus && user.campus.trim().length > 0) ||
-    (user.school && user.school.trim().length > 0) ||
-    (user.state && user.state.trim().length > 0) ||
-    (user.city && user.city.trim().length > 0) ||
-    (user.location && user.location.trim().length > 0)
+    (user.school && user.school.trim().length > 0)
   );
+  const hasRegion = Boolean(
+    (user.state && user.state.trim().length > 0) &&
+    (user.city && user.city.trim().length > 0)
+  );
+  const hasLocation = hasSchool && (hasRegion || Boolean(user.location && user.location.trim().length > 0 && (user.state || user.city)));
 
   // Section 4: Bank Details Saved
   const hasBankDetails = Boolean(
@@ -83,9 +84,8 @@ export function calculateVendorProfileProgress(user: UserProfile | null | undefi
     user.bankDetails.bankName.trim().length > 0
   );
 
-  // Section 5: ID / Identity Verification
+  // Section 5: ID / Identity Verification (must have uploaded ID, ID number, or Face ID — NOT just email OTP)
   const hasIdentityVerification = Boolean(
-    user.isVerified ||
     (user.verificationIdUrl && user.verificationIdUrl.trim().length > 0) ||
     (user.idNumber && user.idNumber.trim().length > 0) ||
     (user.faceVerificationUrl && user.faceVerificationUrl.trim().length > 0)
@@ -100,28 +100,23 @@ export function calculateVendorProfileProgress(user: UserProfile | null | undefi
   ];
 
   const completedCount = sections.filter(s => s.isComplete).length;
-  let percentage = completedCount * 20;
-
-  if (user.isVerified && user.profileCompleted) {
-    percentage = 100;
-  }
-
+  const percentage = completedCount * 20;
   const isFullyComplete = percentage >= 100;
 
   let tier: "pending" | "fairly" | "complete" = "pending";
-  let badgeText: "Verification Pending" | "Fairly Verified" | "Verification Complete" = "Verification Pending";
+  let badgeText: "Unverified" | "Verified" = "Unverified";
   let badgeTheme = {
-    bg: "bg-amber-50 dark:bg-amber-950/30",
-    text: "text-amber-700 dark:text-amber-400",
-    border: "border-amber-200 dark:border-amber-800",
-    iconColor: "text-amber-600 dark:text-amber-400",
-    dotColor: "bg-amber-500",
+    bg: "bg-red-50 dark:bg-red-950/30",
+    text: "text-red-700 dark:text-red-400",
+    border: "border-red-200 dark:border-red-800",
+    iconColor: "text-red-600 dark:text-red-400",
+    dotColor: "bg-red-500",
   };
 
-  // Vendor is verified ONLY if profile is 100 percent complete
-  if (percentage >= 100) {
+  // Vendor is Verified ONLY if 100% of profile details are finished
+  if (isFullyComplete) {
     tier = "complete";
-    badgeText = "Verification Complete";
+    badgeText = "Verified";
     badgeTheme = {
       bg: "bg-emerald-50 dark:bg-emerald-950/30",
       text: "text-emerald-700 dark:text-emerald-400",
@@ -131,13 +126,13 @@ export function calculateVendorProfileProgress(user: UserProfile | null | undefi
     };
   } else if (percentage >= 40) {
     tier = "fairly";
-    badgeText = "Fairly Verified";
+    badgeText = "Unverified";
     badgeTheme = {
-      bg: "bg-blue-50 dark:bg-blue-950/30",
-      text: "text-blue-700 dark:text-blue-400",
-      border: "border-blue-200 dark:border-blue-800",
-      iconColor: "text-blue-600 dark:text-blue-400",
-      dotColor: "bg-blue-500",
+      bg: "bg-amber-50 dark:bg-amber-950/30",
+      text: "text-amber-700 dark:text-amber-400",
+      border: "border-amber-200 dark:border-amber-800",
+      iconColor: "text-amber-600 dark:text-amber-400",
+      dotColor: "bg-amber-500",
     };
   }
 
@@ -151,4 +146,24 @@ export function calculateVendorProfileProgress(user: UserProfile | null | undefi
     badgeText,
     badgeTheme,
   };
+}
+
+/**
+ * Checks whether any account (seller or buyer) has completed its required profile details
+ * so it can legitimately display a "Verified" tag instead of "Unverified".
+ */
+export function isUserAccountProfileVerified(user: UserProfile | null | undefined, roleOverride?: string): boolean {
+  if (!user) return false;
+  const effectiveRole = roleOverride || user.activeRole || user.role;
+  if (effectiveRole === "seller") {
+    return calculateVendorProfileProgress(user).isFullyComplete;
+  }
+  return Boolean(
+    user.displayName && user.displayName.trim().length > 0 &&
+    user.username && user.username.trim().length > 0 &&
+    ((user.schoolName && user.schoolName.trim().length > 0) || (user.campus && user.campus.trim().length > 0)) &&
+    user.state && user.state.trim().length > 0 &&
+    user.city && user.city.trim().length > 0 &&
+    user.deliveryAddress && user.deliveryAddress.trim().length > 0
+  );
 }

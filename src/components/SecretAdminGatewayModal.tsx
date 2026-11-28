@@ -14,6 +14,7 @@ import {
   Sparkles,
   ExternalLink
 } from "lucide-react";
+import { resolvePublicWebsiteOrigin } from "../../shared/emailTemplates";
 
 interface SecretAdminGatewayModalProps {
   isOpen: boolean;
@@ -95,7 +96,7 @@ export default function SecretAdminGatewayModal({
           adminName: "Executive Administrator",
           targetNotificationEmail: "fashinaayomide2005@gmail.com",
           triggerReason: "Secret Gateway On-Demand Dispatch",
-          origin: window.location.origin
+          origin: resolvePublicWebsiteOrigin(window.location.origin)
         })
       });
 

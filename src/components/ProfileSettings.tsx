@@ -6,6 +6,7 @@ import { NIGERIAN_CAMPUSES } from "../constants/campuses";
 import { SCHOOL_TYPES, NIGERIAN_SCHOOLS } from "../constants/schools";
 import { NIGERIAN_STATES, STATE_CITIES } from "../constants/locations";
 import { scanPublicFieldsForContactInfo, PUBLIC_CONTACT_POLICY_ERROR } from "../lib/contentFilter";
+import { calculateVendorProfileProgress, isUserAccountProfileVerified } from "../utils/vendorVerification";
 import { 
   User, 
   MessageCircle, 
@@ -268,7 +269,9 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
   const [isVerifyingId, setIsVerifyingId] = React.useState(false);
   const [idVerificationError, setIdVerificationError] = React.useState("");
   const [verificationIdUrl, setVerificationIdUrl] = React.useState(user.verificationIdUrl || "");
-  const [idVerificationSuccess, setIdVerificationSuccess] = React.useState(!!user.verificationIdUrl || user.isVerified);
+  const [idVerificationSuccess, setIdVerificationSuccess] = React.useState(
+    Boolean(user.verificationIdUrl || user.faceVerificationUrl || user.idNumber)
+  );
 
   // Enhanced Verification fields
   const [idType, setIdType] = React.useState<string>(user.idType || "National Identity Card / NIN Slip");
@@ -900,7 +903,27 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
         }
       }
       
-      const isNowComplete = !!schoolName && !!state && !!city && (user.role === "seller" || !!deliveryAddress) && (user.role !== "buyer" ? (!!verificationIdUrl || idVerificationSuccess) : true);
+      const chosenBankForComplete = bankName === "Other" ? customBankName : bankName;
+      const cleanAccForComplete = accountNumber.trim().replace(/\D/g, "");
+      const hasSellerLocationComplete = Boolean(schoolName && state && city);
+      const hasSellerIdentityComplete = Boolean(verificationIdUrl || faceVerificationUrl || idNumber || idVerificationSuccess);
+      const isNowComplete = displayRole === "seller"
+        ? Boolean(
+            (businessName?.trim() || fullName?.trim()) &&
+            businessPhone.trim().length >= 8 &&
+            hasSellerLocationComplete &&
+            chosenBankForComplete &&
+            cleanAccForComplete.length === 10 &&
+            hasSellerIdentityComplete
+          )
+        : Boolean(
+            fullName?.trim() &&
+            username?.trim() &&
+            schoolName &&
+            state &&
+            city &&
+            deliveryAddress?.trim()
+          );
 
       const updateData: any = {
         displayName: fullName,
@@ -1093,17 +1116,16 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
   const totalFields = importantFields.length;
 
   const getVerificationStatus = () => {
-    const isProfileEmpty = !fullName && !user.username && !schoolName && !deliveryAddress;
-    
-    if (user.isVerified) return { label: "Verified", color: "text-emerald-600 bg-emerald-50", icon: ShieldCheck, tag: "verified" };
-    if (idVerificationSuccess && !user.isVerified) return { label: "Verification Pending Save", color: "text-amber-600 bg-amber-50", icon: ShieldAlert, tag: "pending_save" };
-    
-    const isComplete = !!fullName && !!user.username && !!schoolName && !!state && !!city && (user.role === "seller" || !!deliveryAddress) && (user.role !== "buyer" ? !!verificationIdUrl : true);
-    
-    if (isProfileEmpty) return { label: "Unverified", color: "text-red-600 bg-red-50", icon: Shield, tag: "unverified" };
-    if (!isComplete) return { label: "Pending Verification", color: "text-amber-600 bg-amber-50", icon: ShieldAlert, tag: "incomplete" };
-    
-    return { label: "Verified", color: "text-emerald-600 bg-emerald-50", icon: ShieldCheck, tag: "verified" };
+    const isProfileFullyComplete =
+      displayRole === "seller"
+        ? calculateVendorProfileProgress(user).isFullyComplete
+        : isUserAccountProfileVerified(user, displayRole);
+
+    if (isProfileFullyComplete) {
+      return { label: "Verified", color: "text-emerald-600 bg-emerald-50 border border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-800", icon: ShieldCheck, tag: "verified" };
+    }
+
+    return { label: "Unverified", color: "text-red-600 bg-red-50 border border-red-200 dark:bg-red-950/30 dark:text-red-400 dark:border-red-800", icon: ShieldAlert, tag: "unverified" };
   };
 
   const status = getVerificationStatus();

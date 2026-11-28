@@ -143,15 +143,27 @@ export default function CancelRefundModal({
       // 1. Update Order in Firestore
       await updateDoc(orderRef, refundData);
 
-      // 2. Restore Product Inventory Stock
-      if (order.productId) {
-        try {
-          const productRef = doc(db, "products", order.productId);
-          await updateDoc(productRef, {
-            stock: increment(order.quantity || 1)
-          });
-        } catch (stockErr) {
-          console.warn("Stock restoration note:", stockErr);
+      // 2. Restore Product Inventory Stock (skip if 24h auto-release already returned inventory and it wasn't reclaimed)
+      const alreadyReleasedAt24h = Boolean(order.inventoryReleasedAfter24h) && !Boolean(order.inventoryReclaimedAfter24h);
+      if (!alreadyReleasedAt24h) {
+        if (order.isOneDollar && order.oneDollarListingId) {
+          try {
+            await updateDoc(doc(db, "oneDollarListings", order.oneDollarListingId), {
+              stock: increment(order.quantity || 1),
+              updatedAt: new Date().toISOString()
+            });
+          } catch (stockErr) {
+            console.warn("One Dollar stock restoration note:", stockErr);
+          }
+        } else if (order.productId) {
+          try {
+            const productRef = doc(db, "products", order.productId);
+            await updateDoc(productRef, {
+              stock: increment(order.quantity || 1)
+            });
+          } catch (stockErr) {
+            console.warn("Stock restoration note:", stockErr);
+          }
         }
       }
 
