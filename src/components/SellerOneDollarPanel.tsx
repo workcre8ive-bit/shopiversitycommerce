@@ -36,6 +36,7 @@ import { OneDollarListing, Order, Product, UserProfile } from "../types";
 import { clampOneDollarUsd, computeOneDollarNgn, formatNaira, formatUsd, useOneDollarRate } from "../lib/oneDollarRate";
 import { handleFirestoreError, handleListenerError, isFirestoreQuotaError, OperationType } from "../lib/firebase-errors";
 import { compressImage } from "../lib/imageUtils";
+import { scanPublicFieldsForContactInfo, PUBLIC_CONTACT_POLICY_ERROR } from "../lib/contentFilter";
 import { cn } from "../lib/utils";
 
 interface SellerOneDollarPanelProps {
@@ -229,6 +230,16 @@ export default function SellerOneDollarPanel({
       return;
     }
 
+    const contactCheck = scanPublicFieldsForContactInfo({
+      "Product Name": cleanName,
+      "Description": cleanDesc,
+      "Vendor Delivery / Pickup Note": newDeliveryNote
+    });
+    if (contactCheck.isBlocked) {
+      setFeedback({ type: "error", text: `${PUBLIC_CONTACT_POLICY_ERROR} (${contactCheck.reason || "Contact or social info detected."})` });
+      return;
+    }
+
     const ngnPrice = computeOneDollarNgn(parsedUsd, rateInfo) || Math.max(100, Math.round(parsedUsd * (rateInfo?.rate || 1400)));
     const storeName = currentUser.businessName || currentUser.storefrontSettings?.businessName || currentUser.displayName || "Campus Store";
 
@@ -260,11 +271,9 @@ export default function SellerOneDollarPanel({
         location: currentUser.deliveryAddress || currentUser.location || currentUser.campus || "",
         pickupSchool: currentUser.campus || null,
         status: "active",
-        isDraft: false
+        isDraft: false,
+        publicContact: null
       };
-      if (currentUser.publicContact) {
-        productPayload.publicContact = currentUser.publicContact;
-      }
 
       const productRef = await addDoc(collection(db, "products"), productPayload);
       const listingId = `odl_${productRef.id}`;
@@ -293,9 +302,6 @@ export default function SellerOneDollarPanel({
         createdAt: now,
         updatedAt: now
       };
-      if (currentUser.publicContact) {
-        listingPayload.publicContact = currentUser.publicContact;
-      }
 
       await setDoc(doc(db, "oneDollarListings", listingId), listingPayload);
 
@@ -340,12 +346,21 @@ export default function SellerOneDollarPanel({
       return;
     }
 
+    const rawNote = (deliveryNotesByProduct[product.id] || "").trim();
+    const noteCheck = scanPublicFieldsForContactInfo({
+      "Vendor Delivery / Pickup Note": rawNote
+    });
+    if (noteCheck.isBlocked) {
+      setFeedback({ type: "error", text: `${PUBLIC_CONTACT_POLICY_ERROR} (${noteCheck.reason || "Contact or social info detected."})` });
+      return;
+    }
+
     setSubmittingId(product.id);
     setFeedback(null);
     try {
       const listingId = `odl_${product.id}`;
       const now = new Date().toISOString();
-      const note = (deliveryNotesByProduct[product.id] || "").trim().slice(0, 300);
+      const note = rawNote.slice(0, 300);
 
       const payload: Record<string, any> = {
         id: listingId,
@@ -362,7 +377,7 @@ export default function SellerOneDollarPanel({
         imageUrls: product.imageUrls && product.imageUrls.length > 0 ? product.imageUrls : (product.imageUrl ? [product.imageUrl] : []),
         stock: Number(product.stock || 0),
         campus: currentUser.campus || product.pickupSchool || "",
-        location: product.location || currentUser.deliveryAddress || "",
+        location: product.location || currentUser?.deliveryAddress || "",
         usdPrice: parsedUsd,
         status: "approved",
         isActive: true,
@@ -372,9 +387,6 @@ export default function SellerOneDollarPanel({
         createdAt: now,
         updatedAt: now
       };
-      if (product.publicContact || currentUser.publicContact) {
-        payload.publicContact = product.publicContact || currentUser.publicContact;
-      }
 
       await setDoc(doc(db, "oneDollarListings", listingId), payload);
 

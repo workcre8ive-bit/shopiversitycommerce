@@ -45,6 +45,7 @@ export interface UserProfile {
   faceVerificationUrl?: string;
   isVerified: boolean;
   isSuspended: boolean;
+  isDeleted?: boolean;
   suspendedUntil?: string;
   suspensionReason?: string;
   bannedAt?: string;

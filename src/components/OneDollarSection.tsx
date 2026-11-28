@@ -20,6 +20,7 @@ import { collection, limit, onSnapshot, query, where } from "firebase/firestore"
 import { clampOneDollarUsd, computeOneDollarNgn, formatNaira, formatUsd, getCachedOneDollarListings, setCachedOneDollarListings } from "../lib/oneDollarRate";
 import { getInCartQuantity } from "../lib/cartStock";
 import { handleListenerError, isFirestoreQuotaError, OperationType } from "../lib/firebase-errors";
+import { hasValidSellerStorefront } from "../utils/accountCleanup";
 import { cn } from "../lib/utils";
 import VendorVerificationBadge from "./VendorVerificationBadge";
 
@@ -102,8 +103,20 @@ export default function OneDollarSection({
 
   const filteredListings = React.useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
+    const hasLoadedSellers = sellersMap
+      ? sellersMap instanceof Map
+        ? sellersMap.size > 0
+        : Object.keys(sellersMap).length > 0
+      : false;
     return listings.filter((item) => {
       if (item.stock <= 0) return false;
+      if (hasLoadedSellers && sellersMap) {
+        const sellerProfile =
+          sellersMap instanceof Map ? sellersMap.get(item.sellerId) : sellersMap[item.sellerId];
+        if (!sellerProfile || !hasValidSellerStorefront(sellerProfile)) {
+          return false;
+        }
+      }
       const usd = clampOneDollarUsd(item.usdPrice);
       if (priceFilter === "under_half" && usd > 0.5) return false;
       if (priceFilter === "half_to_one" && (usd <= 0.5 || usd > 1)) return false;
@@ -112,7 +125,7 @@ export default function OneDollarSection({
       const haystack = `${item.productName} ${item.description} ${item.category} ${item.sellerName} ${item.storeName || ""}`.toLowerCase();
       return haystack.includes(q);
     });
-  }, [listings, searchQuery, selectedCategory, priceFilter]);
+  }, [listings, searchQuery, selectedCategory, priceFilter, sellersMap]);
 
   const liveNgnPrice = rateInfo?.oneDollarNgnPrice ?? null;
   const formattedUpdatedAt = rateInfo?.updatedAt
@@ -170,7 +183,7 @@ export default function OneDollarSection({
               </span>
               <span className="inline-flex items-center gap-1.5">
                 <ShieldCheck className="w-4 h-4" />
-                Optional payment escrow at checkout
+                Paystack Escrow Protection at checkout
               </span>
             </div>
           </div>
@@ -227,10 +240,10 @@ export default function OneDollarSection({
           <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
           <div className="space-y-0.5">
             <p className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wide">
-              Optional Escrow Payment Protection
+              Paystack Escrow Protection
             </p>
             <p className="text-xs text-slate-600 dark:text-zinc-400 leading-relaxed">
-              At checkout, choose either <strong>Escrow Protected</strong> (funds held by Shopiversity until you confirm receipt) or <strong>Direct Payment</strong> without escrow hold.
+              All One Dollar purchases are paid securely via <strong>Paystack</strong> with <strong>Shopiversity Escrow Protection</strong> — funds are held safely until you confirm receipt.
             </p>
           </div>
         </div>

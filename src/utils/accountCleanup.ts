@@ -11,7 +11,7 @@ import {
 import { deleteUser, signOut, User as FirebaseUser } from "firebase/auth";
 import { auth, db } from "../firebase";
 import firebaseConfig from "../../firebase-applet-config.json";
-import { Product } from "../types";
+import { Product, UserProfile } from "../types";
 import {
   checkCanDeleteSellerAccount,
   checkCanDeleteLogisticsAccount,
@@ -588,25 +588,66 @@ export async function cascadeDeleteUserAccount(
 }
 
 /**
- * Checks for orphaned products or public items in the app whose creator/seller
- * account was deleted from Firebase, deletes them from Firebase Firestore,
- * and returns the list of deleted product IDs so the UI updates immediately.
+ * Determines whether a user profile represents an active vendor account
+ * with a valid Shopiversity storefront.
+ */
+export function hasValidSellerStorefront(seller?: UserProfile | null): boolean {
+  if (!seller || seller.isDeleted) return false;
+  if (seller.state === "Logistics Partner") return false;
+  if (seller.role !== "seller" && seller.role !== "both" && seller.role !== "admin") return false;
+
+  const bizName = (seller.businessName || "").trim();
+  const settingsBizName = (seller.storefrontSettings?.businessName || "").trim();
+  return Boolean(bizName || settingsBizName || seller.storefrontSettings);
+}
+
+/**
+ * Checks for orphaned products or marketplace items whose seller account no longer
+ * exists or lacks an active storefront, deletes eligible items from Firestore,
+ * and returns the list of removed product IDs so UI state stays synchronized.
  */
 export async function cleanupOrphanedProducts(
   allProducts: Product[],
   existingUserIds: Set<string>,
-  forceCheck = false
+  forceCheck = false,
+  options?: {
+    sellersMap?: Record<string, UserProfile>;
+    missingSellerIds?: Set<string>;
+    isAdmin?: boolean;
+  }
 ): Promise<string[]> {
-  if (!allProducts || allProducts.length === 0 || (!forceCheck && existingUserIds.size === 0)) {
+  const missingSet = options?.missingSellerIds;
+  const sellersMap = options?.sellersMap;
+  const isAdmin = Boolean(options?.isAdmin);
+
+  if (
+    !allProducts ||
+    allProducts.length === 0 ||
+    (!forceCheck && existingUserIds.size === 0 && (!missingSet || missingSet.size === 0))
+  ) {
     return [];
   }
 
-  const orphanedProducts: Product[] = [];
+  const orphanedProducts: Array<{ product: Product; sellerMissing: boolean }> = [];
 
   for (const product of allProducts) {
-    // If the product has a sellerId that does not exist in the active users collection
-    if (product.sellerId && !existingUserIds.has(product.sellerId)) {
-      orphanedProducts.push(product);
+    if (!product.sellerId) {
+      orphanedProducts.push({ product, sellerMissing: true });
+      continue;
+    }
+
+    const isExplicitlyMissing = Boolean(missingSet && missingSet.has(product.sellerId));
+    const isNotInUsers = existingUserIds.size > 0 && !existingUserIds.has(product.sellerId);
+    const sellerProfile = sellersMap ? sellersMap[product.sellerId] : undefined;
+    const hasInvalidStorefront =
+      Boolean(sellerProfile && !hasValidSellerStorefront(sellerProfile)) ||
+      Boolean(sellersMap && existingUserIds.size > 0 && !sellerProfile && !isNotInUsers);
+
+    if (isExplicitlyMissing || isNotInUsers || hasInvalidStorefront) {
+      orphanedProducts.push({
+        product,
+        sellerMissing: isExplicitlyMissing || isNotInUsers || !sellerProfile
+      });
     }
   }
 
@@ -615,27 +656,34 @@ export async function cleanupOrphanedProducts(
   }
 
   const deletedIds: string[] = [];
+  const currentUid = auth.currentUser?.uid || null;
 
-  for (const orphaned of orphanedProducts) {
-    try {
-      // Delete from client Firestore
-      await deleteDoc(doc(db, "products", orphaned.id));
-      deletedIds.push(orphaned.id);
-    } catch (err) {
-      console.warn(`Could not delete orphaned product ${orphaned.id} directly from client:`, err);
+  if (currentUid) {
+    for (const { product, sellerMissing } of orphanedProducts) {
+      // Firestore rules allow delete when seller does not exist, user is admin, or user is the seller
+      const canDeleteDirectly = sellerMissing || isAdmin || product.sellerId === currentUid;
+      if (!canDeleteDirectly) continue;
+
+      try {
+        await deleteDoc(doc(db, "products", product.id));
+        deletedIds.push(product.id);
+      } catch (err) {
+        console.warn(`Could not delete orphaned product ${product.id} directly from client:`, err);
+      }
     }
-  }
 
-  // Also notify server to clean up any remaining orphaned items in Firebase
-  try {
-    fetch("/api/account/cleanup-orphaned-content", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ productIds: orphanedProducts.map(p => p.id) })
-    }).catch(() => {});
-  } catch (e) {
-    // Ignore background sync errors
+    // Notify server to clean up any remaining orphaned items if admin SDK is configured
+    try {
+      fetch("/api/account/cleanup-orphaned-content", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productIds: orphanedProducts.map(({ product }) => product.id) })
+      }).catch(() => {});
+    } catch {
+      // Ignore background sync errors
+    }
   }
 
   return deletedIds;
 }
+

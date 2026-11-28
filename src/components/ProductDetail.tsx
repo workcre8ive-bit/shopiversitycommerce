@@ -5,16 +5,10 @@ import { motion, AnimatePresence } from "motion/react";
 import { auth, db } from "../firebase";
 import { collection, query, where, orderBy, onSnapshot, addDoc, doc, getDoc, setDoc, getDocs, updateDoc, deleteDoc, limit } from "firebase/firestore";
 import { toggleWishlist, isProductInWishlist, WISHLIST_UPDATED_EVENT } from "../utils/wishlist";
-import EscrowCheckoutModal, { EscrowSessionDetails } from "./EscrowCheckoutModal";
+import { usePaystackPayment } from "../hooks/usePaystackPayment";
+import { getPaystackPublicKey, getSyncPaystackPublicKey } from "../utils/paystackConfig";
 
 import { cn, generateSixDigitPin } from "../lib/utils";
-import {
-  mergeSellerPublicContact,
-  hasAnyPublicContact,
-  normalizeUrl,
-  normalizeWhatsAppUrl,
-  normalizeTikTokUrl
-} from "../lib/publicContact";
 import { getInCartQuantity, resolveAvailableStockForProduct } from "../lib/cartStock";
 import ReportModal from "./ReportModal";
 import ReviewSuccessModal from "./ReviewSuccessModal";
@@ -134,14 +128,19 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
   const [sellerProfile, setSellerProfile] = React.useState<UserProfile | null>(null);
   const [isReportModalOpen, setIsReportModalOpen] = React.useState(false);
   const [isReviewSuccessOpen, setIsReviewSuccessOpen] = React.useState(false);
-  const [escrowSession, setEscrowSession] = React.useState<EscrowSessionDetails | null>(null);
-  const [isEscrowModalOpen, setIsEscrowModalOpen] = React.useState(false);
   const [ticketError, setTicketError] = React.useState<string | null>(null);
   const [submittedReviewInfo, setSubmittedReviewInfo] = React.useState<{ rating: number; comment: string } | null>(null);
   const [activeImageIndex, setActiveImageIndex] = React.useState(0);
   const [selectedTier, setSelectedTier] = React.useState<any>(null);
   const [formResponses, setFormResponses] = React.useState<Record<string, string>>({});
   const [isRegistering, setIsRegistering] = React.useState(false);
+
+  const initializeTicketPaystack = usePaystackPayment({
+    reference: `TKT_${Date.now()}`,
+    email: currentUser?.email || auth.currentUser?.email || "",
+    amount: Math.round(Number(selectedTier?.price || 0) * 100),
+    publicKey: getSyncPaystackPublicKey(),
+  });
 
   // Lightbox picture-viewer gallery states
   const [isLightboxOpen, setIsLightboxOpen] = React.useState(false);
@@ -383,10 +382,132 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
     }
   };
 
+  const finalizeTicketOrder = async (
+    tier: any,
+    responses: Record<string, string>,
+    paystackReference?: string
+  ) => {
+    if (!auth.currentUser) {
+      throw new Error("Please sign in or register to join.");
+    }
+
+    const totalPayablePrice = tier ? Number(tier.price) : 0;
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let randOrd = "";
+    let randPrd = "";
+    for (let i = 0; i < 6; i++) {
+      randOrd += chars.charAt(Math.floor(Math.random() * chars.length));
+      randPrd += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    const uniqueOrderId = `ORD-${randOrd}`;
+    const uniqueProductId = `PRD-${randPrd}`;
+
+    let dbSellerName = product.sellerName || "Merchant";
+    let dbSellerEmail = "";
+    try {
+      const sellerSnap = await getDoc(doc(db, "users", product.sellerId));
+      if (sellerSnap.exists()) {
+        dbSellerName = sellerSnap.data().displayName || "Merchant";
+        dbSellerEmail = sellerSnap.data().email || "";
+      }
+    } catch (err) {
+      console.error("Error fetching seller profile name:", err);
+    }
+
+    const commissionAmount = totalPayablePrice * 0.02; // 2% for events
+    const sellerEarnings = totalPayablePrice - commissionAmount;
+    const deliveryOtp = generateSixDigitPin();
+    const sellerHandoverPin = generateSixDigitPin();
+    const nowIso = new Date().toISOString();
+    const orderData: any = {
+      uniqueOrderId,
+      uniqueProductId,
+      deliveryOtp,
+      deliveryPin: deliveryOtp,
+      sellerHandoverPin,
+      sellerHandoverOtp: sellerHandoverPin,
+      buyerId: auth.currentUser.uid,
+      buyerName: currentUser?.displayName || "Anonymous",
+      buyerEmail: currentUser?.email || auth.currentUser?.email || "",
+      buyerPhone: currentUser?.phoneNumber || "N/A",
+      sellerId: product.sellerId,
+      sellerName: dbSellerName,
+      productId: product.id,
+      productName: product.name,
+      productImageUrl: product.imageUrl || "",
+      quantity: 1,
+      totalPrice: totalPayablePrice,
+      commissionAmount,
+      sellerEarnings,
+      deliveryType: "pickup",
+      paymentMethod: "online",
+      paymentStatus: "paid",
+      status: "acquired",
+      createdAt: nowIso,
+      deliveryAddress: "",
+      ...(tier ? { ticketTierId: tier.id, ticketTierName: tier.name } : {}),
+      formResponses: responses || {},
+      ...(paystackReference ? {
+        paymentReference: paystackReference,
+        escrowStatus: "held",
+        payoutStatus: "escrow",
+        paymentVerifiedAt: nowIso,
+        paymentReceipt: {
+          receiptNumber: `PSK-EVT-${Date.now().toString().slice(-6)}`,
+          orderId: "",
+          transactionId: paystackReference,
+          paymentReference: paystackReference,
+          paymentMethod: "online",
+          provider: "paystack",
+          amountPaid: totalPayablePrice,
+          currency: "NGN",
+          platformFee: commissionAmount,
+          buyerName: currentUser?.displayName || "Anonymous",
+          productName: product.name,
+          quantity: 1,
+          deliveryType: "pickup",
+          verificationTimestamp: nowIso,
+          escrowStatus: "held",
+          status: "paid",
+          verifiedStatus: "paid"
+        }
+      } : {})
+    };
+
+    const orderRef = await addDoc(collection(db, "orders"), orderData);
+
+    const productRef = doc(db, "products", product.id);
+    const productSnap = await getDoc(productRef);
+    if (productSnap.exists()) {
+      const prodData = productSnap.data();
+      if (prodData.stock !== undefined && prodData.stock !== null) {
+        const currentStock = Number(prodData.stock);
+        const newStock = Math.max(0, currentStock - 1);
+        await updateDoc(productRef, { stock: newStock });
+      }
+    }
+
+    await addDoc(collection(db, "analytics"), {
+      productId: product.id,
+      sellerId: product.sellerId,
+      type: "purchase",
+      timestamp: nowIso
+    });
+
+    void notifyOrderPlaced({
+      orderId: orderRef.id,
+      order: { ...orderData, campus: currentUser?.campus || "Campus" },
+      buyerEmail: orderData.buyerEmail,
+      sellerEmail: dbSellerEmail
+    });
+
+    onClose();
+  };
+
   const handleDirectRegistration = async (
     tier: any,
     responses: Record<string, string>,
-    isPaidEscrowEvent = false
+    isPaidEvent = false
   ) => {
     setTicketError(null);
     if (!auth.currentUser) {
@@ -396,195 +517,61 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
     setIsRegistering(true);
     try {
       const totalPayablePrice = tier ? Number(tier.price) : 0;
-      const requiresEscrowPayment = isPaidEscrowEvent && totalPayablePrice > 0;
-      if (requiresEscrowPayment) {
-        const cfgRes = await fetch("/api/payments/escrow/config-status");
-        if (cfgRes.ok) {
-          const cfgData = await cfgRes.json();
-          if (!cfgData.configured) {
-            throw new Error(
-              "EscrowPay Sandbox API key is not configured on the server yet (missing ESCROWPAY_TEST_SECRET_KEY)."
-            );
-          }
-        }
-      }
+      const requiresPaystackPayment = isPaidEvent && totalPayablePrice > 0;
 
-      const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-      let randOrd = "";
-      let randPrd = "";
-      for (let i = 0; i < 6; i++) {
-        randOrd += chars.charAt(Math.floor(Math.random() * chars.length));
-        randPrd += chars.charAt(Math.floor(Math.random() * chars.length));
-      }
-      const uniqueOrderId = `ORD-${randOrd}`;
-      const uniqueProductId = `PRD-${randPrd}`;
-
-      let dbSellerName = product.sellerName || "Merchant";
-      let dbSellerEmail = "";
-      try {
-        const sellerSnap = await getDoc(doc(db, "users", product.sellerId));
-        if (sellerSnap.exists()) {
-          dbSellerName = sellerSnap.data().displayName || "Merchant";
-          dbSellerEmail = sellerSnap.data().email || "";
-        }
-      } catch (err) {
-        console.error("Error fetching seller profile name:", err);
-      }
-
-      const commissionAmount = totalPayablePrice * 0.02; // 2% for events
-      const sellerEarnings = totalPayablePrice - commissionAmount;
-      const deliveryOtp = generateSixDigitPin();
-      const sellerHandoverPin = generateSixDigitPin();
-      const orderData: any = {
-        uniqueOrderId,
-        uniqueProductId,
-        deliveryOtp,
-        deliveryPin: deliveryOtp,
-        sellerHandoverPin,
-        sellerHandoverOtp: sellerHandoverPin,
-        buyerId: auth.currentUser.uid,
-        buyerName: currentUser?.displayName || "Anonymous",
-        buyerEmail: currentUser?.email || auth.currentUser?.email || "",
-        buyerPhone: currentUser?.phoneNumber || "N/A",
-        sellerId: product.sellerId,
-        sellerName: dbSellerName,
-        productId: product.id,
-        productName: product.name,
-        productImageUrl: product.imageUrl || "",
-        quantity: 1,
-        totalPrice: totalPayablePrice,
-        commissionAmount,
-        sellerEarnings,
-        deliveryType: "pickup",
-        paymentMethod: "online",
-        paymentStatus: requiresEscrowPayment ? "pending" : "paid",
-        status: requiresEscrowPayment ? "awaiting_payment" : "acquired",
-        createdAt: new Date().toISOString(),
-        deliveryAddress: "",
-        ...(tier ? { ticketTierId: tier.id, ticketTierName: tier.name } : {}),
-        formResponses: responses || {},
-        ...(requiresEscrowPayment ? {
-          paymentReceipt: {
-            receiptNumber: `ESC-EVT-${Date.now().toString().slice(-6)}`,
-            orderId: "",
-            transactionId: "",
-            paymentReference: "",
-            paymentMethod: "online",
-            provider: "escrowpay",
-            amountPaid: totalPayablePrice,
-            currency: "NGN",
-            platformFee: commissionAmount,
-            buyerName: currentUser?.displayName || "Anonymous",
-            productName: product.name,
-            quantity: 1,
-            deliveryType: "pickup",
-            verificationTimestamp: new Date().toISOString(),
-            escrowStatus: "not_applicable",
-            status: "processing",
-            verifiedStatus: "processing"
-          }
-        } : {})
-      };
-
-      const orderRef = await addDoc(collection(db, "orders"), orderData);
-
-      const productRef = doc(db, "products", product.id);
-      const productSnap = await getDoc(productRef);
-      if (productSnap.exists()) {
-        const prodData = productSnap.data();
-        if (prodData.stock !== undefined && prodData.stock !== null) {
-          const currentStock = Number(prodData.stock);
-          const newStock = Math.max(0, currentStock - 1);
-          await updateDoc(productRef, { stock: newStock });
-        }
-      }
-
-      await addDoc(collection(db, "analytics"), {
-        productId: product.id,
-        sellerId: product.sellerId,
-        type: "purchase",
-        timestamp: new Date().toISOString()
-      });
-
-      if (requiresEscrowPayment) {
-        const idToken = await auth.currentUser.getIdToken(true);
-        const createRes = await fetch("/api/payments/escrow/create", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(idToken ? { Authorization: `Bearer ${idToken}` } : {})
-          },
-          body: JSON.stringify({
-            orderId: orderRef.id,
-            uniqueOrderId,
-            amountNgn: totalPayablePrice,
-            description: `${product.name}${tier?.name ? ` (${tier.name})` : ""}`,
-            sellerId: product.sellerId,
-            sellerEmail: dbSellerEmail,
-            sellerName: dbSellerName,
-            buyerName: currentUser?.displayName || "Anonymous",
-            buyerPhone: currentUser?.phoneNumber || "",
-            commissionRate: 0.02,
-            returnOrigin: window.location.origin
-          })
-        });
-        const createData = await createRes.json().catch(() => ({}));
-        if (!createRes.ok || !createData.success) {
-          throw new Error(createData.error || "Unable to initialize EscrowPay ticket checkout.");
-        }
-
-        const nowIso = new Date().toISOString();
-        await updateDoc(doc(db, "orders", orderRef.id), {
-          paymentReference: createData.reference,
-          paymentStatus: "pending",
-          paymentReceipt: {
-            ...orderData.paymentReceipt,
-            orderId: orderRef.id,
-            transactionId: createData.transactionId,
-            paymentReference: createData.reference,
-            environment: createData.environment,
-            isTestTransaction: createData.isTestTransaction,
-            escrowId: createData.transactionId,
-            ...(createData.checkoutSessionId ? { checkoutSessionId: createData.checkoutSessionId } : {}),
-            ...(createData.checkoutUrl ? { checkoutUrl: createData.checkoutUrl } : {}),
-            ...(createData.virtualAccount ? { virtualAccount: createData.virtualAccount } : {}),
-            verificationTimestamp: nowIso
-          },
-          updatedAt: nowIso
-        }).catch((updErr) => {
-          console.warn("Non-fatal ProductDetail paymentReceipt update warning:", updErr);
-        });
-
-        setEscrowSession({
-          orderId: orderRef.id,
-          uniqueOrderId,
-          transactionId: createData.transactionId,
-          reference: createData.reference,
-          environment: createData.environment,
-          isTestTransaction: createData.isTestTransaction,
-          amountNgn: totalPayablePrice,
-          currency: "NGN",
-          checkoutUrl: createData.checkoutUrl,
-          checkoutSessionId: createData.checkoutSessionId,
-          virtualAccount: createData.virtualAccount,
-          returnUrl: createData.returnUrl
-        });
-        setIsEscrowModalOpen(true);
+      if (!requiresPaystackPayment) {
+        await finalizeTicketOrder(tier, responses);
         return;
       }
 
-      void notifyOrderPlaced({
-        orderId: orderRef.id,
-        order: { ...orderData, campus: currentUser?.campus || "Campus" },
-        buyerEmail: orderData.buyerEmail,
-        sellerEmail: dbSellerEmail
-      });
+      const activeKey = await getPaystackPublicKey();
+      if (!activeKey) {
+        throw new Error(
+          "Paystack Public Key is not configured. Please add VITE_PAYSTACK_PUBLIC_KEY in environment settings."
+        );
+      }
 
-      onClose();
+      const buyerEmail = currentUser?.email || auth.currentUser?.email || "buyer@shopiversity.edu";
+      const ref = `TKT_${product.id}_${Date.now()}`;
+      initializeTicketPaystack({
+        publicKey: activeKey,
+        email: buyerEmail,
+        amount: Math.round(totalPayablePrice * 100),
+        reference: ref,
+        metadata: {
+          productId: product.id,
+          productName: product.name,
+          ticketTierId: tier?.id,
+          ticketTierName: tier?.name,
+          buyerId: auth.currentUser?.uid,
+          sellerId: product.sellerId,
+        },
+        onSuccess: async (paystackResponse: any) => {
+          setIsRegistering(true);
+          try {
+            const verifyRes = await fetch(`/api/paystack/verify/${paystackResponse.reference}`);
+            const verifyData = await verifyRes.json().catch(() => ({}));
+            if (!verifyData.success && verifyData.status !== "success") {
+              if (!verifyData.error?.includes("secret key not configured")) {
+                throw new Error(verifyData.message || verifyData.error || "Paystack verification failed.");
+              }
+            }
+            await finalizeTicketOrder(tier, responses, paystackResponse.reference);
+          } catch (err: any) {
+            console.error("Ticket payment verification error:", err);
+            setTicketError(err?.message || "Payment verification failed. Please contact support.");
+          } finally {
+            setIsRegistering(false);
+          }
+        },
+        onClose: () => {
+          setIsRegistering(false);
+          setTicketError("Paystack payment window closed. Your ticket was not booked.");
+        }
+      });
     } catch (error: any) {
       console.error("Error in registration:", error);
       setTicketError(error?.message || "Registration failed. Please try again.");
-    } finally {
       setIsRegistering(false);
     }
   };
@@ -1376,96 +1363,6 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
                     )}
                   </div>
                 </div>
-
-                {(() => {
-                  const publicContact = mergeSellerPublicContact(product.publicContact, sellerProfile);
-                  if (!hasAnyPublicContact(publicContact)) return null;
-                  return (
-                    <div className="p-5 bg-slate-50 dark:bg-slate-800/40 rounded-[2rem] border border-slate-200/80 dark:border-slate-700/80 space-y-3 mb-8">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <Globe className="w-4 h-4 text-[#ff6b00]" />
-                          <h4 className="text-[11px] font-black text-slate-800 dark:text-slate-200 uppercase tracking-widest">
-                            Seller Public Contact & Socials
-                          </h4>
-                        </div>
-                        <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-orange-100 dark:bg-orange-950/40 text-orange-700 dark:text-orange-300 uppercase tracking-wider">
-                          Public
-                        </span>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {publicContact.phone && (
-                          <a
-                            href={`tel:${publicContact.phone.replace(/\s+/g, "")}`}
-                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:border-emerald-400 transition-all shadow-xs"
-                          >
-                            <Phone className="w-3.5 h-3.5 text-emerald-600" />
-                            <span>{publicContact.phone}</span>
-                          </a>
-                        )}
-                        {publicContact.whatsapp && (
-                          <a
-                            href={normalizeWhatsAppUrl(publicContact.whatsapp)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800/50 hover:bg-emerald-100 transition-all"
-                          >
-                            <MessageCircle className="w-3.5 h-3.5" />
-                            <span>WhatsApp: {publicContact.whatsapp}</span>
-                          </a>
-                        )}
-                        {publicContact.email && (
-                          <a
-                            href={`mailto:${publicContact.email}`}
-                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 border border-blue-200/80 dark:border-blue-800/50 hover:bg-blue-100 transition-all"
-                          >
-                            <Mail className="w-3.5 h-3.5" />
-                            <span>{publicContact.email}</span>
-                          </a>
-                        )}
-                        {publicContact.instagram && (
-                          <a
-                            href={normalizeUrl(publicContact.instagram, "https://instagram.com/")}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-pink-50 dark:bg-pink-950/30 text-pink-700 dark:text-pink-300 border border-pink-200/80 dark:border-pink-800/50 hover:bg-pink-100 transition-all"
-                          >
-                            <Instagram className="w-3.5 h-3.5" />
-                            <span>{publicContact.instagram}</span>
-                          </a>
-                        )}
-                        {publicContact.twitter && (
-                          <a
-                            href={normalizeUrl(publicContact.twitter, "https://x.com/")}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-900 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:bg-slate-200 transition-all"
-                          >
-                            <AtSign className="w-3.5 h-3.5" />
-                            <span>{publicContact.twitter}</span>
-                          </a>
-                        )}
-                        {publicContact.tiktok && (
-                          <a
-                            href={normalizeTikTokUrl(publicContact.tiktok)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-purple-50 dark:bg-purple-950/30 text-purple-700 dark:text-purple-300 border border-purple-200/80 dark:border-purple-800/50 hover:bg-purple-100 transition-all"
-                          >
-                            <Globe className="w-3.5 h-3.5" />
-                            <span>{publicContact.tiktok}</span>
-                          </a>
-                        )}
-                        {(publicContact.facebook || publicContact.website || publicContact.other) && (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-orange-50 dark:bg-orange-950/30 text-orange-700 dark:text-orange-300 border border-orange-200/80 dark:border-orange-800/50">
-                            <Globe className="w-3.5 h-3.5" />
-                            <span>{publicContact.website || publicContact.facebook || publicContact.other}</span>
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })()}
 
                 {product.category !== "Food & Drinks" && (() => {
                   const savedAmount = product.priceBefore && product.priceBefore > product.price
@@ -2674,24 +2571,6 @@ export default function ProductDetail({ product, isOpen, onClose, onAddToCart, c
         )}
       </AnimatePresence>
 
-      <EscrowCheckoutModal
-        isOpen={isEscrowModalOpen}
-        session={escrowSession}
-        onClose={() => {
-          setIsEscrowModalOpen(false);
-          onClose();
-        }}
-        onProceedToReturnCheck={(returnUrl) => {
-          setIsEscrowModalOpen(false);
-          try {
-            const parsed = new URL(returnUrl, window.location.origin);
-            window.history.pushState({}, "", `${parsed.pathname}${parsed.search}`);
-            window.dispatchEvent(new PopStateEvent("popstate"));
-          } catch {
-            window.location.href = returnUrl;
-          }
-        }}
-      />
     </ContainerWrapper>
   );
 }

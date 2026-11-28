@@ -60,7 +60,13 @@ import RefundPolicy from "./components/RefundPolicy";
 import CookieConsentBanner from "./components/CookieConsentBanner";
 import ReturnPolicyModal from "./components/ReturnPolicyModal";
 import Carousel from "./components/HeroCarousel";
-import { generateSmartUsername, cascadeDeleteUserAccount, verifyFirebaseAuthUserExists } from "./utils/accountCleanup";
+import {
+  generateSmartUsername,
+  cascadeDeleteUserAccount,
+  verifyFirebaseAuthUserExists,
+  hasValidSellerStorefront,
+  cleanupOrphanedProducts
+} from "./utils/accountCleanup";
 import Logo from "./components/Logo";
 import StickmanLoader from "./components/StickmanLoader";
 import ShopiversityLoader from "./components/ShopiversityLoader";
@@ -224,8 +230,12 @@ export default function App() {
   const { rateInfo: oneDollarRate, loading: oneDollarRateLoading, error: oneDollarRateError, refreshRate: refreshOneDollarRate } = useOneDollarRate();
   const [sellers, setSellers] = React.useState<UserProfile[]>([]);
   const [existingUserIds, setExistingUserIds] = React.useState<Set<string>>(new Set());
+  const [invalidSellerIds, setInvalidSellerIds] = React.useState<Set<string>>(new Set());
+  const [missingSellerIds, setMissingSellerIds] = React.useState<Set<string>>(new Set());
   const [usersLoaded, setUsersLoaded] = React.useState(false);
   const purgingDeletedAuthUidRef = React.useRef<string | null>(null);
+  const checkedSellerIdsRef = React.useRef<Set<string>>(new Set());
+  const deletedOrphanProductIdsRef = React.useRef<Set<string>>(new Set());
 
   const sellersMap = React.useMemo(() => {
     const map: Record<string, UserProfile> = {};
@@ -247,16 +257,148 @@ export default function App() {
 
   const [currentUser, setCurrentUser] = React.useState<UserProfile | null>(null);
 
-  // Automatically clear products belonging to accounts explicitly deleted in this session
-  // (Cascade deletion handles Firestore product purging without requiring full-collection user reads on every page load)
+  // Verify any sellerIds referenced by marketplace products / One Dollar listings that aren't in sellersMap yet,
+  // exclude products whose seller account is missing or lacks a storefront, and permanently delete eligible orphans in Firestore.
   React.useEffect(() => {
-    if (loading || !usersLoaded || products.length === 0 || existingUserIds.size === 0) return;
-    const orphaned = products.filter(p => p.sellerId && !existingUserIds.has(p.sellerId));
-    if (orphaned.length > 0) {
-      const orphanedSet = new Set(orphaned.map(p => p.id));
-      setProducts(prev => prev.filter(p => !orphanedSet.has(p.id)));
+    if (!usersLoaded) return;
+
+    const allSellerIds = new Set<string>();
+    products.forEach((p) => {
+      if (p.sellerId) allSellerIds.add(p.sellerId);
+    });
+    oneDollarListings.forEach((l) => {
+      if (l.sellerId) allSellerIds.add(l.sellerId);
+    });
+
+    const unknownIds = Array.from(allSellerIds).filter(
+      (sid) =>
+        !sellersMap[sid] &&
+        !invalidSellerIds.has(sid) &&
+        !checkedSellerIdsRef.current.has(sid)
+    );
+
+    if (unknownIds.length > 0) {
+      unknownIds.forEach((sid) => checkedSellerIdsRef.current.add(sid));
+      Promise.all(
+        unknownIds.map(async (sid) => {
+          try {
+            const snap = await getDoc(doc(db, "users", sid));
+            if (!snap.exists()) {
+              return { sid, status: "missing" as const, profile: null };
+            }
+            const profile = { uid: snap.id, ...snap.data() } as UserProfile;
+            if (!hasValidSellerStorefront(profile)) {
+              return { sid, status: "no_storefront" as const, profile };
+            }
+            return { sid, status: "valid" as const, profile };
+          } catch {
+            return { sid, status: "error" as const, profile: null };
+          }
+        })
+      ).then((results) => {
+        const newlyValid: UserProfile[] = [];
+        const newlyInvalid: string[] = [];
+        const newlyMissing: string[] = [];
+
+        results.forEach((r) => {
+          if (r.status === "valid" && r.profile) {
+            newlyValid.push(r.profile);
+          } else if (r.status === "missing") {
+            newlyInvalid.push(r.sid);
+            newlyMissing.push(r.sid);
+          } else if (r.status === "no_storefront") {
+            newlyInvalid.push(r.sid);
+          }
+        });
+
+        if (newlyValid.length > 0) {
+          setSellers((prev) => {
+            const merged = new Map<string, UserProfile>();
+            prev.forEach((u) => merged.set(u.uid, u));
+            newlyValid.forEach((u) => merged.set(u.uid, u));
+            const list = Array.from(merged.values());
+            setCachedSellers(list);
+            return list;
+          });
+          setExistingUserIds((prev) => {
+            const next = new Set(prev);
+            newlyValid.forEach((u) => next.add(u.uid));
+            return next;
+          });
+        }
+
+        if (newlyInvalid.length > 0) {
+          setInvalidSellerIds((prev) => {
+            const next = new Set(prev);
+            newlyInvalid.forEach((id) => next.add(id));
+            return next;
+          });
+        }
+
+        if (newlyMissing.length > 0) {
+          setMissingSellerIds((prev) => {
+            const next = new Set(prev);
+            newlyMissing.forEach((id) => next.add(id));
+            return next;
+          });
+        }
+      });
     }
-  }, [products, existingUserIds, usersLoaded, loading]);
+
+    // Identify orphaned or storefront-less products currently in state
+    const badProducts = products.filter((p) => {
+      if (!p.sellerId) return true;
+      if (invalidSellerIds.has(p.sellerId) || missingSellerIds.has(p.sellerId)) return true;
+      if (sellersMap[p.sellerId] && !hasValidSellerStorefront(sellersMap[p.sellerId])) return true;
+      if (unknownIds.length === 0 && checkedSellerIdsRef.current.has(p.sellerId) && !sellersMap[p.sellerId]) return true;
+      return false;
+    });
+
+    if (badProducts.length > 0) {
+      const badIdSet = new Set(badProducts.map((p) => p.id));
+      setProducts((prev) => {
+        const next = prev.filter((p) => !badIdSet.has(p.id));
+        if (next.length !== prev.length) {
+          setCachedProducts(next);
+        }
+        return next;
+      });
+
+      const pendingFirestoreDeletes = badProducts.filter(
+        (p) => !deletedOrphanProductIdsRef.current.has(p.id)
+      );
+
+      if (pendingFirestoreDeletes.length > 0 && auth.currentUser) {
+        cleanupOrphanedProducts(pendingFirestoreDeletes, existingUserIds, true, {
+          sellersMap,
+          missingSellerIds,
+          isAdmin: currentUser?.role === "admin"
+        }).then((deleted) => {
+          deleted.forEach((id) => deletedOrphanProductIdsRef.current.add(id));
+        }).catch(() => {});
+      }
+    }
+
+    // Also strip orphaned or storefront-less One Dollar listings from UI & cache
+    const badOneDollar = oneDollarListings.filter((l) => {
+      if (!l.sellerId) return true;
+      if (invalidSellerIds.has(l.sellerId) || missingSellerIds.has(l.sellerId)) return true;
+      if (sellersMap[l.sellerId] && !hasValidSellerStorefront(sellersMap[l.sellerId])) return true;
+      if (unknownIds.length === 0 && checkedSellerIdsRef.current.has(l.sellerId) && !sellersMap[l.sellerId]) return true;
+      return false;
+    });
+
+    if (badOneDollar.length > 0) {
+      const badOdSet = new Set(badOneDollar.map((l) => l.id));
+      setOneDollarListings((prev) => {
+        const next = prev.filter((l) => !badOdSet.has(l.id));
+        if (next.length !== prev.length) {
+          setCachedOneDollarListings(next);
+        }
+        return next;
+      });
+    }
+  }, [products, oneDollarListings, sellersMap, existingUserIds, invalidSellerIds, missingSellerIds, usersLoaded, currentUser?.uid, currentUser?.role]);
 
   // Smooth Branded Splash Preloader State
   const [isInitialSplashActive, setIsInitialSplashActive] = React.useState(true);
@@ -1382,17 +1524,33 @@ export default function App() {
     let isUnmounted = false;
     const { sellers: cachedSellers, isFresh: sellersCacheFresh } = getCachedSellers();
     if (cachedSellers.length > 0) {
-      setSellers(cachedSellers.filter(u => u.state !== "Logistics Partner"));
+      const validCachedSellers = cachedSellers.filter(u => hasValidSellerStorefront(u));
+      const invalidCachedIds = cachedSellers
+        .filter(u => u.uid && !hasValidSellerStorefront(u))
+        .map(u => u.uid);
+      setSellers(validCachedSellers);
+      setExistingUserIds(new Set(validCachedSellers.map(u => u.uid).filter(Boolean)));
+      if (invalidCachedIds.length > 0) {
+        setInvalidSellerIds(prev => new Set([...prev, ...invalidCachedIds]));
+      }
       setUsersLoaded(true);
     }
     if (!sellersCacheFresh) {
       getDocs(query(collection(db, "users"), where("role", "in", ["seller", "both"]))).then((snapshot) => {
         if (isUnmounted) return;
-        const sellersList = snapshot.docs
-          .map(docSnap => ({ uid: docSnap.id, ...docSnap.data() } as UserProfile))
-          .filter(u => u.state !== "Logistics Partner");
-        setSellers(sellersList);
-        setCachedSellers(sellersList);
+        const allFetchedSellers = snapshot.docs
+          .map(docSnap => ({ uid: docSnap.id, ...docSnap.data() } as UserProfile));
+        const validSellersList = allFetchedSellers.filter(u => hasValidSellerStorefront(u));
+        const noStorefrontIds = allFetchedSellers
+          .filter(u => u.uid && !hasValidSellerStorefront(u))
+          .map(u => u.uid);
+
+        setSellers(validSellersList);
+        setExistingUserIds(new Set(validSellersList.map(u => u.uid).filter(Boolean)));
+        if (noStorefrontIds.length > 0) {
+          setInvalidSellerIds(prev => new Set([...prev, ...noStorefrontIds]));
+        }
+        setCachedSellers(validSellersList);
         setUsersLoaded(true);
       }).catch((error) => {
         if (isUnmounted) return;
@@ -1478,9 +1636,13 @@ export default function App() {
     );
 
     if (p.isDeleted || p.isDraft || p.status === "draft" || p.isHibernated || p.isArchived || isOutOfStockOver3Days) return false;
-    
-    // If the seller account has been deleted from Firebase, never show it in the app
-    if (p.sellerId && existingUserIds.size > 0 && !existingUserIds.has(p.sellerId)) return false;
+
+    // Never show products whose seller account is missing or lacks a valid storefront
+    if (!p.sellerId) return false;
+    if (invalidSellerIds.has(p.sellerId) || missingSellerIds.has(p.sellerId)) return false;
+    if (usersLoaded && sellersMap[p.sellerId] && !hasValidSellerStorefront(sellersMap[p.sellerId])) return false;
+    if (usersLoaded && checkedSellerIdsRef.current.has(p.sellerId) && !sellersMap[p.sellerId]) return false;
+    if (existingUserIds.size > 0 && !existingUserIds.has(p.sellerId) && checkedSellerIdsRef.current.has(p.sellerId)) return false;
     
     // Services should not be in general marketplace, only on Services tab
     if (p.type === "service") return false;
@@ -1531,7 +1693,7 @@ export default function App() {
     return matchesSearch && matchesCategory && matchesVendor && matchesCondition && matchesPrice && matchesSeller;
   }).map(p => [p.id, p])).values());
 
-  const vendorNames = Array.from(new Set(products.filter(p => !p.isDeleted && !p.isDraft && p.status !== "draft").map(p => p.sellerName).filter(Boolean))).sort();
+  const vendorNames = Array.from(new Set(filteredProducts.map(p => p.sellerName).filter(Boolean))).sort();
   const categories = ALL_CATEGORIES;
 
   const markAsRead = async (id: string) => {
@@ -2881,6 +3043,9 @@ export default function App() {
 
                     const searchResults = products.filter((p) => {
                       if (p.isDeleted || p.isDraft || p.status === "draft" || p.isHibernated || (p.stock !== undefined && p.stock <= 0)) return false;
+                      if (!p.sellerId || invalidSellerIds.has(p.sellerId) || missingSellerIds.has(p.sellerId)) return false;
+                      if (usersLoaded && sellersMap[p.sellerId] && !hasValidSellerStorefront(sellersMap[p.sellerId])) return false;
+                      if (usersLoaded && checkedSellerIdsRef.current.has(p.sellerId) && !sellersMap[p.sellerId]) return false;
                       if (p.type === "service") return false;
                       if (p.category === "Logistics & Errands" || p.category === "Logistics") return false;
                       

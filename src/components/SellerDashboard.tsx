@@ -122,7 +122,8 @@ import {
   getCachedNotifications,
   setCachedNotifications
 } from "../lib/profileCache";
-import { cleanPublicContact } from "../lib/publicContact";
+import { scanPublicFieldsForContactInfo, PUBLIC_CONTACT_POLICY_ERROR } from "../lib/contentFilter";
+import { logBlockedAttempt } from "../lib/moderationLogger";
 import { compressImage } from "../lib/imageUtils";
 import { NIGERIAN_STATES, STATE_CITIES, NIGERIAN_LGAS, CITY_STREETS, POPULAR_SCHOOL_PICKUP_LOCATIONS, formatAvailability } from "../constants/locations";
 import { getSchoolsByState, findSchoolByName } from "../constants/schools";
@@ -175,6 +176,9 @@ export default function SellerDashboard({
     () => userProfile || getCachedUserProfile(initialUid)
   );
   const [editingProduct, setEditingProduct] = React.useState<Product | null>(initialEditingProduct || null);
+  const [editInitialStep, setEditInitialStep] = React.useState<"details" | "pricing" | "logistics" | "images">("details");
+  const [editFocusField, setEditFocusField] = React.useState<"stock" | null>(null);
+  const [editNavTrigger, setEditNavTrigger] = React.useState<number>(0);
 
   React.useEffect(() => {
     if (userProfile !== undefined) {
@@ -191,6 +195,9 @@ export default function SellerDashboard({
   React.useEffect(() => {
     if (initialEditingProduct) {
       setEditingProduct(initialEditingProduct);
+      setEditInitialStep("details");
+      setEditFocusField(null);
+      setEditNavTrigger(Date.now());
       setActiveSubTab("add-product");
       if (onClearEditingProduct) {
         onClearEditingProduct();
@@ -511,23 +518,32 @@ export default function SellerDashboard({
         finalStatus = "awaiting_payment";
       }
       const updateData: any = { status: finalStatus };
+      const nowIso = new Date().toISOString();
       if (status === "accepted") {
         updateData.status = "accepted";
-        updateData.acceptedAt = new Date().toISOString();
+        updateData.acceptedAt = nowIso;
+        updateData.updatedAt = nowIso;
+      } else if (status === "Ready For Pickup" || status === "ready_for_pickup") {
+        updateData.status = "Ready For Pickup";
+        updateData.deliveryStatus = "ready_for_pickup";
+        updateData.acceptedAt = order.acceptedAt || nowIso;
+        updateData.updatedAt = nowIso;
       } else if (status === "start_dispatch" || status === "out_for_delivery") {
-        if (order.deliveryType === "delivery") {
+        if ((order.deliveryType || "").toLowerCase() === "delivery") {
           if (!order.isOneDollar) {
             // Standard delivery orders are dispatched and marked out for delivery exclusively by the logistics courier!
             return;
           }
           // One Dollar delivery orders are handled directly by the vendor
           updateData.status = "Out For Delivery";
-          updateData.outForDeliveryAt = new Date().toISOString();
-          updateData.acceptedAt = order.acceptedAt || new Date().toISOString();
+          updateData.outForDeliveryAt = nowIso;
+          updateData.acceptedAt = order.acceptedAt || nowIso;
+          updateData.updatedAt = nowIso;
         } else {
-          updateData.status = "Out To Pickup Station";
-          updateData.acceptedAt = order.acceptedAt || new Date().toISOString();
-          updateData.countdownDuration = 120; // 120 seconds countdown
+          updateData.status = "Ready For Pickup";
+          updateData.deliveryStatus = "ready_for_pickup";
+          updateData.acceptedAt = order.acceptedAt || nowIso;
+          updateData.updatedAt = nowIso;
         }
       }
       
@@ -799,6 +815,17 @@ export default function SellerDashboard({
 
   const handleEdit = (product: Product) => {
     setEditingProduct(product);
+    setEditInitialStep("details");
+    setEditFocusField(null);
+    setEditNavTrigger(Date.now());
+    setActiveSubTab("add-product");
+  };
+
+  const handleGoToRefillStock = (product: Product) => {
+    setEditingProduct(product);
+    setEditInitialStep("pricing");
+    setEditFocusField("stock");
+    setEditNavTrigger(Date.now());
     setActiveSubTab("add-product");
   };
 
@@ -813,20 +840,6 @@ export default function SellerDashboard({
       handleFirestoreError(error, OperationType.DELETE, `products/${draftToDelete}`);
     } finally {
       setDraftDeleteLoading(false);
-    }
-  };
-
-  const handleRefillStock = async (productId: string, newQty: number) => {
-    try {
-      await updateDoc(doc(db, "products", productId), {
-        stock: newQty,
-        status: "active",
-        outOfStockAt: null,
-        isArchived: false
-      });
-      alert(`Product successfully refilled to ${newQty} units! It is now active on the marketplace.`);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `products/${productId}`);
     }
   };
 
@@ -1220,6 +1233,9 @@ export default function SellerDashboard({
                           setActiveSubTab("my-products");
                         } else if (item.id === "add-product") {
                           setEditingProduct(null);
+                          setEditInitialStep("details");
+                          setEditFocusField(null);
+                          setEditNavTrigger(Date.now());
                           setActiveSubTab("add-product");
                         } else {
                           setActiveSubTab(item.id);
@@ -1334,7 +1350,7 @@ export default function SellerDashboard({
                           product={product} 
                           onDelete={deleteProduct} 
                           onEdit={handleEdit} 
-                          onRefillStock={handleRefillStock}
+                          onRefillStock={handleGoToRefillStock}
                         />
                       ))
                     )}
@@ -1472,20 +1488,36 @@ export default function SellerDashboard({
                 setProductActiveType("all");
                 setActiveSubTab("my-products");
                 setEditingProduct(null);
+                setEditInitialStep("details");
+                setEditFocusField(null);
               }}
               onDraftSaved={() => {
                 setProductActiveType("drafts");
                 setActiveSubTab("my-products");
                 setEditingProduct(null);
+                setEditInitialStep("details");
+                setEditFocusField(null);
               }}
               onDraftDiscarded={() => {
                 setProductActiveType("drafts");
                 setActiveSubTab("my-products");
                 setEditingProduct(null);
+                setEditInitialStep("details");
+                setEditFocusField(null);
+              }}
+              onEditCreatedProduct={(createdProd: any) => {
+                setEditingProduct(createdProd);
+                setEditInitialStep("details");
+                setEditFocusField(null);
+                setEditNavTrigger(Date.now());
+                setActiveSubTab("add-product");
               }}
               currentUser={currentUser} 
               editingProduct={editingProduct}
               initialType={initialProductType}
+              initialFormStep={editInitialStep}
+              focusField={editFocusField}
+              editNavTrigger={editNavTrigger}
             />
           </motion.div>
         )}
@@ -1523,6 +1555,9 @@ export default function SellerDashboard({
               <button 
                 onClick={() => {
                   setEditingProduct(null);
+                  setEditInitialStep("details");
+                  setEditFocusField(null);
+                  setEditNavTrigger(Date.now());
                   setActiveSubTab("add-product");
                 }}
                 className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg shadow-indigo-100 dark:shadow-none shrink-0 cursor-pointer"
@@ -1572,7 +1607,7 @@ export default function SellerDashboard({
                     onDelete={deleteProduct}
                     onDeleteDraft={(id: string) => setDraftToDelete(id)}
                     onEdit={handleEdit} 
-                    onRefillStock={handleRefillStock}
+                    onRefillStock={handleGoToRefillStock}
                   />
                 ));
               })()}
@@ -2563,15 +2598,15 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
 
     // 3. Ready at Station / Store (STRICTLY ONLY FOR PICKUP ORDERS!)
     if (
-      order.deliveryType === "pickup" &&
-      (s === "Ready For Pickup" || s === "ready_for_pickup" || s === "Out To Pickup Station")
+      (order.deliveryType || "").toLowerCase() === "pickup" &&
+      (s === "Ready For Pickup" || s === "ready_for_pickup" || s === "Ready at Pickup Station" || s === "Out To Pickup Station" || order.deliveryStatus === "ready_for_pickup")
     ) {
       return "ready_for_pickup";
     }
 
     // 2. Logistics booked / pending courier acceptance (delivery orders)
     if (
-      order.deliveryType === "delivery" &&
+      (order.deliveryType || "").toLowerCase() === "delivery" &&
       (
         order.logisticsOfferStatus === "pending" ||
         s === "logistics_pending" ||
@@ -2585,7 +2620,7 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
     }
 
     // 1. Accepted (if deliveryType === "delivery" and status was erroneously set to "Ready For Pickup", normalize it to accepted)
-    if (s === "accepted" || (order.deliveryType === "delivery" && (s === "Ready For Pickup" || s === "ready_for_pickup"))) {
+    if (s === "accepted" || ((order.deliveryType || "").toLowerCase() === "delivery" && (s === "Ready For Pickup" || s === "ready_for_pickup"))) {
       return "accepted";
     }
 
@@ -2699,7 +2734,8 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
   };
 
   const formatRemainingTime = (order: any) => {
-    if ((order.status === "Out To Pickup Station" || order.status === "Out For Delivery") && order.acceptedAt) {
+    if ((order.deliveryType || "").toLowerCase() === "pickup") return null;
+    if (order.status === "Out For Delivery" && order.acceptedAt) {
       const acceptedTime = new Date(order.acceptedAt).getTime();
       const duration = (order.countdownDuration || 120) * 1000;
       const remainingMs = (acceptedTime + duration) - currentTime;
@@ -2774,7 +2810,7 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                   Order Completed • Escrow Released
                 </span>
               )}
-              {effectiveStatus === "ready_for_pickup" && order.deliveryType === "pickup" && (
+              {effectiveStatus === "ready_for_pickup" && (order.deliveryType || "").toLowerCase() === "pickup" && (
                 <span className="flex items-center gap-1 text-[10px] bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/50 px-2 py-0.5 rounded-full font-bold">
                   <CheckCircle className="w-3 h-3" />
                   Ready For Pickup
@@ -3396,7 +3432,7 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                     </button>
                   )}
                 </>
-              ) : order.deliveryType === "pickup" ? (
+              ) : (order.deliveryType || "").toLowerCase() === "pickup" ? (
                 <div className="flex flex-wrap items-center gap-2">
                   <button 
                     type="button"
@@ -3545,7 +3581,7 @@ function OrderRow({ order, onUpdate, full, currentTime, currentUser }: any) {
                 In Transit ({order.logisticsName || "Courier Dispatch"})
               </span>
             </div>
-          ) : (order.deliveryType === "pickup" && (effectiveStatus === "ready_for_pickup" || order.status === "Ready For Pickup")) ? (
+          ) : ((order.deliveryType || "").toLowerCase() === "pickup" && (effectiveStatus === "ready_for_pickup" || order.status === "Ready For Pickup")) ? (
             <div className="flex items-center gap-2">
               <span className="text-xs font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 px-3 py-1.5 rounded-xl border border-emerald-100/30 dark:border-[#10b981]/25 flex items-center gap-1.5">
                 <CheckCircle className="w-3.5 h-3.5" />
@@ -4039,13 +4075,7 @@ function ProductRow({ product, onDelete, onDeleteDraft, onEdit, onRestore, onRef
         {isOutOfStock && !isDeletedView && onRefillStock && (
           <button
             type="button"
-            onClick={() => {
-              const qtyStr = window.prompt(`Enter refill quantity for ${displayName}:`, "5");
-              if (qtyStr) {
-                const val = parseInt(qtyStr, 10);
-                if (!isNaN(val) && val > 0) onRefillStock(product.id, val);
-              }
-            }}
+            onClick={() => onRefillStock(product)}
             className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-black uppercase tracking-wider flex items-center gap-1 cursor-pointer border-none"
           >
             <RotateCcw className="w-3 h-3" />
@@ -4287,13 +4317,7 @@ function ProductGridItem({ product, onDelete, onDeleteDraft, onEdit, onRestore, 
             {isOutOfStock && onRefillStock && (
               <button
                 type="button"
-                onClick={() => {
-                  const qtyStr = window.prompt(`Enter refill quantity for ${displayName}:`, "5");
-                  if (qtyStr) {
-                    const val = parseInt(qtyStr, 10);
-                    if (!isNaN(val) && val > 0) onRefillStock(product.id, val);
-                  }
-                }}
+                onClick={() => onRefillStock(product)}
                 className="w-full h-11 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm cursor-pointer border-none"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
@@ -4449,7 +4473,18 @@ export function getDynamicFieldsForCategory(category: string): ServiceCategoryMa
   };
 }
 
-function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser, editingProduct, initialType }: any) {
+function AddProductForm({
+  onSuccess,
+  onDraftSaved,
+  onDraftDiscarded,
+  onEditCreatedProduct,
+  currentUser,
+  editingProduct,
+  initialType,
+  initialFormStep,
+  focusField,
+  editNavTrigger
+}: any) {
   const isEditingExistingDraft = Boolean(
     editingProduct && (editingProduct.isDraft === true || editingProduct.status === "draft")
   );
@@ -4482,14 +4517,7 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
   );
   const [category, setCategory] = React.useState(editingProduct?.category || (initialType === "service" || (editingProduct?.type || initialType) === "service" ? "" : "Electronics"));
   const [stock, setStock] = React.useState(editingProduct?.stock?.toString() || "1");
-  const initialPublicContact = editingProduct?.publicContact || (!editingProduct ? (currentUser?.publicContact || currentUser?.storefrontSettings?.publicContact || {}) : {});
-  const [publicPhone, setPublicPhone] = React.useState<string>(initialPublicContact?.phone || "");
-  const [publicWhatsapp, setPublicWhatsapp] = React.useState<string>(initialPublicContact?.whatsapp || "");
-  const [publicEmail, setPublicEmail] = React.useState<string>(initialPublicContact?.email || "");
-  const [publicInstagram, setPublicInstagram] = React.useState<string>(initialPublicContact?.instagram || "");
-  const [publicTwitter, setPublicTwitter] = React.useState<string>(initialPublicContact?.twitter || "");
-  const [publicTiktok, setPublicTiktok] = React.useState<string>(initialPublicContact?.tiktok || "");
-  const [publicOther, setPublicOther] = React.useState<string>(initialPublicContact?.other || "");
+  const stockInputRef = React.useRef<HTMLInputElement | null>(null);
   const [savingDraft, setSavingDraft] = React.useState(false);
   const { rateInfo: oneDollarRate } = useOneDollarRate();
   const [addToOneDollar, setAddToOneDollar] = React.useState<boolean>(Boolean(editingProduct?.addToOneDollar));
@@ -4592,7 +4620,7 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
       : ""
   );
 
-  const [formStep, setFormStep] = React.useState<"details" | "pricing" | "logistics" | "images">("details");
+  const [formStep, setFormStep] = React.useState<"details" | "pricing" | "logistics" | "images">(initialFormStep || "details");
 
   const [logisticsType, setLogisticsType] = React.useState<"registered" | "custom">(editingProduct?.logisticsType || "custom");
   const [selectedLogisticsCompanyId, setSelectedLogisticsCompanyId] = React.useState<string>(editingProduct?.logisticsCompanyId || "");
@@ -4904,6 +4932,67 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
   const [newProductId, setNewProductId] = React.useState<string | null>(null);
   const [lastCreatedProduct, setLastCreatedProduct] = React.useState<any>(null);
   const [menuItems, setMenuItems] = React.useState<any[]>(editingProduct?.menuItems || []);
+
+  // Keep form step, stock focus, and product fields synchronized whenever editing target or refill trigger updates
+  React.useEffect(() => {
+    if (initialFormStep) {
+      setFormStep(initialFormStep);
+    } else if (!editingProduct) {
+      setFormStep("details");
+    }
+  }, [initialFormStep, editNavTrigger]);
+
+  React.useEffect(() => {
+    if (focusField === "stock" && formStep === "pricing") {
+      const timer = setTimeout(() => {
+        if (stockInputRef.current) {
+          stockInputRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+          stockInputRef.current.focus();
+          stockInputRef.current.select?.();
+        }
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+  }, [focusField, formStep, editNavTrigger]);
+
+  React.useEffect(() => {
+    if (!editingProduct) return;
+    const draftFlag = editingProduct.isDraft === true || editingProduct.status === "draft";
+    setType(editingProduct.type || "good");
+    setName(editingProduct.name === "Untitled Draft" ? "" : (editingProduct.name || ""));
+    setBusinessName(
+      editingProduct.businessName ||
+      currentUser?.businessName ||
+      currentUser?.storefrontSettings?.businessName ||
+      ""
+    );
+    setDescription(editingProduct.description || "");
+    setPrice(
+      editingProduct.price !== undefined && editingProduct.price !== null && Number(editingProduct.price) > 0
+        ? editingProduct.price.toString()
+        : (!draftFlag && editingProduct.price === 0 ? "0" : "")
+    );
+    setCategory(editingProduct.category || (editingProduct.type === "service" ? "" : "Electronics"));
+    setStock(editingProduct.stock !== undefined && editingProduct.stock !== null ? editingProduct.stock.toString() : "1");
+    setPricingType(editingProduct.pricingType || "fixed");
+    setCondition(editingProduct.condition || "new");
+    setDeliveryOptions({
+      delivery: editingProduct.deliveryOptions?.delivery ?? true,
+      pickup: editingProduct.deliveryOptions?.pickup ?? true,
+      deliveryPrice: 0
+    });
+    setDeliveryTime(editingProduct.deliveryTime?.toString() || "1");
+    setDeliveryTimeUnit(editingProduct.deliveryTimeUnit || "days");
+    setLocation(editingProduct.location || "");
+    setDiscountPercent(editingProduct.discountPercent?.toString() || "");
+    setPromoCode(editingProduct.promoCode || "");
+    setPriceBefore(editingProduct.priceBefore?.toString() || "");
+    setCollectionType(editingProduct.collectionType || "");
+    setManualBusinessAddress(editingProduct.businessAddress || "");
+    setImages(editingProduct.imageUrls || (editingProduct.imageUrl ? [editingProduct.imageUrl] : []));
+    setMenuItems(editingProduct.menuItems || []);
+    setError(null);
+  }, [editingProduct?.id, editNavTrigger]);
   const isFoodAndDrinks = category === "Food & Drinks" || category === "Catering & Cooking" || [
     "food", "drink", "catering", "cooking", "cake", "pastries", "mocktail", "cocktail", "meal prep", "snacks", "small chops", "puff puff", "shawarma", "burger", "pizza"
   ].some(term => (name || "").toLowerCase().includes(term) || (customServiceName || "").toLowerCase().includes(term));
@@ -5076,15 +5165,7 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
       : images;
 
     const computedServiceType = getComputedServiceType();
-    const cleanedPublicContact = cleanPublicContact({
-      phone: publicPhone,
-      whatsapp: publicWhatsapp,
-      email: publicEmail,
-      instagram: publicInstagram,
-      twitter: publicTwitter,
-      tiktok: publicTiktok,
-      other: publicOther
-    });
+    const parsedStockValue = type === "service" ? 999999 : Math.max(0, parseInt(stock, 10) || 0);
 
     const fallbackImageUrl = asDraft
       ? (finalImages[0] || "")
@@ -5110,14 +5191,20 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
       description: (description || "").slice(0, 5000),
       price: Math.max(0, parseFloat(price) || 0),
       category: resolvedCategory,
-      stock: type === "service" ? 999999 : Math.max(0, parseInt(stock, 10) || 0),
-      initialStock: type === "service" ? 999999 : Math.max(0, parseInt(stock, 10) || 0),
+      stock: parsedStockValue,
+      initialStock: parsedStockValue,
       condition,
       isDraft: asDraft,
-      status: asDraft ? "draft" : "active",
+      status: asDraft ? "draft" : (type === "good" && !isFoodAndDrinks && parsedStockValue <= 0 ? "inactive" : "active"),
+      outOfStockAt: asDraft
+        ? (editingProduct?.outOfStockAt || null)
+        : (parsedStockValue > 0 || type === "service" || isFoodAndDrinks
+            ? null
+            : (editingProduct?.outOfStockAt || new Date().toISOString())),
+      isArchived: false,
       isDeleted: false,
       updatedAt: new Date().toISOString(),
-      publicContact: cleanedPublicContact || null,
+      publicContact: null,
 
       // Dynamic Fields Metadata
       subjectTaught: category === "Academic & Tutoring" ? subjectTaught : null,
@@ -5203,8 +5290,91 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
     return payload;
   };
 
+  const validatePublicListingInputs = (): { step: "details" | "pricing" | "logistics"; message: string; detectedTypes: string[] } | null => {
+    const detailsFields: Record<string, string> = {
+      "Business Name / Brand": businessName,
+      "Product / Service Name": name,
+      "Custom Service / Menu Name": customServiceName,
+      "Description": description,
+      "Custom Category": customCategory,
+      "Tech Stack": techStack,
+      "Digital Delivery Format": digitalFormat,
+      "Portfolio Link / Sample": portfolioUrl,
+      "Preferred Time": preferredTime,
+      "Preferred Venue": preferredVenue,
+      "Coverage Area": coverageArea,
+      "Institution Name": institutionName,
+      "Qualification / Grade": gradeOrQualification,
+      "Subject Taught": subjectTaught,
+      "Rental Terms": rentalTerms,
+      "Credential / Certificate": certificateUrl && !certificateUrl.startsWith("data:") ? certificateUrl : ""
+    };
+
+    const detailsCheck = scanPublicFieldsForContactInfo(detailsFields);
+    if (detailsCheck.isBlocked) {
+      return {
+        step: "details",
+        message: `${PUBLIC_CONTACT_POLICY_ERROR} (${detailsCheck.reason || "Contact or social info detected."})`,
+        detectedTypes: detailsCheck.detectedTypes
+      };
+    }
+
+    const pricingFields: Record<string, string> = {
+      "Offer / Promo Code": promoCode,
+      "Promo or Collection Type": collectionType,
+      "One Dollar Delivery Notice": oneDollarDeliveryNote
+    };
+    menuItems.forEach((item, idx) => {
+      pricingFields[`Menu / Service Option #${idx + 1} Name`] = item?.name || "";
+      pricingFields[`Menu / Service Option #${idx + 1} Details`] = item?.measureAmountDetail || "";
+    });
+    const pricingCheck = scanPublicFieldsForContactInfo(pricingFields);
+    if (pricingCheck.isBlocked) {
+      return {
+        step: "pricing",
+        message: `${PUBLIC_CONTACT_POLICY_ERROR} (${pricingCheck.reason || "Contact or social info detected."})`,
+        detectedTypes: pricingCheck.detectedTypes
+      };
+    }
+
+    const logisticsFields: Record<string, string> = {
+      "Custom School Name": addrSchoolCustom,
+      "Custom School Area": schoolLocationCustom,
+      "Address in the School": schoolAddress,
+      "Studio / Meetup Location": location,
+      "Business Address": manualBusinessAddress
+    };
+    const logisticsCheck = scanPublicFieldsForContactInfo(logisticsFields);
+    if (logisticsCheck.isBlocked) {
+      return {
+        step: "logistics",
+        message: `${PUBLIC_CONTACT_POLICY_ERROR} (${logisticsCheck.reason || "Contact or social info detected."})`,
+        detectedTypes: logisticsCheck.detectedTypes
+      };
+    }
+
+    return null;
+  };
+
   const persistDraftDocument = async (redirectOnSuccess: boolean) => {
     if (!auth.currentUser) return;
+    const contactViolation = validatePublicListingInputs();
+    if (contactViolation) {
+      if (redirectOnSuccess) {
+        setFormStep(contactViolation.step);
+        setError(`🚫 ${contactViolation.message}`);
+        void logBlockedAttempt({
+          senderId: auth.currentUser.uid,
+          senderName: currentUser?.displayName || "Seller",
+          messageType: "text",
+          contentSnippet: contactViolation.message.slice(0, 120),
+          detectedTypes: contactViolation.detectedTypes,
+          reason: contactViolation.message,
+          status: "blocked"
+        });
+      }
+      return;
+    }
     if (redirectOnSuccess) {
       setSavingDraft(true);
       setError(null);
@@ -5278,14 +5448,7 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
       coverageArea.trim() ||
       institutionName.trim() ||
       gradeOrQualification.trim() ||
-      rentalTerms.trim() ||
-      publicPhone.trim() ||
-      publicWhatsapp.trim() ||
-      publicEmail.trim() ||
-      publicInstagram.trim() ||
-      publicTwitter.trim() ||
-      publicTiktok.trim() ||
-      publicOther.trim()
+      rentalTerms.trim()
     );
     if (!isEditingExistingDraft && (!hasInteractedRef.current || !hasMeaningfulContent)) {
       return;
@@ -5309,6 +5472,23 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
     if (auth.currentUser && !auth.currentUser.emailVerified) {
       setError("Email Verification Required: Please verify your email address before publishing products or services. You can still click 'Save as Draft' for now.");
       setLoading(false);
+      return;
+    }
+
+    const contactViolation = validatePublicListingInputs();
+    if (contactViolation) {
+      setFormStep(contactViolation.step);
+      setError(`🚫 ${contactViolation.message}`);
+      setLoading(false);
+      void logBlockedAttempt({
+        senderId: auth.currentUser.uid,
+        senderName: currentUser?.displayName || "Seller",
+        messageType: "text",
+        contentSnippet: contactViolation.message.slice(0, 120),
+        detectedTypes: contactViolation.detectedTypes,
+        reason: contactViolation.message,
+        status: "blocked"
+      });
       return;
     }
 
@@ -5509,9 +5689,6 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
           createdAt: existingOneDollarListing?.createdAt || nowIso,
           updatedAt: nowIso
         };
-        if (productData.publicContact) {
-          listingPayload.publicContact = productData.publicContact;
-        }
         await setDoc(doc(db, "oneDollarListings", listingId), listingPayload, { merge: true });
         publishedToOneDollar = true;
       } else if (
@@ -5743,16 +5920,16 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
                     <button 
                       type="button"
                       onClick={() => {
+                        const targetProd = lastCreatedProduct;
                         setSuccessMessage(null);
-                        onSuccess();
-                        if (lastCreatedProduct) {
-                          const event = new CustomEvent('view-product-detail', { detail: lastCreatedProduct });
-                          window.dispatchEvent(event);
+                        setLastCreatedProduct(null);
+                        if (targetProd && onEditCreatedProduct) {
+                          onEditCreatedProduct(targetProd);
                         }
                       }}
-                      className="flex-1 py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-sm shadow-lg shadow-emerald-100 dark:shadow-emerald-950/20 transition-all focus:ring-2 focus:ring-emerald-500"
+                      className="flex-1 py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-sm shadow-lg shadow-emerald-100 dark:shadow-emerald-950/20 transition-all focus:ring-2 focus:ring-emerald-500 cursor-pointer"
                     >
-                      View Live Product
+                      Edit Product
                     </button>
                   </div>
                   
@@ -6098,129 +6275,12 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             className="w-full p-6 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:bg-white dark:focus:bg-slate-900 focus:border-indigo-500 outline-none transition-all resize-none text-slate-900 dark:text-white placeholder:text-slate-400"
-            placeholder="Describe your product in detail (you can also mention contact details, socials, or order notes)..."
+            placeholder="Describe your product in detail (do not include phone numbers, email addresses, links, or social media handles)..."
           />
-        </div>
-
-        {/* Public Seller Contact & Social Handles */}
-        <div className="p-5 sm:p-6 bg-indigo-50/40 dark:bg-indigo-950/20 border border-indigo-200/70 dark:border-indigo-900/50 rounded-3xl space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h4 className="text-xs font-black uppercase tracking-wider text-indigo-700 dark:text-indigo-300 flex items-center gap-2">
-                <Phone className="w-4 h-4" />
-                Public Seller Contact & Social Media (Visible to Everyone)
-              </h4>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-                Optional. Any phone number, WhatsApp, email, or social handle you add here will show publicly on this listing.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                hasInteractedRef.current = true;
-                const storeContact = currentUser?.publicContact || currentUser?.storefrontSettings?.publicContact || {};
-                if (!publicPhone) setPublicPhone(storeContact.phone || currentUser?.businessPhoneNumber || currentUser?.phoneNumber || "");
-                if (!publicWhatsapp) setPublicWhatsapp(storeContact.whatsapp || "");
-                if (!publicEmail) setPublicEmail(storeContact.email || currentUser?.email || "");
-                if (!publicInstagram) setPublicInstagram(storeContact.instagram || "");
-                if (!publicTwitter) setPublicTwitter(storeContact.twitter || "");
-                if (!publicTiktok) setPublicTiktok(storeContact.tiktok || "");
-                if (!publicOther) setPublicOther(storeContact.other || "");
-              }}
-              className="px-3 py-1.5 bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-800 rounded-xl text-[10px] font-black uppercase tracking-wider text-indigo-600 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 transition-all cursor-pointer"
-            >
-              Use Account / Store Contact
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest ml-1 flex items-center gap-1">
-                <Phone className="w-3 h-3" /> Public Phone Number
-              </label>
-              <input
-                type="tel"
-                value={publicPhone}
-                onChange={(e) => setPublicPhone(e.target.value)}
-                placeholder="e.g. +234 801 234 5678"
-                className="w-full h-11 px-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white outline-none focus:border-indigo-500"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest ml-1 flex items-center gap-1">
-                <MessageCircle className="w-3 h-3" /> Public WhatsApp
-              </label>
-              <input
-                type="text"
-                value={publicWhatsapp}
-                onChange={(e) => setPublicWhatsapp(e.target.value)}
-                placeholder="e.g. 2348012345678 or wa.me/..."
-                className="w-full h-11 px-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white outline-none focus:border-indigo-500"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest ml-1 flex items-center gap-1">
-                <Mail className="w-3 h-3" /> Public Email
-              </label>
-              <input
-                type="email"
-                value={publicEmail}
-                onChange={(e) => setPublicEmail(e.target.value)}
-                placeholder="e.g. orders@myshop.com"
-                className="w-full h-11 px-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white outline-none focus:border-indigo-500"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest ml-1 flex items-center gap-1">
-                <Instagram className="w-3 h-3" /> Instagram Handle / Link
-              </label>
-              <input
-                type="text"
-                value={publicInstagram}
-                onChange={(e) => setPublicInstagram(e.target.value)}
-                placeholder="e.g. @campusstore_ng"
-                className="w-full h-11 px-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white outline-none focus:border-indigo-500"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest ml-1 flex items-center gap-1">
-                <AtSign className="w-3 h-3" /> X (Twitter) Handle
-              </label>
-              <input
-                type="text"
-                value={publicTwitter}
-                onChange={(e) => setPublicTwitter(e.target.value)}
-                placeholder="e.g. @campusstore"
-                className="w-full h-11 px-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white outline-none focus:border-indigo-500"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest ml-1 flex items-center gap-1">
-                <Globe className="w-3 h-3" /> TikTok / Other Social or Website
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                <input
-                  type="text"
-                  value={publicTiktok}
-                  onChange={(e) => setPublicTiktok(e.target.value)}
-                  placeholder="TikTok @..."
-                  className="w-full h-11 px-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white outline-none focus:border-indigo-500"
-                />
-                <input
-                  type="text"
-                  value={publicOther}
-                  onChange={(e) => setPublicOther(e.target.value)}
-                  placeholder="Facebook / Link"
-                  className="w-full h-11 px-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white outline-none focus:border-indigo-500"
-                />
-              </div>
-            </div>
-          </div>
+          <p className="text-[11px] font-semibold text-amber-700 dark:text-amber-400 bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200/70 dark:border-amber-900/40 rounded-xl px-3.5 py-2 flex items-center gap-2">
+            <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
+            <span>For safety, phone numbers, email addresses, website links, and social media handles are not allowed in any listing input.</span>
+          </p>
         </div>
       </div>
 
@@ -6378,13 +6438,30 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
 
           {type === "good" && !isFoodAndDrinks ? (
             <div className="space-y-1.5">
-              <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">Stock Quantity</label>
+              <div className="flex items-center justify-between gap-2 ml-1">
+                <label htmlFor="product-stock-quantity-input" className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">
+                  Stock Quantity
+                </label>
+                {editingProduct && Number(editingProduct.stock) <= 0 && (
+                  <span className="text-[10px] font-black text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">
+                    Refill above 0 to reactivate
+                  </span>
+                )}
+              </div>
               <input 
+                ref={stockInputRef}
+                id="product-stock-quantity-input"
                 required
                 type="number"
+                min="0"
                 value={stock}
                 onChange={(e) => setStock(e.target.value)}
-                className="w-full h-12 px-4 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:border-indigo-500 outline-none transition-all text-sm text-slate-900 dark:text-white placeholder:text-slate-400"
+                className={cn(
+                  "w-full h-12 px-4 bg-white dark:bg-slate-800 border rounded-xl outline-none transition-all text-sm text-slate-900 dark:text-white placeholder:text-slate-400",
+                  focusField === "stock" || (editingProduct && Number(editingProduct.stock) <= 0)
+                    ? "border-emerald-500 ring-2 ring-emerald-500/20 focus:border-emerald-600 font-bold"
+                    : "border-slate-200 dark:border-slate-700 focus:border-indigo-500"
+                )}
                 placeholder="1"
               />
             </div>
@@ -7275,14 +7352,14 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
         </div>
 
         {/* Foot Navigation / Submit Button */}
-        <div className="flex flex-col sm:flex-row gap-3 pt-4 border-t border-slate-100 dark:border-zinc-800">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 pt-4 border-t border-slate-100 dark:border-zinc-800">
           {!isEditingPublished && (
-            <div className="flex gap-2">
+            <div className="flex gap-2 shrink-0">
               <button
                 type="button"
                 onClick={handleSaveAsDraft}
                 disabled={savingDraft || loading}
-                className="h-14 px-5 bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/30 dark:hover:bg-amber-950/50 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60 rounded-2xl font-black text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                className="h-14 min-h-[3.5rem] shrink-0 px-5 py-3.5 bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/30 dark:hover:bg-amber-950/50 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60 rounded-2xl font-black text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
               >
                 {savingDraft ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                 <span>Save as Draft</span>
@@ -7292,7 +7369,7 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
                   type="button"
                   onClick={handleDiscardDraft}
                   disabled={savingDraft || loading}
-                  className="h-14 px-4 bg-red-50 hover:bg-red-100 dark:bg-red-950/30 dark:hover:bg-red-950/50 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/40 rounded-2xl font-black text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  className="h-14 min-h-[3.5rem] shrink-0 px-4 py-3.5 bg-red-50 hover:bg-red-100 dark:bg-red-950/30 dark:hover:bg-red-950/50 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/40 rounded-2xl font-black text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
                   title="Delete Draft"
                 >
                   <Trash2 className="w-4 h-4" />
@@ -7310,7 +7387,7 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
                 const currentIdx = steps.indexOf(formStep);
                 if (currentIdx > 0) setFormStep(steps[currentIdx - 1]);
               }}
-              className="flex-1 h-14 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-2xl font-black text-xs uppercase tracking-widest transition-all border-none outline-none cursor-pointer"
+              className="w-full sm:w-auto sm:flex-1 h-14 min-h-[3.5rem] shrink-0 px-6 py-3.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-2xl font-black text-xs sm:text-sm uppercase tracking-widest transition-all border-none outline-none cursor-pointer flex items-center justify-center"
             >
               Back
             </button>
@@ -7324,12 +7401,12 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
                 const currentIdx = steps.indexOf(formStep);
                 if (currentIdx < steps.length - 1) setFormStep(steps[currentIdx + 1]);
               }}
-              className="flex-1 h-14 bg-purple-600 hover:bg-purple-700 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all border-none outline-none cursor-pointer shadow-md"
+              className="w-full sm:w-auto sm:flex-1 h-14 min-h-[3.5rem] shrink-0 px-6 py-3.5 bg-purple-600 hover:bg-purple-700 text-white rounded-2xl font-black text-xs sm:text-sm uppercase tracking-widest transition-all border-none outline-none cursor-pointer shadow-md flex items-center justify-center"
             >
               Continue
             </button>
           ) : (
-            <div className="flex-1 flex flex-col gap-3">
+            <div className="w-full sm:flex-1 flex flex-col gap-3">
               <div className="p-3.5 bg-orange-50/50 dark:bg-orange-950/20 rounded-2xl border border-orange-200/50 dark:border-orange-900/30 text-left space-y-1">
                 <div className="flex items-center gap-1.5 text-xs font-bold text-orange-900 dark:text-orange-200">
                   <ShieldCheck className="w-4 h-4 text-[#ff6b00] shrink-0" />
@@ -7345,7 +7422,7 @@ function AddProductForm({ onSuccess, onDraftSaved, onDraftDiscarded, currentUser
                 whileTap={{ scale: 0.98 }}
                 type="submit"
                 disabled={loading || savingDraft}
-                className="w-full h-14 bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 text-white rounded-2xl font-black text-xs sm:text-sm uppercase tracking-widest transition-all flex items-center justify-center gap-2.5 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer border-none outline-none focus-visible:ring-2 focus-visible:ring-[#ff6b00]"
+                className="w-full h-14 min-h-[3.5rem] shrink-0 py-3.5 px-6 bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 text-white rounded-2xl font-black text-xs sm:text-sm uppercase tracking-widest transition-all flex items-center justify-center gap-2.5 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer border-none outline-none focus-visible:ring-2 focus-visible:ring-[#ff6b00]"
               >
               {loading ? (
                 <div className="flex items-center gap-2 text-white">

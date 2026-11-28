@@ -19,6 +19,7 @@ import {
 } from "firebase/auth";
 import { doc, setDoc, getDoc, updateDoc, collection, addDoc, query, where, getDocs, deleteDoc } from "firebase/firestore";
 import { motion, AnimatePresence } from "motion/react";
+import { scanPublicFieldsForContactInfo, PUBLIC_CONTACT_POLICY_ERROR } from "../lib/contentFilter";
 import { 
   User, 
   Mail, 
@@ -1130,6 +1131,11 @@ export default function AuthPage({
           
           if (role === "seller" && !businessName.trim()) {
             errors.businessName = "Business name is required for Vendor registration";
+          } else if (role === "seller") {
+            const bizCheck = scanPublicFieldsForContactInfo({ "Business Name": businessName });
+            if (bizCheck.isBlocked) {
+              errors.businessName = PUBLIC_CONTACT_POLICY_ERROR;
+            }
           }
 
           if (!email.trim()) {

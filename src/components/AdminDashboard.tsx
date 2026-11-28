@@ -57,7 +57,7 @@ import AdminEmailBrevoSettings from "./AdminEmailBrevoSettings";
 import AdminOneDollarTab from "./AdminOneDollarTab";
 import AdminEscrowPayTab from "./AdminEscrowPayTab";
 import { triggerTemplatedEmail } from "../utils/orderEmailNotifications";
-import { cascadeDeleteUserAccount } from "../utils/accountCleanup";
+import { cascadeDeleteUserAccount, hasValidSellerStorefront } from "../utils/accountCleanup";
 
 interface AdminDashboardProps {
   currentUser: any;
@@ -304,18 +304,55 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
     }
   };
 
-  // Product removal
+  // Product removal (permanent delete from Firestore)
   const handleRemoveProduct = async (product: Product) => {
-    if (!confirm(`Are you sure you want to remove "${product.name}"?`)) return;
     try {
-      await updateDoc(doc(db, "products", product.id), {
-        isDeleted: true,
-        deletedAt: new Date().toISOString()
-      });
-      setActionSuccessMessage(`Product "${product.name}" removed from marketplace.`);
+      await deleteDoc(doc(db, "products", product.id));
+      setActionSuccessMessage(`Product "${product.name}" permanently deleted from marketplace.`);
       setTimeout(() => setActionSuccessMessage(null), 3000);
     } catch (err: any) {
-      handleFirestoreError(err, OperationType.UPDATE, `products/${product.id}`);
+      handleFirestoreError(err, OperationType.DELETE, `products/${product.id}`);
+    }
+  };
+
+  const [isPurgingOrphans, setIsPurgingOrphans] = useState(false);
+
+  const usersById = useMemo(() => {
+    const map = new Map<string, UserProfile>();
+    users.forEach((u) => {
+      const id = u.uid || u.id;
+      if (id) map.set(id, u);
+    });
+    return map;
+  }, [users]);
+
+  const invalidMarketplaceProducts = useMemo(() => {
+    if (users.length === 0) return [];
+    return allProducts.filter((p) => {
+      const seller = p.sellerId ? usersById.get(p.sellerId) : undefined;
+      return !seller || !hasValidSellerStorefront(seller);
+    });
+  }, [allProducts, users.length, usersById]);
+
+  const handlePurgeInvalidProducts = async () => {
+    if (invalidMarketplaceProducts.length === 0 || isPurgingOrphans) return;
+    setIsPurgingOrphans(true);
+    try {
+      let deletedCount = 0;
+      for (const p of invalidMarketplaceProducts) {
+        try {
+          await deleteDoc(doc(db, "products", p.id));
+          deletedCount++;
+        } catch (err) {
+          console.warn(`Failed to delete invalid product ${p.id}:`, err);
+        }
+      }
+      setActionSuccessMessage(
+        `Deleted ${deletedCount} marketplace product${deletedCount === 1 ? "" : "s"} missing an active seller account or storefront.`
+      );
+      setTimeout(() => setActionSuccessMessage(null), 4000);
+    } finally {
+      setIsPurgingOrphans(false);
     }
   };
 
@@ -1039,52 +1076,98 @@ export default function AdminDashboard({ currentUser, onBack }: AdminDashboardPr
 
       {/* TAB 3: PRODUCT INVENTORY MODERATION */}
       {activeTab === "products" && (
-        <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 overflow-hidden shadow-sm">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-slate-100 dark:border-slate-800 text-[10px] font-black text-slate-400 uppercase tracking-widest bg-slate-50/50 dark:bg-slate-850/50">
-                  <th className="px-6 py-5">Product</th>
-                  <th className="px-6 py-5">Seller</th>
-                  <th className="px-6 py-5">Category</th>
-                  <th className="px-6 py-5">Price</th>
-                  <th className="px-6 py-5 text-right">Moderation</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-sm">
-                {allProducts.map((p, pIdx) => (
-                  <tr key={`adm-prod-${p.id}-${pIdx}`} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
-                    <td className="px-6 py-5">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 overflow-hidden shrink-0">
-                          <img src={p.imageUrl} alt="" className="w-full h-full object-cover" />
-                        </div>
-                        <span className="font-bold text-slate-900 dark:text-white">{p.name}</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-5 text-xs text-slate-500 font-medium">{p.sellerName || "Anonymous Seller"}</td>
-                    <td className="px-6 py-5">
-                      <span className="px-2.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-[10px] font-black uppercase text-slate-500">
-                        {p.category}
-                      </span>
-                    </td>
-                    <td className="px-6 py-5 font-black text-slate-900 dark:text-white font-mono">₦{p.price.toLocaleString()}</td>
-                    <td className="px-6 py-5 text-right">
-                      {!p.isDeleted ? (
-                        <button 
-                          onClick={() => handleRemoveProduct(p)}
-                          className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 dark:bg-red-950/40 dark:text-red-300 rounded-xl text-xs font-bold transition-all cursor-pointer"
-                        >
-                          Remove Listing
-                        </button>
-                      ) : (
-                        <span className="text-[10px] font-bold text-red-600 uppercase">Removed</span>
-                      )}
-                    </td>
+        <div className="space-y-4">
+          {invalidMarketplaceProducts.length > 0 && (
+            <div className="p-5 rounded-[2rem] bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+                <div>
+                  <h4 className="text-sm font-black text-red-900 dark:text-red-200">
+                    {invalidMarketplaceProducts.length} Orphaned / Storefront-less Product{invalidMarketplaceProducts.length === 1 ? "" : "s"} Detected
+                  </h4>
+                  <p className="text-xs text-red-700 dark:text-red-300 mt-0.5">
+                    These listings have no existing seller account or their seller does not have a valid storefront.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={isPurgingOrphans}
+                onClick={handlePurgeInvalidProducts}
+                className="px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 shrink-0 cursor-pointer disabled:opacity-50"
+              >
+                {isPurgingOrphans ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <XCircle className="w-4 h-4" />
+                )}
+                Delete All ({invalidMarketplaceProducts.length})
+              </button>
+            </div>
+          )}
+
+          <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 overflow-hidden shadow-sm">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-100 dark:border-slate-800 text-[10px] font-black text-slate-400 uppercase tracking-widest bg-slate-50/50 dark:bg-slate-850/50">
+                    <th className="px-6 py-5">Product</th>
+                    <th className="px-6 py-5">Seller &amp; Storefront</th>
+                    <th className="px-6 py-5">Category</th>
+                    <th className="px-6 py-5">Price</th>
+                    <th className="px-6 py-5 text-right">Moderation</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-sm">
+                  {allProducts.map((p, pIdx) => {
+                    const sellerObj = users.length > 0 && p.sellerId ? usersById.get(p.sellerId) : undefined;
+                    const isMissingSeller = users.length > 0 && (!p.sellerId || !sellerObj);
+                    const isMissingStorefront = users.length > 0 && Boolean(sellerObj && !hasValidSellerStorefront(sellerObj));
+                    return (
+                      <tr key={`adm-prod-${p.id}-${pIdx}`} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
+                        <td className="px-6 py-5">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 overflow-hidden shrink-0">
+                              <img src={p.imageUrl} alt="" className="w-full h-full object-cover" />
+                            </div>
+                            <span className="font-bold text-slate-900 dark:text-white">{p.name}</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-5 text-xs text-slate-500 font-medium">
+                          <div className="space-y-1">
+                            <span className="block">{p.sellerName || "Anonymous Seller"}</span>
+                            {isMissingSeller && (
+                              <span className="inline-block px-2 py-0.5 rounded bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300 text-[10px] font-black uppercase">
+                                Missing Seller Account
+                              </span>
+                            )}
+                            {!isMissingSeller && isMissingStorefront && (
+                              <span className="inline-block px-2 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 text-[10px] font-black uppercase">
+                                No Storefront
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-6 py-5">
+                          <span className="px-2.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-[10px] font-black uppercase text-slate-500">
+                            {p.category}
+                          </span>
+                        </td>
+                        <td className="px-6 py-5 font-black text-slate-900 dark:text-white font-mono">₦{p.price.toLocaleString()}</td>
+                        <td className="px-6 py-5 text-right">
+                          <button
+                            onClick={() => handleRemoveProduct(p)}
+                            className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 dark:bg-red-950/40 dark:text-red-300 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                          >
+                            Delete Listing
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}

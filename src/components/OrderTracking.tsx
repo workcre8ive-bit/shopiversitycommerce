@@ -1,4 +1,5 @@
 import React from "react";
+import { createPortal } from "react-dom";
 import { Order, UserProfile } from "../types";
 import { auth, db } from "../firebase";
 import { collection, query, where, orderBy, onSnapshot, doc, updateDoc, addDoc, getDoc, getDocs, increment, serverTimestamp, limit } from "firebase/firestore";
@@ -30,7 +31,7 @@ import { cn, getOrderDeliveryPin } from "../lib/utils";
 import { handleFirestoreError, handleListenerError, isFirestoreQuotaError, notifyFirestoreQuotaExceeded, OperationType } from "../lib/firebase-errors";
 import { getCachedUserProfile } from "../lib/profileCache";
 import { usePaystackPayment } from "../hooks/usePaystackPayment";
-import { getSyncPaystackPublicKey } from "../utils/paystackConfig";
+import { getPaystackPublicKey, getSyncPaystackPublicKey } from "../utils/paystackConfig";
 import ReceiptModal from "./ReceiptModal";
 import ReviewSuccessModal from "./ReviewSuccessModal";
 import RefundRequestModal from "./RefundRequestModal";
@@ -39,7 +40,6 @@ import OrderAuditTrailModal from "./OrderAuditTrailModal";
 import OrderDisputeModal from "./OrderDisputeModal";
 import { Star, MessageSquare, AlertTriangle, ExternalLink as ExternalLinkIcon, Shield, History, Undo2, KeyRound, Lock } from "lucide-react";
 import { notifyOrderCompleted } from "../utils/orderEmailNotifications";
-import EscrowCheckoutModal, { EscrowSessionDetails } from "./EscrowCheckoutModal";
 
 interface OrderTrackingProps {
   setActiveTab: (tab: string) => void;
@@ -55,11 +55,7 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
   const [markingId, setMarkingId] = React.useState<string | null>(null);
   const [highlightedOrderId, setHighlightedOrderId] = React.useState<string | null>(null);
   const orderCardRefs = React.useRef<Record<string, HTMLDivElement | null>>({});
-  const [showClearConfirm, setShowClearConfirm] = React.useState(false);
-  const [clearing, setClearing] = React.useState(false);
   const [currentTime, setCurrentTime] = React.useState(Date.now());
-  const [orderToClear, setOrderToClear] = React.useState<Order | null>(null);
-  const [showSingleClearConfirm, setShowSingleClearConfirm] = React.useState(false);
   const [orderToPay, setOrderToPay] = React.useState<Order | null>(null);
   const [selectedReceiptOrder, setSelectedReceiptOrder] = React.useState<Order | null>(null);
   const [reviewingOrderId, setReviewingOrderId] = React.useState<string | null>(null);
@@ -82,9 +78,8 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
   const [cancelRefundOrder, setCancelRefundOrder] = React.useState<Order | null>(null);
   const [disputeModalOrder, setDisputeModalOrder] = React.useState<Order | null>(null);
   const [auditModalOrder, setAuditModalOrder] = React.useState<Order | null>(null);
-  const [escrowSession, setEscrowSession] = React.useState<EscrowSessionDetails | null>(null);
-  const [isEscrowModalOpen, setIsEscrowModalOpen] = React.useState(false);
   const [paymentError, setPaymentError] = React.useState<string | null>(null);
+  const [paymentNotice, setPaymentNotice] = React.useState<string | null>(null);
 
   const basePaystackConfig = {
     reference: `ORD_${Date.now()}`,
@@ -95,152 +90,32 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
 
   const initializePayment = usePaystackPayment(basePaystackConfig);
 
-  const triggerEscrowPayPayment = async (order: Order) => {
+  const triggerOrderPayment = (order: Order) => {
+    void triggerPaystackPayment(order);
+  };
+
+  const triggerPaystackPayment = async (order: Order) => {
     if (!auth.currentUser) return;
     setOrderToPay(order);
-    setIsVerifyingPayment(true);
     setPaymentError(null);
-    try {
-      const existingReceipt = order.paymentReceipt;
-      if (
-        existingReceipt?.provider === "escrowpay" &&
-        existingReceipt.transactionId &&
-        (existingReceipt.checkoutUrl || existingReceipt.virtualAccount?.accountNumber) &&
-        order.paymentStatus !== "paid"
-      ) {
-        const ref = existingReceipt.paymentReference || order.paymentReference || existingReceipt.transactionId;
-        const returnUrl = `${window.location.origin}/payment/escrow/return?transactionId=${encodeURIComponent(existingReceipt.transactionId)}&orderId=${encodeURIComponent(order.id)}&reference=${encodeURIComponent(ref)}`;
-        setEscrowSession({
-          orderId: order.id,
-          uniqueOrderId: order.uniqueOrderId,
-          transactionId: existingReceipt.transactionId,
-          reference: ref,
-          environment: existingReceipt.environment || "test",
-          isTestTransaction: existingReceipt.isTestTransaction ?? (existingReceipt.environment === "test"),
-          amountNgn: order.totalPrice,
-          currency: "NGN",
-          checkoutUrl: existingReceipt.checkoutUrl,
-          checkoutSessionId: existingReceipt.checkoutSessionId,
-          virtualAccount: existingReceipt.virtualAccount,
-          returnUrl
-        });
-        setIsEscrowModalOpen(true);
-        return;
-      }
+    setPaymentNotice(null);
 
-      const cfgRes = await fetch("/api/payments/escrow/config-status");
-      if (cfgRes.ok) {
-        const cfgData = await cfgRes.json();
-        if (!cfgData.configured) {
-          throw new Error(
-            "EscrowPay Sandbox API key is not configured on the server yet (missing ESCROWPAY_TEST_SECRET_KEY)."
-          );
-        }
-      }
-
-      const idToken = await auth.currentUser.getIdToken(true);
-      const createRes = await fetch("/api/payments/escrow/create", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(idToken ? { Authorization: `Bearer ${idToken}` } : {})
-        },
-        body: JSON.stringify({
-          orderId: order.id,
-          uniqueOrderId: order.uniqueOrderId,
-          amountNgn: order.totalPrice,
-          description: order.productName,
-          sellerId: order.sellerId,
-          sellerName: order.sellerName,
-          buyerName: order.buyerName || userProfile?.displayName || "Buyer",
-          buyerPhone: order.buyerPhone || userProfile?.phoneNumber || "",
-          commissionRate: order.type === "service" ? 0.06 : 0.05,
-          isOneDollar: Boolean(order.isOneDollar),
-          returnOrigin: window.location.origin
-        })
-      });
-
-      const createData = await createRes.json().catch(() => ({}));
-      if (!createRes.ok || !createData.success) {
-        throw new Error(createData.error || "Unable to initialize EscrowPay checkout.");
-      }
-
-      const nowIso = new Date().toISOString();
-      await updateDoc(doc(db, "orders", order.id), {
-        paymentReference: createData.reference,
-        paymentStatus: "pending",
-        paymentReceipt: {
-          receiptNumber: `${createData.isTestTransaction ? "ESC-TEST-" : "ESC-"}${Date.now().toString().slice(-6)}`,
-          orderId: order.id,
-          transactionId: createData.transactionId,
-          paymentReference: createData.reference,
-          paymentMethod: order.paymentMethod || "online",
-          provider: "escrowpay",
-          environment: createData.environment,
-          isTestTransaction: createData.isTestTransaction,
-          escrowId: createData.transactionId,
-          ...(createData.checkoutSessionId ? { checkoutSessionId: createData.checkoutSessionId } : {}),
-          ...(createData.checkoutUrl ? { checkoutUrl: createData.checkoutUrl } : {}),
-          ...(createData.virtualAccount ? { virtualAccount: createData.virtualAccount } : {}),
-          amountPaid: order.totalPrice,
-          currency: "NGN",
-          platformFee: order.commissionAmount || 0,
-          buyerName: order.buyerName || "Buyer",
-          productName: order.productName,
-          quantity: order.quantity || 1,
-          deliveryType: order.deliveryType || "delivery",
-          verificationTimestamp: nowIso,
-          escrowStatus: "not_applicable",
-          status: "processing",
-          verifiedStatus: "processing"
-        },
-        updatedAt: nowIso
-      }).catch((updErr) => {
-        console.warn("Non-fatal OrderTracking paymentReceipt update warning:", updErr);
-      });
-
-      setEscrowSession({
-        orderId: order.id,
-        uniqueOrderId: order.uniqueOrderId,
-        transactionId: createData.transactionId,
-        reference: createData.reference,
-        environment: createData.environment,
-        isTestTransaction: createData.isTestTransaction,
-        amountNgn: order.totalPrice,
-        currency: "NGN",
-        checkoutUrl: createData.checkoutUrl,
-        checkoutSessionId: createData.checkoutSessionId,
-        virtualAccount: createData.virtualAccount,
-        returnUrl: createData.returnUrl
-      });
-      setIsEscrowModalOpen(true);
-    } catch (err: any) {
-      console.error("EscrowPay initiation error:", err);
-      setPaymentError(err?.message || "Failed to open EscrowPay checkout.");
-    } finally {
-      setIsVerifyingPayment(false);
+    const activePublicKey = await getPaystackPublicKey();
+    if (!activePublicKey) {
       setMarkingId(null);
+      setIsVerifyingPayment(false);
+      setPaymentError(
+        "Paystack Public Key is not configured. Please add VITE_PAYSTACK_PUBLIC_KEY in environment settings."
+      );
+      return;
     }
-  };
-
-  const triggerOrderPayment = (order: Order) => {
-    // Paystack ONLY for One Dollar orders not explicitly routed via EscrowPay;
-    // Regular marketplace orders strictly use EscrowPay without Paystack.
-    if (order.isOneDollar && order.paymentReceipt?.provider !== "escrowpay") {
-      triggerPaystackPayment(order);
-    } else {
-      void triggerEscrowPayPayment(order);
-    }
-  };
-
-  const triggerPaystackPayment = (order: Order) => {
-    setOrderToPay(order);
 
     const buyerEmail = auth.currentUser?.email || currentUser?.email || "buyer@shopiversity.edu";
     const ref = `ORD_${order.id}_${Date.now()}`;
     const amountInKobo = Math.round(order.totalPrice * 100);
 
     initializePayment({
+      publicKey: activePublicKey,
       amount: amountInKobo,
       email: buyerEmail,
       reference: ref,
@@ -251,7 +126,7 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
         buyerId: auth.currentUser?.uid,
         sellerId: order.sellerId,
         deliveryType: order.deliveryType || "pickup",
-        fulfillmentStatus: order.paymentMethod === "pod" ? "Delivery Received - Payment Required" : "Order Picked Up"
+        fulfillmentStatus: order.paymentMethod === "pod" ? "Delivery Received - Payment Required" : "Order Paid via Paystack"
       },
       onSuccess: async (response: any) => {
         setIsVerifyingPayment(true);
@@ -288,12 +163,63 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
             }
           }
 
-          await processDeliveryConfirmation(order, response.reference);
+          const eff = getEffectiveStatus(order);
+          const isDeliverySettled =
+            order.paymentMethod === "pod" ||
+            Boolean(order.buyerDeliveryConfirmed) ||
+            Boolean(order.handoverVerified) ||
+            Boolean(order.courierHandedOver) ||
+            order.type === "service" ||
+            eff === "payment_required" ||
+            eff === "delivered";
+
+          if (isDeliverySettled) {
+            await processDeliveryConfirmation(order, response.reference);
+            setPaymentNotice(`Payment of ₦${order.totalPrice.toLocaleString()} confirmed! Funds are securely settled through SHOPIVERSITY Escrow.`);
+          } else {
+            const nowIso = new Date().toISOString();
+            const nextStatus = order.ticketTierId
+              ? "acquired"
+              : order.type === "service"
+                ? "accepted"
+                : "Pending Seller Acceptance";
+            await updateDoc(doc(db, "orders", order.id), {
+              paymentStatus: "paid",
+              paymentReference: response.reference,
+              escrowSelected: order.isOneDollar ? true : order.escrowSelected,
+              escrowStatus: "held",
+              payoutStatus: "escrow",
+              status: nextStatus,
+              paymentVerifiedAt: nowIso,
+              updatedAt: nowIso,
+              paymentReceipt: {
+                ...(order.paymentReceipt || {}),
+                receiptNumber: order.paymentReceipt?.receiptNumber || `PSK-${Date.now().toString().slice(-6)}`,
+                orderId: order.id,
+                transactionId: response.reference,
+                paymentReference: response.reference,
+                paymentMethod: "online",
+                provider: "paystack",
+                amountPaid: order.totalPrice,
+                currency: "NGN",
+                platformFee: order.commissionAmount || 0,
+                buyerName: order.buyerName || "Buyer",
+                productName: order.productName,
+                quantity: order.quantity || 1,
+                deliveryType: order.deliveryType || "delivery",
+                verificationTimestamp: nowIso,
+                escrowStatus: "held",
+                status: "paid",
+                verifiedStatus: "paid"
+              }
+            });
+            setPaymentNotice(`Payment of ₦${order.totalPrice.toLocaleString()} confirmed via Paystack! Funds are securely held in SHOPIVERSITY Escrow.`);
+          }
+
           setOrderToPay(null);
-          alert(`Payment of ₦${order.totalPrice.toLocaleString()} confirmed! Funds are securely locked in SHOPIVERSITY Escrow.`);
         } catch (err: any) {
           console.error("Payment confirmation error:", err);
-          alert(`Payment Verification Issue: ${err.message || "Failed to confirm payment on Paystack."}`);
+          setPaymentError(err?.message || "Failed to confirm payment on Paystack.");
         } finally {
           setIsVerifyingPayment(false);
           setMarkingId(null);
@@ -301,42 +227,14 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
       },
       onClose: () => {
         setMarkingId(null);
-        alert(order.paymentMethod === "pod" 
-          ? "Payment pending. Your order is delivered, but requires payment settlement to complete transaction."
-          : "Payment window closed. Order remains awaiting payment confirmation."
+        setIsVerifyingPayment(false);
+        setPaymentError(
+          order.paymentMethod === "pod"
+            ? "Payment pending. Your package handover is confirmed, and requires Paystack payment settlement to complete the transaction."
+            : "Payment window closed. Order remains awaiting payment confirmation."
         );
       }
     });
-  };
-
-  const onPaystackSuccess = async (response: any) => {
-    if (!orderToPay) return;
-    setIsVerifyingPayment(true);
-    try {
-      const verifyRes = await fetch(`/api/paystack/verify/${response.reference}`);
-      const verifyData = await verifyRes.json();
-
-      if (!verifyData.success && verifyData.status !== "success") {
-        if (!verifyData.error?.includes("secret key not configured")) {
-          throw new Error(verifyData.message || verifyData.error || "Verification failed");
-        }
-      }
-
-      await processDeliveryConfirmation(orderToPay, response.reference);
-      setOrderToPay(null);
-      alert(`Payment of ₦${orderToPay.totalPrice.toLocaleString()} confirmed! Escrow secured.`);
-    } catch (err: any) {
-      console.error("Payment verification failed:", err);
-      alert(`Payment verification error: ${err.message || "Could not verify transaction with Paystack."}`);
-    } finally {
-      setIsVerifyingPayment(false);
-      setMarkingId(null);
-    }
-  };
-
-  const onPaystackClose = () => {
-    alert("Payment window closed. The order remains in 'Order Picked Up' state until payment is completed.");
-    setMarkingId(null);
   };
 
   React.useEffect(() => {
@@ -413,13 +311,18 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
     if (!auth.currentUser) return;
     setMarkingId(order.id);
     try {
-      // 1. If Pay on Delivery and not paid yet, mark delivery confirmed and set status to payment_required
-      if (order.paymentMethod === "pod" && order.paymentStatus !== "paid") {
+      const now = new Date().toISOString();
+      // 1. If unpaid (Pay on Delivery or unpaid online), mark handover & pickup confirmed first, then request Paystack payment
+      if (order.paymentStatus !== "paid") {
         await updateDoc(doc(db, "orders", order.id), {
           status: "payment_required",
+          deliveryStatus: "delivered",
           buyerDeliveryConfirmed: true,
-          buyerDeliveryConfirmedAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
+          buyerDeliveryConfirmedAt: now,
+          handoverVerified: true,
+          handoverVerifiedAt: now,
+          deliveredAt: now,
+          updatedAt: now
         });
 
         try {
@@ -432,7 +335,7 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
               performedBy: auth.currentUser.uid,
               role: "buyer",
               actorName: order.buyerName || "Buyer",
-              notes: "Buyer confirmed order pickup. Pay on Delivery requires immediate payment verification.",
+              notes: "Buyer confirmed order pickup handover. Payment verification required.",
             }),
           });
         } catch (e) {}
@@ -442,24 +345,23 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
         return;
       }
 
-      // 2. Move the order status to "Order Picked Up"
+      // 2. Move the order status to "Order Picked Up" & record handover verified
       await updateDoc(doc(db, "orders", order.id), {
         status: "Order Picked Up",
-        updatedAt: new Date().toISOString()
+        deliveryStatus: "delivered",
+        buyerDeliveryConfirmed: true,
+        buyerDeliveryConfirmedAt: now,
+        handoverVerified: true,
+        handoverVerifiedAt: now,
+        updatedAt: now
       });
 
-      // 3. If already paid, auto-complete
-      if (order.paymentStatus === "paid" || order.paymentMethod === "online") {
-        await processDeliveryConfirmation(order);
-        setMarkingId(null);
-        return;
-      }
-
-      // 4. Otherwise (unpaid online/fallback), launch appropriate checkout (EscrowPay for marketplace, Paystack for One Dollar)
-      triggerOrderPayment(order);
+      // 3. Already paid -> auto-complete
+      await processDeliveryConfirmation(order);
+      setMarkingId(null);
     } catch (err) {
       console.error("Pickup confirmation failed:", err);
-      alert("Pickup confirmation failed.");
+      setPaymentError("Pickup confirmation failed. Please try again.");
       setMarkingId(null);
     }
   };
@@ -560,8 +462,9 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
 
     // Strict restriction: buyers can only confirm order when delivered, ready for pickup, or vendor-dispatched (One Dollar)
     const effectiveStatus = getEffectiveStatus(verifyingOrder);
+    const isPickupOrder = (verifyingOrder.deliveryType || "").toLowerCase() === "pickup";
     const canConfirmOneDollar = verifyingOrder.isOneDollar && (effectiveStatus === "out_for_delivery" || effectiveStatus === "delivered" || effectiveStatus === "ready_for_pickup");
-    if (verifyingOrder.deliveryType === "delivery" && effectiveStatus !== "delivered" && !canConfirmOneDollar) {
+    if (!isPickupOrder && effectiveStatus !== "delivered" && !canConfirmOneDollar) {
       setVerificationError("Order can only be confirmed once it has been delivered by the courier.");
       return;
     }
@@ -569,15 +472,18 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
     setVerificationError(null);
     setConfirmingDelivery(true);
     try {
-      const isPod = verifyingOrder.paymentMethod === "pod" && verifyingOrder.paymentStatus !== "paid";
+      const requiresPayment = verifyingOrder.paymentStatus !== "paid";
       const now = new Date().toISOString();
 
-      if (isPod) {
-        // Next stage: Pay on Delivery Settlement
+      if (requiresPayment) {
+        // Handover verified first, then Paystack payment settlement
         const updatePayload: any = {
           status: "payment_required",
+          deliveryStatus: "delivered",
           buyerDeliveryConfirmed: true,
           buyerDeliveryConfirmedAt: now,
+          handoverVerified: true,
+          handoverVerifiedAt: now,
           deliveredAt: now,
           deliveryAttemptStatus: "success",
           updatedAt: now
@@ -589,19 +495,22 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
         }
         setOrders(prev => prev.map(o => o.id === verifyingOrder.id ? { ...o, ...updatePayload } : o));
         setShowIdVerification(false);
-        const orderToTrigger = verifyingOrder;
+        const orderToTrigger = { ...verifyingOrder, ...updatePayload };
         setVerifyingOrder(null);
         setProductIdInput("");
         triggerOrderPayment(orderToTrigger);
       } else {
-        // Next stage: Order Completed (Escrow Funds Released to Vendor if Escrow selected)
+        // Next stage: Order Completed (Escrow Funds Released to Vendor)
         const updatePayload: any = {
           status: "completed",
+          deliveryStatus: "delivered",
           buyerDeliveryConfirmed: true,
           buyerDeliveryConfirmedAt: now,
+          handoverVerified: true,
+          handoverVerifiedAt: now,
           deliveredAt: now,
           completedAt: now,
-          escrowStatus: verifyingOrder.escrowSelected === false ? "not_applicable" : "released",
+          escrowStatus: verifyingOrder.isOneDollar ? "released" : (verifyingOrder.escrowSelected === false ? "not_applicable" : "released"),
           paymentStatus: "paid",
           deliveryAttemptStatus: "success",
           updatedAt: now
@@ -839,168 +748,57 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
     }
   };
 
-  const handleClearAll = async () => {
-    setClearing(true);
-    try {
-      const promises = orders.map(order => 
-        updateDoc(doc(db, "orders", order.id), { 
-          hiddenFromHistory: true
-        })
-      );
-      await Promise.all(promises);
-      setShowClearConfirm(false);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, "orders/clear-all");
-    } finally {
-      setClearing(false);
-    }
-  };
-
-  const cancelOrder = async (orderId: string, productId: string, sellerId: string, buyerName: string, productName: string, quantity: number) => {
-    try {
-      // 1. Update order - if it's a ticket, hide it from seller immediately
-      const orderRef = doc(db, "orders", orderId);
-      const isTicket = productName.toLowerCase().includes("ticket") || !!(await getDoc(orderRef)).data()?.ticketTierId;
-      
-      await updateDoc(orderRef, {
-        status: "cancelled",
-        cancelledAt: new Date().toISOString(),
-        hiddenFromSeller: isTicket ? true : false
-      });
-
-      // 2. Restore stock
-      const productRef = doc(db, "products", productId);
-      await updateDoc(productRef, {
-        stock: increment(quantity)
-      });
-
-      // 3. Notify seller about cancellation
-      await addDoc(collection(db, "notifications"), {
-        userId: sellerId,
-        title: "Order Cancelled",
-        message: `Buyer ${buyerName} cancelled their order for ${productName}.`,
-        type: "order",
-        isRead: false,
-        createdAt: new Date().toISOString()
-      });
-
-      // 4. Stock alert check
-      const productSnap = await getDoc(productRef);
-      if (productSnap.exists()) {
-        const newStock = productSnap.data().stock;
-        if (newStock <= 0) {
-          await addDoc(collection(db, "notifications"), {
-            userId: sellerId,
-            title: "Out of Stock!",
-            message: `Your product ${productName} is now out of stock.`,
-            type: "stock",
-            isRead: false,
-            createdAt: new Date().toISOString()
-          });
-        } else if (newStock <= 5) {
-          await addDoc(collection(db, "notifications"), {
-            userId: sellerId,
-            title: "Low Stock Alert!",
-            message: `Your product ${productName} has only ${newStock} left in stock.`,
-            type: "stock",
-            isRead: false,
-            createdAt: new Date().toISOString()
-          });
-        }
-      }
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `orders/${orderId}`);
-    }
-  };
-
-  const handleClearIndividual = async (order: Order) => {
-    const isActive = order.status !== "completed" && order.status !== "cancelled";
-    
-    if (isActive) {
-      const isDispatched = [
-        "out_for_delivery", "Out For Delivery",
-        "transit", "In Transit", "Out To Pickup Station",
-        "ready_for_pickup", "Ready For Pickup",
-        "delivered", "Order Picked Up", "Order Delivered",
-        "completed", "acquired"
-      ].includes(order.status);
-
-      if (isDispatched) {
-        alert("This order is already out for delivery or ready for pickup, and cannot be cancelled.");
-        return;
-      }
-      setOrderToClear(order);
-      setShowSingleClearConfirm(true);
-    } else {
-      setClearing(true);
-      try {
-        await updateDoc(doc(db, "orders", order.id), { 
-          hiddenFromHistory: true
-        });
-      } catch (error) {
-        handleFirestoreError(error, OperationType.UPDATE, `orders/${order.id}`);
-      } finally {
-        setClearing(false);
-      }
-    }
-  };
-
-  const confirmSingleClear = async () => {
-    if (!orderToClear) return;
-    
-    setClearing(true);
-    try {
-      // If it's active, cancel it first
-      if (orderToClear.status !== "completed" && orderToClear.status !== "cancelled" && orderToClear.status !== "acquired") {
-        await cancelOrder(
-          orderToClear.id, 
-          orderToClear.productId, 
-          orderToClear.sellerId, 
-          orderToClear.buyerName, 
-          orderToClear.productName, 
-          orderToClear.quantity
-        );
-      }
-      
-      // Then hide it for both if it's an event ticket
-      const isTicket = !!orderToClear.ticketTierId;
-      await updateDoc(doc(db, "orders", orderToClear.id), { 
-        hiddenFromHistory: true,
-        hiddenFromSeller: isTicket ? true : (orderToClear.hiddenFromSeller || false)
-      });
-      setShowSingleClearConfirm(false);
-      setOrderToClear(null);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `orders/${orderToClear.id}`);
-    } finally {
-      setClearing(false);
-    }
-  };
-
   const getEffectiveStatus = (order: Order) => {
-    const s = (order.status || "") as string;
-    if (s === "cancelled") return "cancelled";
-    if (s === "completed") return "completed";
-    if (s === "payment_required" || s === "Payment Required") return "payment_required";
-    if (s === "awaiting_payment") return "awaiting_payment";
+    const s = (order.status || "").trim();
+    const sLower = s.toLowerCase();
+    const isPickupOrder = (order.deliveryType || "").toLowerCase() === "pickup";
 
-    // 6. Delivered stage (Courier verified PIN and marked delivered)
+    if (sLower === "cancelled") return "cancelled";
+    if (sLower === "completed") return "completed";
+    if (sLower === "payment_required" || sLower === "payment required") return "payment_required";
+
+    // Ready at Pickup Station (check BEFORE transit/logistics flags for pickup orders so seller pressing Ready for Pickup always shows checked!)
     if (
-      s === "delivered" ||
-      s === "acquired" ||
+      isPickupOrder &&
+      (s === "Ready For Pickup" ||
+        s === "Ready For Delivery" ||
+        sLower === "ready_for_pickup" ||
+        s === "Ready at Pickup Station" ||
+        s === "Out To Pickup Station" ||
+        order.deliveryStatus === "ready_for_pickup") &&
+      !order.buyerDeliveryConfirmed &&
+      !order.handoverVerified &&
+      !order.courierHandedOver &&
+      s !== "Order Picked Up" &&
+      sLower !== "delivered" &&
+      s !== "Order Delivered" &&
+      order.deliveryStatus !== "delivered" &&
+      order.logisticsStatus !== "delivered"
+    ) {
+      return "ready_for_pickup";
+    }
+
+    // 6. Delivered / Handover Verified stage
+    if (
+      sLower === "delivered" ||
+      sLower === "acquired" ||
       s === "Order Delivered" ||
-      order.courierHandedOver ||
+      Boolean(order.courierHandedOver) ||
+      Boolean(order.handoverVerified) ||
+      Boolean(order.buyerDeliveryConfirmed) ||
       order.deliveryStatus === "delivered" ||
       order.logisticsStatus === "delivered" ||
-      (order.deliveryType === "pickup" && s === "Order Picked Up")
+      (isPickupOrder && s === "Order Picked Up")
     ) {
       return "delivered";
     }
 
+    if (sLower === "awaiting_payment") return "awaiting_payment";
+
     // 5. Out For Delivery stage (Rider on the way / arrived at buyer's doorstep)
     if (
       s === "Out For Delivery" ||
-      s === "out_for_delivery" ||
+      sLower === "out_for_delivery" ||
       order.deliveryStatus === "out_for_delivery" ||
       order.logisticsStatus === "out_for_delivery"
     ) {
@@ -1010,41 +808,43 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
     // 4. In Transit stage (Courier accepted dispatch / rider moving en route to buyer)
     if (
       s === "In Transit" ||
-      s === "transit" ||
-      s === "in_transit" ||
-      s === "picked_up" ||
+      sLower === "transit" ||
+      sLower === "in_transit" ||
+      sLower === "picked_up" ||
       s === "Package Picked Up from Merchant" ||
       s === "Package Picked Up from Seller" ||
       s === "Handed Over to Logistics" ||
-      s === "handed_over" ||
+      sLower === "handed_over" ||
       order.deliveryStatus === "transit" ||
       order.deliveryStatus === "picked_up" ||
       order.logisticsStatus === "transit" ||
       order.logisticsStatus === "picked_up" ||
-      order.logisticsOfferStatus === "accepted" ||
-      Boolean(order.logisticsAcceptedAt) ||
-      Boolean(order.productHandedOver) ||
-      Boolean(order.sellerHandoverVerified) ||
-      s === "Order Picked Up"
+      (!isPickupOrder && (
+        order.logisticsOfferStatus === "accepted" ||
+        Boolean(order.logisticsAcceptedAt) ||
+        Boolean(order.productHandedOver) ||
+        Boolean(order.sellerHandoverVerified) ||
+        s === "Order Picked Up"
+      ))
     ) {
       return "transit";
     }
 
-    // Pickup station / store ready stage (ONLY FOR PICKUP ORDERS)
+    // Fallback Ready at Station / Store for pickup orders
     if (
-      order.deliveryType === "pickup" &&
-      (s === "Ready For Pickup" || s === "Ready For Delivery" || s === "ready_for_pickup" || s === "Out To Pickup Station")
+      isPickupOrder &&
+      (s === "Ready For Pickup" || s === "Ready For Delivery" || sLower === "ready_for_pickup" || s === "Ready at Pickup Station" || s === "Out To Pickup Station" || order.deliveryStatus === "ready_for_pickup")
     ) {
       return "ready_for_pickup";
     }
 
     // 3. Logistics booked / pending courier acceptance
     if (
-      order.deliveryType === "delivery" &&
+      !isPickupOrder &&
       (
         order.logisticsOfferStatus === "pending" ||
-        order.status === "logistics_pending" ||
-        order.status === "logistics_booked" ||
+        sLower === "logistics_pending" ||
+        sLower === "logistics_booked" ||
         order.logisticsId ||
         order.logisticsName ||
         (order.kwikRiderId && order.kwikRiderId.length > 0)
@@ -1054,12 +854,12 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
     }
 
     // 2. Seller accepted & packaging
-    if (s === "accepted" || (order.deliveryType === "delivery" && (s === "Ready For Pickup" || s === "Ready For Delivery" || s === "ready_for_pickup"))) {
+    if (sLower === "accepted" || (!isPickupOrder && (s === "Ready For Pickup" || s === "Ready For Delivery" || sLower === "ready_for_pickup"))) {
       return "accepted";
     }
 
     // 1. Pending seller acceptance
-    if (s === "pending" || s === "Pending Seller Acceptance") {
+    if (sLower === "pending" || s === "Pending Seller Acceptance") {
       return "pending";
     }
 
@@ -1126,10 +926,7 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
       case "payment_required":
         return {
           title: "POD Payment Required",
-          subtitle:
-            order.isOneDollar && order.paymentReceipt?.provider !== "escrowpay"
-              ? "Package received! Please complete your Paystack payment to finalize escrow settlement."
-              : "Package received! Please complete your EscrowPay payment to finalize escrow settlement."
+          subtitle: "Package received! Please complete your Paystack payment to finalize escrow settlement."
         };
       case "awaiting_payment":
         return {
@@ -1139,8 +936,8 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
               : "Payment Processing",
           subtitle:
             order.type === "service"
-              ? "Please complete payment to finalize your service order."
-              : "Your order remains in Payment Processing until EscrowPay verifies funding."
+              ? "Please complete payment via Paystack to finalize your service order."
+              : "Your order remains in Payment Processing until Paystack verifies payment."
         };
       case "completed":
         return {
@@ -1161,7 +958,11 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
   };
 
   const formatRemainingTime = (order: Order) => {
-    if ((order.status === "Out To Pickup Station" || order.status === "Out For Delivery" || order.status === "accepted") && order.acceptedAt) {
+    // No countdown for pickup orders ("Out To Pickup Station" / pickup station countdown removed)
+    if ((order.deliveryType || "").toLowerCase() === "pickup" || order.status === "Out To Pickup Station") {
+      return null;
+    }
+    if ((order.status === "Out For Delivery" || order.status === "out_for_delivery") && order.acceptedAt) {
       const acceptedTime = new Date(order.acceptedAt).getTime();
       const duration = (order.countdownDuration || 120) * 1000;
       const remainingMs = (acceptedTime + duration) - currentTime;
@@ -1226,6 +1027,27 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
           </button>
         </div>
       )}
+      {paymentNotice && (
+        <div
+          role="status"
+          className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-950/35 border border-emerald-200 dark:border-emerald-900/50 flex items-start justify-between gap-3"
+        >
+          <div className="flex items-start gap-2.5">
+            <CheckCircle className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+            <p className="text-xs font-semibold text-emerald-800 dark:text-emerald-200 leading-relaxed">
+              {paymentNotice}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setPaymentNotice(null)}
+            className="p-1 text-emerald-600 hover:text-emerald-800 dark:hover:text-emerald-300 cursor-pointer shrink-0"
+            aria-label="Dismiss payment notice"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <button 
@@ -1241,15 +1063,6 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
           </div>
         </div>
         <div className="flex items-center gap-3">
-          {orders.length > 0 && (
-            <button
-              onClick={() => setShowClearConfirm(true)}
-              className="flex items-center gap-2 px-4 py-2 text-xs font-bold text-red-600 hover:bg-red-50 dark:hover:bg-red-900/10 rounded-xl transition-colors uppercase tracking-wider"
-            >
-              <X className="w-4 h-4" />
-              Clear All
-            </button>
-          )}
           <div className="px-4 py-2 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl shadow-sm">
             <span className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mr-2">Total Orders:</span>
             <span className="text-sm font-black text-slate-900 dark:text-white">{orders.length}</span>
@@ -1367,14 +1180,6 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
                       TEST TRANSACTION
                     </span>
                   )}
-                  <button
-                    onClick={() => handleClearIndividual(order)}
-                    disabled={clearing}
-                    className="p-2 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-xl transition-colors text-slate-400 hover:text-red-500 disabled:opacity-50"
-                    title="Clear/Cancel Order"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
                 </div>
               </div>
 
@@ -1858,21 +1663,19 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
                         </div>
                       </div>
                       <p className="text-xs text-amber-800 dark:text-amber-300 leading-relaxed font-medium">
-                        📦 Handover confirmed! Pay on Delivery escrow policy requires electronic settlement via {order.isOneDollar && order.paymentReceipt?.provider !== "escrowpay" ? "Paystack" : "EscrowPay"} to release final verified receipts and credit vendor balance.
+                        📦 Handover confirmed! Pay on Delivery escrow policy requires electronic settlement via Paystack to release final verified receipts and credit vendor balance.
                       </p>
                       <button
                         onClick={() => triggerOrderPayment(order)}
                         disabled={isVerifyingPayment}
-                        className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-xs tracking-wider transition-all duration-200 flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 active:scale-[0.98]"
+                        className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-xs tracking-wider transition-all duration-200 flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 active:scale-[0.98] cursor-pointer"
                       >
                         {isVerifyingPayment ? (
                           <Loader2 className="w-4 h-4 animate-spin" />
                         ) : (
                           <CreditCard className="w-4 h-4" />
                         )}
-                        {order.isOneDollar && order.paymentReceipt?.provider !== "escrowpay"
-                          ? `PAY VIA PAYSTACK (₦${order.totalPrice.toLocaleString()})`
-                          : `PAY VIA ESCROWPAY (₦${order.totalPrice.toLocaleString()})`}
+                        {`PAY VIA PAYSTACK (₦${order.totalPrice.toLocaleString()})`}
                       </button>
                     </div>
                   )}
@@ -1897,18 +1700,51 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
                     <div className="absolute left-4 top-0 bottom-0 w-0.5 bg-slate-100 dark:bg-slate-800" />
                     <div className="space-y-6 relative">
                       {(() => {
-                        const isPickup = order.deliveryType === "pickup";
+                        const isPickup = (order.deliveryType || "").toLowerCase() === "pickup";
                         const isPod = order.paymentMethod === "pod";
 
                         if (isPickup) {
                           // Pickup Flow (Refined 4-Stage Pickup)
-                          const isStage1Done = (order.status !== "pending" && order.status !== "Pending Seller Acceptance") || Boolean(order.acceptedAt);
-                          const isStage2Done = isStage1Done && (effectiveStatus === "ready_for_pickup" || effectiveStatus === "delivered" || effectiveStatus === "completed");
-                          const isStage3Done = isStage2Done && (effectiveStatus === "delivered" || effectiveStatus === "completed" || Boolean(order.buyerDeliveryConfirmed));
-                          const isStage4Done = order.status === "completed" || effectiveStatus === "completed";
+                          const rawStatusLower = (order.status || "").trim().toLowerCase();
+                          const isStage2Ready =
+                            effectiveStatus === "ready_for_pickup" ||
+                            effectiveStatus === "delivered" ||
+                            effectiveStatus === "payment_required" ||
+                            effectiveStatus === "completed" ||
+                            rawStatusLower === "ready for pickup" ||
+                            rawStatusLower === "ready_for_pickup" ||
+                            rawStatusLower === "ready at pickup station" ||
+                            rawStatusLower === "out to pickup station" ||
+                            order.deliveryStatus === "ready_for_pickup" ||
+                            order.deliveryStatus === "delivered" ||
+                            Boolean(order.handoverVerified) ||
+                            Boolean(order.buyerDeliveryConfirmed) ||
+                            Boolean(order.courierHandedOver) ||
+                            Boolean(order.deliveredAt);
+
+                          const isStage1Done =
+                            isStage2Ready ||
+                            (rawStatusLower !== "pending" && rawStatusLower !== "pending seller acceptance" && rawStatusLower !== "awaiting_payment") ||
+                            Boolean(order.acceptedAt);
+
+                          const isStage2Done = isStage1Done && isStage2Ready;
+
+                          const isStage3Done =
+                            isStage2Done &&
+                            (effectiveStatus === "delivered" ||
+                              effectiveStatus === "payment_required" ||
+                              effectiveStatus === "completed" ||
+                              Boolean(order.handoverVerified) ||
+                              Boolean(order.buyerDeliveryConfirmed) ||
+                              Boolean(order.courierHandedOver) ||
+                              rawStatusLower === "order picked up" ||
+                              Boolean(order.deliveredAt));
+
+                          const isStage4Done = rawStatusLower === "completed" || effectiveStatus === "completed";
 
                           let pickupActive = 0;
-                          if (isStage3Done) pickupActive = 3;
+                          if (isStage4Done) pickupActive = 4;
+                          else if (isStage3Done) pickupActive = 3;
                           else if (isStage2Done) pickupActive = 2;
                           else if (isStage1Done) pickupActive = 1;
 
@@ -1927,7 +1763,7 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
                               label: "Ready at Pickup Station", 
                               desc: "Package ready for physical collection at designated station", 
                               actor: "Station", 
-                              icon: Package,
+                              icon: isStage2Done ? CheckCircle : Package,
                               isCompleted: isStage2Done,
                               isActive: pickupActive === 1
                             },
@@ -1936,14 +1772,14 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
                               label: "Package Handover Verified", 
                               desc: "Customer verified PIN and confirmed collection", 
                               actor: "Customer", 
-                              icon: Package,
+                              icon: isStage3Done ? CheckCircle : Package,
                               isCompleted: isStage3Done,
                               isActive: pickupActive === 2
                             },
                             { 
                               key: "completed", 
                               label: "Order Completed", 
-                              desc: isPod ? "Automatic after Pay on Delivery settlement" : "Payment verified & escrow released to vendor", 
+                              desc: isPod ? "Automatic after Pay on Delivery settlement via Paystack" : "Payment verified & escrow released to vendor", 
                               actor: "Escrow Finalized", 
                               icon: CheckCircle,
                               isCompleted: isStage4Done,
@@ -2093,11 +1929,14 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
                           effectiveStatus === "payment_required" || 
                           Boolean(order.buyerDeliveryConfirmed)
                         );
-                        // Stage 4: Product Delivered - customer presses button to confirm delivery
+                        // Stage 4: Product Delivered - handover verified / customer confirmed delivery
                         const isStage4Complete = isStage3Complete && (
                           Boolean(order.buyerDeliveryConfirmed) || 
-                          effectiveStatus === "completed" || 
-                          (order.paymentMethod === "online" && (order.status === "delivered" || effectiveStatus === "delivered"))
+                          Boolean(order.handoverVerified) ||
+                          Boolean(order.courierHandedOver) ||
+                          effectiveStatus === "delivered" ||
+                          effectiveStatus === "payment_required" ||
+                          effectiveStatus === "completed"
                         );
                         // Stage 5: Order Complete - for online payment, ticks right after customer confirms product delivered; for POD, ticks after payment
                         const isStage5Complete = isPod 
@@ -2289,12 +2128,12 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
 
                   {order.status !== "completed" && order.status !== "cancelled" && (
                     <div className="flex flex-col gap-3">
-                      {/* Countdown widgets for Out To Pickup Station and Out For Delivery states */}
-                      {(order.status === "Out To Pickup Station" || order.status === "Out For Delivery" || order.status === "accepted") && remainingTime && remainingTime !== "Ready to Confirm" && (
+                      {/* Arrival countdown only for courier doorstep delivery (never for pickup station) */}
+                      {(order.deliveryType || "").toLowerCase() !== "pickup" && (order.status === "Out For Delivery" || order.status === "out_for_delivery") && remainingTime && remainingTime !== "Ready to Confirm" && (
                         <div className="p-3 bg-blue-50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-900/30 rounded-xl mb-1">
                           <div className="flex justify-between items-center">
                             <span className="text-[10px] font-black uppercase tracking-widest text-blue-600">
-                              {order.deliveryType === "pickup" ? "Pickup Station Countdown" : "Arrival Countdown"}
+                              Arrival Countdown
                             </span>
                             <span className="text-xs font-mono font-black text-blue-600 animate-pulse">
                               {remainingTime}
@@ -2303,7 +2142,7 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
                         </div>
                       )}
 
-                      {order.status === "Ready For Pickup" && (
+                      {(order.status === "Ready For Pickup" || effectiveStatus === "ready_for_pickup") && (
                         <div className="p-3 bg-emerald-50 dark:bg-[#10b981]/10 border border-emerald-100 dark:border-[#10b981]/25 rounded-xl mb-1">
                           <p className="text-[10px] font-black uppercase tracking-widest text-emerald-600">Ready for Pickup</p>
                           <p className="text-xs font-semibold text-slate-600 dark:text-slate-400 mt-1">Please meet the seller to pickup your order! No verification code needed.</p>
@@ -2320,7 +2159,7 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
                             </div>
                           )}
                           <div className="p-3 bg-indigo-50 dark:bg-indigo-950/25 border border-indigo-100 dark:border-indigo-900/40 rounded-xl text-xs font-medium text-indigo-800 dark:text-indigo-400">
-                            Service is set to Physical Payment. Once the service has been completed, please click <strong>Service Done</strong> below to complete on-app secure payment.
+                            Service is set to Physical Payment. Once the service has been completed, please click <strong>Service Done</strong> below to complete on-app secure payment via Paystack.
                           </div>
                           <button
                             onClick={() => {
@@ -2336,8 +2175,8 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
                         <div className="space-y-2.5 animate-in fade-in duration-305">
                           <div className="p-3.5 bg-amber-50 dark:bg-amber-900/25 border border-amber-200/80 dark:border-amber-900/40 rounded-xl text-xs font-medium text-amber-900 dark:text-amber-300 leading-relaxed">
                             {order.type === "service"
-                              ? "Service completed by vendor! Please finalize your secure online escrow payment on the app now."
-                              : "Payment Processing: Complete funding via EscrowPay or verify your transaction status. This order will never be marked paid until EscrowPay confirms settlement."}
+                              ? "Service completed by vendor! Please finalize your escrow-protected Paystack payment on the app now."
+                              : "Payment Processing: Complete your payment via Paystack (SHOPIVERSITY Escrow protected). This order will remain awaiting payment until Paystack confirms settlement."}
                           </div>
                           <button
                             onClick={() => triggerOrderPayment(order)}
@@ -2349,26 +2188,8 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
                             ) : (
                               <CreditCard className="w-4 h-4" />
                             )}
-                            {order.isOneDollar && order.paymentReceipt?.provider !== "escrowpay"
-                              ? `Complete Payment via Paystack (₦${order.totalPrice.toLocaleString()})`
-                              : `Complete Payment via EscrowPay (₦${order.totalPrice.toLocaleString()})`}
+                            {`Complete Payment via Paystack (₦${order.totalPrice.toLocaleString()})`}
                           </button>
-                          {(order.paymentReceipt?.transactionId || order.paymentReference) && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const txId = order.paymentReceipt?.transactionId || "";
-                                const ref = order.paymentReference || order.paymentReceipt?.paymentReference || "";
-                                const url = `/payment/escrow/return?orderId=${encodeURIComponent(order.id)}&transactionId=${encodeURIComponent(txId)}&reference=${encodeURIComponent(ref)}`;
-                                window.history.pushState({}, "", url);
-                                window.dispatchEvent(new PopStateEvent("popstate"));
-                              }}
-                              className="w-full py-3 bg-white hover:bg-slate-50 dark:bg-slate-900 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-2xl font-bold text-xs tracking-wide transition-all flex items-center justify-center gap-2 cursor-pointer"
-                            >
-                              <ShieldCheck className="w-4 h-4 text-[#ff6b00]" />
-                              Verify EscrowPay Payment Status
-                            </button>
-                          )}
                         </div>
                       ) : effectiveStatus === "pending" ? (
                         <button
@@ -2575,7 +2396,7 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
                         <div className="space-y-2 animate-in fade-in duration-300">
                           <div className="p-3 bg-amber-50 dark:bg-amber-900/25 border border-amber-200 dark:border-amber-900/40 rounded-xl text-xs font-medium text-amber-900 dark:text-amber-300">
                             <strong>📦 Package Handover Confirmed!</strong><br />
-                            Pay on Delivery security policy requires electronic payment verification to complete escrow settlement.
+                            Pay on Delivery security policy requires electronic payment verification via Paystack to complete escrow settlement.
                           </div>
                           <button
                             onClick={() => triggerOrderPayment(order)}
@@ -2587,9 +2408,7 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
                             ) : (
                               <CreditCard className="w-4 h-4" />
                             )}
-                            {order.isOneDollar && order.paymentReceipt?.provider !== "escrowpay"
-                              ? `Pay via Paystack (₦${order.totalPrice.toLocaleString()})`
-                              : `Pay via EscrowPay (₦${order.totalPrice.toLocaleString()})`}
+                            {`Pay via Paystack (₦${order.totalPrice.toLocaleString()})`}
                           </button>
                         </div>
                       ) : (effectiveStatus === "delivered" || (order.isOneDollar && order.deliveryType === "delivery" && effectiveStatus === "out_for_delivery")) ? (
@@ -2598,16 +2417,14 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
                             <div className="flex items-center gap-2">
                               <CheckCircle className="w-5 h-5 text-emerald-600" />
                               <span className="text-xs font-black text-emerald-900 dark:text-emerald-200 uppercase tracking-wide">
-                                {order.isOneDollar ? "Vendor Dispatched One Dollar Order" : "Package Handover Verified by Courier!"}
+                                {order.isOneDollar ? "Vendor Dispatched One Dollar Order" : "Package Handover Verified!"}
                               </span>
                             </div>
                             <p className="text-xs text-emerald-800 dark:text-emerald-300 leading-relaxed font-medium">
                               {order.paymentMethod === "pod" && order.paymentStatus !== "paid"
-                                ? `Package received! Please complete your ${order.isOneDollar && order.paymentReceipt?.provider !== "escrowpay" ? "Paystack" : "EscrowPay"} payment to finalize settlement and release vendor balance.`
+                                ? "Package received! Please complete your Paystack payment to finalize settlement and release vendor balance."
                                 : order.isOneDollar
-                                  ? (order.escrowSelected === false
-                                      ? "Once you receive your One Dollar item from the vendor, click below to confirm receipt."
-                                      : "Once you receive and inspect your One Dollar item from the vendor, click below to confirm receipt and release escrow payment.")
+                                  ? "Once you receive and inspect your One Dollar item from the vendor, click below to confirm receipt and release escrow payment."
                                   : "The courier has verified delivery and handed over your package. Please inspect your items and click below to confirm receipt and release escrow funds to the seller and courier."}
                             </p>
                           </div>
@@ -2619,9 +2436,7 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
                               className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-sm tracking-wide transition-all flex items-center justify-center gap-2 shadow-lg cursor-pointer active:scale-95"
                             >
                               {isVerifyingPayment ? <Loader2 className="w-4 h-4 animate-spin" /> : <CreditCard className="w-4 h-4" />}
-                              {order.isOneDollar && order.paymentReceipt?.provider !== "escrowpay"
-                                ? `Pay via Paystack (₦${order.totalPrice.toLocaleString()})`
-                                : `Pay via EscrowPay (₦${order.totalPrice.toLocaleString()})`}
+                              {`Pay via Paystack (₦${order.totalPrice.toLocaleString()})`}
                             </button>
                           ) : (
                             <button
@@ -2753,201 +2568,118 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
       })}
       </div>
 
-      {/* Individual Order Clear Confirmation Modal */}
-      <AnimatePresence>
-        {showSingleClearConfirm && orderToClear && (
-          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 max-w-sm w-full shadow-2xl border border-slate-100 dark:border-slate-800"
-            >
-              <div className="w-16 h-16 bg-amber-50 dark:bg-amber-900/20 rounded-2xl flex items-center justify-center text-amber-600 dark:text-amber-500 mx-auto mb-6">
-                <Trash2 className="w-8 h-8" />
-              </div>
-              <h3 className="text-xl font-bold text-slate-900 dark:text-white text-center mb-2">Cancel & Clear Order?</h3>
-              <p className="text-sm text-slate-500 dark:text-slate-400 text-center mb-8">
-                This order is currently <strong>{orderToClear.status.replace(/_/g, ' ')}</strong>. 
-                Clearing it now will <strong>CANCEL</strong> the order and restore the stock for the seller.
-              </p>
-              
-              <div className="flex gap-3">
-                <button 
-                  onClick={() => {
-                    setShowSingleClearConfirm(false);
-                    setOrderToClear(null);
-                  }}
-                  disabled={clearing}
-                  className="flex-1 py-4 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl font-bold text-sm hover:bg-slate-100 dark:hover:bg-slate-700 transition-all disabled:opacity-50"
-                >
-                  Go Back
-                </button>
-                <button 
-                  onClick={confirmSingleClear}
-                  disabled={clearing}
-                  className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-bold text-sm hover:bg-red-700 transition-all shadow-lg shadow-red-100 dark:shadow-red-900/20 flex items-center justify-center gap-2 disabled:opacity-50"
-                >
-                  {clearing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Cancel & Clear"}
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* Clear All Confirmation Modal */}
-      <AnimatePresence>
-        {showClearConfirm && (
-          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 max-w-sm w-full shadow-2xl border border-slate-100 dark:border-slate-800"
-            >
-              <div className="w-16 h-16 bg-red-50 dark:bg-red-900/20 rounded-2xl flex items-center justify-center text-red-600 dark:text-red-500 mx-auto mb-6">
-                <Trash2 className="w-8 h-8" />
-              </div>
-              <h3 className="text-xl font-bold text-slate-900 dark:text-white text-center mb-2">Clear All History?</h3>
-              <p className="text-sm text-slate-500 dark:text-slate-400 text-center mb-4">This will hide all orders from your tracking list.</p>
-              
-              {orders.some(o => o.status !== "completed" && o.status !== "cancelled") && (
-                <div className="p-4 bg-red-50 dark:bg-red-900/20 rounded-2xl mb-8">
-                  <p className="text-[10px] font-bold text-red-600 dark:text-red-400 uppercase tracking-wider mb-1">Warning</p>
-                  <p className="text-xs text-red-600 dark:text-red-400">
-                    You have active orders. These orders WILL NOT be automatically cancelled if you clear all history. Please cancel active orders individually if you wish to restore stock.
-                  </p>
-                </div>
-              )}
-              
-              <div className="flex gap-3">
-                <button 
-                  onClick={() => setShowClearConfirm(false)}
-                  disabled={clearing}
-                  className="flex-1 py-4 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl font-bold text-sm hover:bg-slate-100 dark:hover:bg-slate-700 transition-all disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button 
-                  onClick={handleClearAll}
-                  disabled={clearing}
-                  className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-bold text-sm hover:bg-red-700 transition-all shadow-lg shadow-red-100 dark:shadow-red-900/20 flex items-center justify-center gap-2 disabled:opacity-50"
-                >
-                  {clearing ? <Loader2 className="w-4 h-4 animate-spin" /> : "Hide All"}
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
       <ReceiptModal
         order={selectedReceiptOrder!}
         isOpen={!!selectedReceiptOrder}
         onClose={() => setSelectedReceiptOrder(null)}
       />
 
-      {/* Branded Escrow Payment Modal */}
-      <AnimatePresence>
-        {orderToPay && (
-          <div className="fixed inset-0 z-[350] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95, y: 15 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 15 }}
-              className="bg-white dark:bg-slate-900 rounded-[3rem] p-8 max-w-md w-full shadow-2xl border border-stone-100 dark:border-slate-800 relative overflow-hidden"
-            >
-              <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 rounded-full -mr-16 -mt-16" />
-              
-              <button 
-                onClick={() => setOrderToPay(null)}
-                className="absolute top-6 right-6 p-2 text-stone-400 hover:text-red-500 transition-colors"
+      {/* Branded Escrow Payment Modal (portaled so parent transforms never clip it) */}
+      {typeof document !== "undefined" &&
+        createPortal(
+          <AnimatePresence>
+            {orderToPay && (
+              <div
+                className="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/65 backdrop-blur-md"
+                onClick={(e) => {
+                  if (e.target === e.currentTarget) setOrderToPay(null);
+                }}
               >
-                <X className="w-5 h-5" />
-              </button>
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95, y: 15 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: 15 }}
+                  className="bg-white dark:bg-slate-900 rounded-t-3xl sm:rounded-[3rem] p-6 sm:p-8 max-w-md w-full max-h-[92dvh] overflow-y-auto shadow-2xl border border-stone-100 dark:border-slate-800 relative"
+                >
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 rounded-full -mr-16 -mt-16 pointer-events-none" />
 
-              <div className="space-y-6">
-                <div className="w-16 h-16 bg-emerald-50 dark:bg-emerald-950/20 rounded-2xl flex items-center justify-center text-emerald-600 dark:text-emerald-400 mx-auto">
-                  <CreditCard className="w-8 h-8 font-bold" />
-                </div>
-
-                <div className="text-center space-y-1">
-                  <h3 className="text-xl font-black text-slate-900 dark:text-white tracking-tight uppercase leading-none">Escrow Payment Gateway</h3>
-                  <p className="text-[10px] font-bold text-stone-400 dark:text-stone-500 uppercase tracking-widest">Secure Order Settlement Portal</p>
-                </div>
-
-                <div className="p-5 bg-stone-50 dark:bg-slate-800/50 rounded-[2.5rem] border border-stone-105 dark:border-slate-800 space-y-3 font-sans">
-                  <div className="flex justify-between items-center pb-2.5 border-b border-stone-200 dark:border-slate-800">
-                    <div>
-                      <h4 className="text-xs font-black text-stone-800 dark:text-white uppercase">{orderToPay.productName}</h4>
-                      <p className="text-[9px] text-stone-400">Seller: {orderToPay.sellerName || "Shopiversity Merchant"}</p>
-                    </div>
-                    <span className="text-xs font-bold font-mono">x{orderToPay.quantity}</span>
-                  </div>
-
-                  <div className="space-y-1.5 text-xs text-stone-600 dark:text-stone-300">
-                    <div className="flex justify-between">
-                      <span>Subtotal</span>
-                      <span className="font-mono">₦{orderToPay.totalPrice.toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Platform Fee</span>
-                      <span className="font-mono text-emerald-600">FREE</span>
-                    </div>
-                    <div className="flex justify-between font-black text-stone-900 dark:text-white pt-1 text-sm">
-                      <span>Total Amount due</span>
-                      <span className="font-mono">₦{orderToPay.totalPrice.toLocaleString()}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="p-4 bg-purple-50/50 dark:bg-purple-950/10 rounded-2xl border border-purple-100/50 dark:border-purple-900/20 space-y-2 leading-relaxed">
-                  <p className="text-[10px] text-purple-900 dark:text-purple-400 font-medium">
-                    <span className="font-black uppercase mr-1">[Term 7.1]</span> Payment must be transacted securely inside the SHOPIVERSITY app to preserve your Active Buyer Protection.
-                  </p>
-                  <p className="text-[10px] text-purple-900 dark:text-purple-400 font-medium">
-                    <span className="font-black uppercase mr-1">[Term 1.1]</span> Escrow holds this payment safely. The vendor is disbursed only after fulfillment validation.
-                  </p>
-                </div>
-
-                <div className="flex flex-col gap-3 pt-2">
-                  <button 
-                    onClick={() => triggerOrderPayment(orderToPay)}
-                    disabled={isVerifyingPayment}
-                    className="w-full h-14 bg-[#ff6b00] hover:bg-[#e55f00] active:scale-[0.99] text-white rounded-2xl font-black text-xs uppercase tracking-[0.18em] transition-all flex items-center justify-center gap-2 shadow-xl cursor-pointer disabled:opacity-50"
+                  <button
+                    onClick={() => setOrderToPay(null)}
+                    className="absolute top-5 right-5 p-2 text-stone-400 hover:text-red-500 transition-colors cursor-pointer"
+                    aria-label="Close payment modal"
                   >
-                    {isVerifyingPayment ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Connecting Escrow Gateway...
-                      </>
-                    ) : (
-                      <>
-                        <CreditCard className="w-4 h-4" />
-                        {orderToPay.isOneDollar && orderToPay.paymentReceipt?.provider !== "escrowpay"
-                          ? `Pay ₦${orderToPay.totalPrice.toLocaleString()} via Paystack`
-                          : `Pay ₦${orderToPay.totalPrice.toLocaleString()} via EscrowPay`}
-                      </>
-                    )}
+                    <X className="w-5 h-5" />
                   </button>
-                  <p className="text-[10px] text-center text-slate-500 dark:text-slate-400 font-medium">
-                    {orderToPay.isOneDollar && orderToPay.paymentReceipt?.provider !== "escrowpay"
-                      ? "Protected by Paystack 256-bit encryption & SHOPIVERSITY Escrow."
-                      : "Protected by EscrowPay & SHOPIVERSITY Escrow."}
-                  </p>
-                </div>
 
-                <div className="text-center pb-2">
-                  <p className="text-[9px] text-stone-400 uppercase tracking-widest font-bold">
-                    🛡️ Verified SHOPIVERSITY Escrow Protection
-                  </p>
-                </div>
+                  <div className="space-y-6">
+                    <div className="w-16 h-16 bg-emerald-50 dark:bg-emerald-950/20 rounded-2xl flex items-center justify-center text-emerald-600 dark:text-emerald-400 mx-auto">
+                      <CreditCard className="w-8 h-8 font-bold" />
+                    </div>
+
+                    <div className="text-center space-y-1">
+                      <h3 className="text-xl font-black text-slate-900 dark:text-white tracking-tight uppercase leading-none">Paystack Escrow Checkout</h3>
+                      <p className="text-[10px] font-bold text-stone-400 dark:text-stone-500 uppercase tracking-widest">Secure Order Settlement Portal</p>
+                    </div>
+
+                    <div className="p-5 bg-stone-50 dark:bg-slate-800/50 rounded-[2rem] border border-stone-105 dark:border-slate-800 space-y-3 font-sans">
+                      <div className="flex justify-between items-center pb-2.5 border-b border-stone-200 dark:border-slate-800 gap-2">
+                        <div className="min-w-0">
+                          <h4 className="text-xs font-black text-stone-800 dark:text-white uppercase truncate">{orderToPay.productName}</h4>
+                          <p className="text-[9px] text-stone-400 truncate">Seller: {orderToPay.sellerName || "Shopiversity Merchant"}</p>
+                        </div>
+                        <span className="text-xs font-bold font-mono shrink-0">x{orderToPay.quantity}</span>
+                      </div>
+
+                      <div className="space-y-1.5 text-xs text-stone-600 dark:text-stone-300">
+                        <div className="flex justify-between">
+                          <span>Subtotal</span>
+                          <span className="font-mono">₦{orderToPay.totalPrice.toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Platform Fee</span>
+                          <span className="font-mono text-emerald-600">FREE</span>
+                        </div>
+                        <div className="flex justify-between font-black text-stone-900 dark:text-white pt-1 text-sm">
+                          <span>Total Amount due</span>
+                          <span className="font-mono">₦{orderToPay.totalPrice.toLocaleString()}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-purple-50/50 dark:bg-purple-950/10 rounded-2xl border border-purple-100/50 dark:border-purple-900/20 space-y-2 leading-relaxed">
+                      <p className="text-[10px] text-purple-900 dark:text-purple-400 font-medium">
+                        <span className="font-black uppercase mr-1">[Term 7.1]</span> Payment must be transacted securely inside the SHOPIVERSITY app to preserve your Active Buyer Protection.
+                      </p>
+                      <p className="text-[10px] text-purple-900 dark:text-purple-400 font-medium">
+                        <span className="font-black uppercase mr-1">[Term 1.1]</span> Escrow holds this payment safely. The vendor is disbursed only after fulfillment validation.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-col gap-3 pt-2">
+                      <button
+                        onClick={() => triggerOrderPayment(orderToPay)}
+                        disabled={isVerifyingPayment}
+                        className="w-full h-14 bg-[#ff6b00] hover:bg-[#e55f00] active:scale-[0.99] text-white rounded-2xl font-black text-xs uppercase tracking-[0.18em] transition-all flex items-center justify-center gap-2 shadow-xl cursor-pointer disabled:opacity-50"
+                      >
+                        {isVerifyingPayment ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            Connecting Paystack Gateway...
+                          </>
+                        ) : (
+                          <>
+                            <CreditCard className="w-4 h-4" />
+                            {`Pay ₦${orderToPay.totalPrice.toLocaleString()} via Paystack`}
+                          </>
+                        )}
+                      </button>
+                      <p className="text-[10px] text-center text-slate-500 dark:text-slate-400 font-medium">
+                        Protected by Paystack 256-bit encryption &amp; SHOPIVERSITY Escrow.
+                      </p>
+                    </div>
+
+                    <div className="text-center pb-1">
+                      <p className="text-[9px] text-stone-400 uppercase tracking-widest font-bold">
+                        🛡️ Verified SHOPIVERSITY Escrow Protection
+                      </p>
+                    </div>
+                  </div>
+                </motion.div>
               </div>
-            </motion.div>
-          </div>
+            )}
+          </AnimatePresence>,
+          document.body
         )}
-      </AnimatePresence>
 
       {/* Delivery Receipt & Escrow Release Confirmation Modal */}
       <AnimatePresence>
@@ -3217,22 +2949,6 @@ export default function OrderTracking({ setActiveTab, onBack, userProfile, initi
           onClose={() => setAuditModalOrder(null)}
         />
       )}
-
-      <EscrowCheckoutModal
-        isOpen={isEscrowModalOpen}
-        session={escrowSession}
-        onClose={() => setIsEscrowModalOpen(false)}
-        onProceedToReturnCheck={(returnUrl) => {
-          setIsEscrowModalOpen(false);
-          try {
-            const parsed = new URL(returnUrl, window.location.origin);
-            window.history.pushState({}, "", `${parsed.pathname}${parsed.search}`);
-            window.dispatchEvent(new PopStateEvent("popstate"));
-          } catch {
-            window.location.href = returnUrl;
-          }
-        }}
-      />
     </div>
   );
 }

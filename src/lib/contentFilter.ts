@@ -13,13 +13,15 @@ export interface DetectionResult {
   normalizedText?: string;
 }
 
-// Number word mapping
+export const PUBLIC_CONTACT_POLICY_ERROR = "For safety, phone numbers, email addresses, website links, and social media handles are not allowed in any public listing or storefront field.";
+
+// Number word mapping (pure number words to avoid false positives on prose words like "to"/"for"/"o")
 const NUMBER_WORDS: Record<string, string> = {
-  zero: "0", oh: "0", o: "0",
+  zero: "0", oh: "0",
   one: "1",
-  two: "2", to: "2", too: "2",
-  three: "3", tree: "3",
-  four: "4", for: "4",
+  two: "2",
+  three: "3",
+  four: "4",
   five: "5",
   six: "6",
   seven: "7",
@@ -44,8 +46,8 @@ const LEET_MAP: Record<string, string> = {
   "|": "l"
 };
 
-// Updatable Blacklist of external platforms & common variations
-export const PLATFORM_BLACKLIST = [
+// Short/ambiguous tokens matched on word boundaries only
+const PLATFORM_WORD_BOUNDARY_LIST = [
   "whatsapp", "watsapp", "watsap", "wasap", "whatapp", "whtsapp", "w/a", "w.a", "wa.me", "wame", "chat.whatsapp",
   "telegram", "tele gram", "t.me", "tme", "tg",
   "instagram", "insta", "ig", "instagr", "instgr",
@@ -54,8 +56,17 @@ export const PLATFORM_BLACKLIST = [
   "discord", "signal", "wechat", "line",
   "twitter", "x.com", "linkedin",
   "gmail", "yahoo", "outlook", "hotmail", "icloud", "protonmail", "ymail",
-  "tiktok", "skype", "zoom", "google meet", "gmeet", "teams"
+  "tiktok", "skype", "zoom", "google meet", "gmeet"
 ];
+
+// Long unmistakable tokens also checked against stripped text to defeat "w h a t s a p p" / leetspeak evasion
+const PLATFORM_STRIPPED_BLACKLIST = [
+  "whatsapp", "watsapp", "watsap", "whatapp", "whtsapp",
+  "telegram", "instagram", "facebook", "snapchat",
+  "discord", "linkedin", "protonmail", "hotmail", "tiktok"
+];
+
+export const PLATFORM_BLACKLIST = PLATFORM_WORD_BOUNDARY_LIST;
 
 // Bank keywords & Nigerian NUBAN bank providers
 export const BANK_KEYWORDS = [
@@ -70,17 +81,20 @@ export const BANK_KEYWORDS = [
 
 // Off-platform encouragement phrases
 const OFF_PLATFORM_PROMPTS = [
-  /\bcall\s*(?:me|us)?\b/i,
-  /\btext\s*(?:me|us)?\b/i,
-  /\breach\s*(?:me|us)?\s*(?:at|on|via|outside)?\b/i,
-  /\bcontact\s*(?:me|us)?\s*(?:at|on|via|outside)?\b/i,
-  /\bchat\s*(?:me|us)?\s*(?:at|on|via|outside)?\b/i,
-  /\bdm\s*(?:me|us)?\b/i,
+  /\bcall\s+(?:me|us)\b/i,
+  /\btext\s+(?:me|us)\b/i,
+  /\breach\s+(?:me|us)\s*(?:at|on|via|outside)?\b/i,
+  /\bcontact\s+(?:me|us)\s*(?:at|on|via|outside)?\b/i,
+  /\bchat\s+(?:me|us)\s*(?:at|on|via|outside)?\b/i,
+  /\bdm\s+(?:me|us|on|via|at|for)\b/i,
+  /\bslide\s+(?:into|in)\s+(?:my|our)\s+dm\b/i,
   /\bhmu\b/i,
-  /\bbuzz\s*(?:me|us)?\b/i,
-  /\bmessage\s*(?:me|us)?\s*(?:on|via|at)\b/i,
-  /\badd\s*(?:me|us)?\s*(?:on|at)\b/i,
-  /\btalk\s*(?:on|via|at)\b/i,
+  /\bbuzz\s+(?:me|us)\b/i,
+  /\bmessage\s+(?:me|us)\s*(?:on|via|at)\b/i,
+  /\badd\s+(?:me|us)\s*(?:on|at)\b/i,
+  /\bfollow\s+(?:me|us)\s*(?:on|at)\b/i,
+  /\btalk\s+(?:to\s+(?:me|us)\s+)?(?:on|via|at)\b/i,
+  /\b(?:my|our)\s+(?:phone|digits|number|whatsapp|email|mail|gmail|ig|insta|handle)\s*(?:is|:|=)/i,
   /\bpay\s*(?:outside|offsite|directly)\b/i,
   /\btransact\s*(?:outside|offsite)\b/i,
   /\bdeal\s*(?:outside|offsite)\b/i,
@@ -88,6 +102,10 @@ const OFF_PLATFORM_PROMPTS = [
   /\boff\s+(?:the\s+)?platform\b/i,
   /\boutside\s+shopiversity\b/i
 ];
+
+function escapeRegexLiteral(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 /**
  * Normalizes input text by converting to lowercase, replacing leetspeak,
@@ -100,7 +118,7 @@ export function normalizeForScanning(text: string): { normalized: string; stripp
   normalized = normalized.replace(/\[\s*at\s*\]|\(\s*at\s*\)|\{\s*at\s*\}|\s+at\s+/g, "@");
   normalized = normalized.replace(/\[\s*dot\s*\]|\(\s*dot\s*\)|\{\s*dot\s*\}|\s+dot\s+/g, ".");
 
-  // Convert number words to digits where appropriate
+  // Convert standalone number words to digits
   const wordTokens = normalized.split(/(\s+|[.,\-_/\()*#]+)/);
   const convertedTokens = wordTokens.map(token => {
     const clean = token.toLowerCase().trim();
@@ -141,28 +159,29 @@ export function detectContactSharing(rawText: string): DetectionResult {
   // 1. Phone number detection
   const phoneRegex = /(?:\+?\d{1,4}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4,}/g;
   const nigerianPhoneRegex = /\b0[789][01]\d{8}\b/g;
+  const intlPhoneRegex = /\+\d{1,4}[\s.-]?(?:\d[\s.-]*){6,12}\d\b/;
+  const spacedDigitChainRegex = /(?:^|[^\da-zA-Z])(?:\d[\s.\-_,/*]*){7,15}(?:$|[^\da-zA-Z])/;
 
-  if (phoneRegex.test(rawText) || nigerianPhoneRegex.test(rawText) || phoneRegex.test(normalized)) {
+  if (
+    phoneRegex.test(rawText) ||
+    nigerianPhoneRegex.test(rawText) ||
+    intlPhoneRegex.test(rawText) ||
+    phoneRegex.test(normalized) ||
+    nigerianPhoneRegex.test(normalized) ||
+    spacedDigitChainRegex.test(rawText) ||
+    spacedDigitChainRegex.test(normalized)
+  ) {
     detectedTypes.push("phone_number");
     reasons.push("Phone number pattern detected.");
   }
 
-  // Check spaced-out numbers (e.g., "0 8 0 1 2 3 4 5 6 7 8" or "zero 8 0 three...")
-  if (digitsOnly.length >= 7 && digitsOnly.length <= 15) {
-    const digitGroups = rawText.match(/\b\d{1,4}\b/g) || normalized.match(/\b\d{1,4}\b/g);
-    if (digitGroups && digitGroups.length >= 3 && digitGroups.join("").length >= 7) {
-      if (!detectedTypes.includes("phone_number")) {
-        detectedTypes.push("phone_number");
-        reasons.push("Disguised phone number sequence detected.");
-      }
-    }
-  }
-
   // 2. Bank Account & NUBAN detection
-  // Standalone 10-digit number (common NUBAN bank account length in Nigeria) or combined bank keywords
   const nubanAccountRegex = /\b\d{10}\b/g;
-  const bankKeywordPresent = BANK_KEYWORDS.some(bank => normalized.includes(bank));
-  
+  const bankKeywordPresent = BANK_KEYWORDS.some(bank => {
+    const pattern = new RegExp(`\\b${escapeRegexLiteral(bank)}\\b`, "i");
+    return pattern.test(normalized);
+  });
+
   if (nubanAccountRegex.test(rawText) || nubanAccountRegex.test(normalized)) {
     detectedTypes.push("bank_account");
     reasons.push("Bank account number (10-digit NUBAN) detected.");
@@ -180,13 +199,10 @@ export function detectContactSharing(rawText: string): DetectionResult {
     reasons.push("Email address detected.");
   }
 
-  // 4. Platform mentions & disguised platform names
-  for (const platform of PLATFORM_BLACKLIST) {
-    const platformClean = platform.replace(/[^a-z0-9]/g, "");
-    if (
-      normalized.includes(platform) ||
-      (platformClean.length >= 3 && stripped.includes(platformClean))
-    ) {
+  // 4. Platform mentions & disguised platform names (word-bounded for short tokens to avoid false positives on "Nigeria", "Digital", "Online")
+  for (const platform of PLATFORM_WORD_BOUNDARY_LIST) {
+    const boundaryRegex = new RegExp(`(?:^|[^a-z0-9])${escapeRegexLiteral(platform)}(?:$|[^a-z0-9])`, "i");
+    if (boundaryRegex.test(normalized) || boundaryRegex.test(rawText)) {
       if (!detectedTypes.includes("external_platform")) {
         detectedTypes.push("external_platform");
         reasons.push(`External platform mention detected (${platform}).`);
@@ -194,20 +210,34 @@ export function detectContactSharing(rawText: string): DetectionResult {
       break;
     }
   }
+  if (!detectedTypes.includes("external_platform")) {
+    for (const longPlatform of PLATFORM_STRIPPED_BLACKLIST) {
+      if (stripped.includes(longPlatform)) {
+        detectedTypes.push("external_platform");
+        reasons.push(`External platform mention detected (${longPlatform}).`);
+        break;
+      }
+    }
+  }
 
-  // 5. Social handles & usernames (@handle or "my ig is ...")
-  const socialHandleRegex = /@[\w._-]{3,}/i;
-  const handleMentionRegex = /(?:my|our)\s+(?:ig|insta|instagram|whatsapp|tg|telegram|snap|twitter|fb|facebook|handle|user)\s*(?:is|:|=|@)?\s*[\w._-]{3,}/i;
+  // 5. Social handles & usernames (@handle or "ig: username", "my ig is ...")
+  const socialHandleRegex = /@[\w._-]{2,}/i;
+  const handleMentionRegex = /(?:my|our)\s+(?:ig|insta|instagram|whatsapp|tg|telegram|snap|snapchat|twitter|fb|facebook|tiktok|x|handle|user(?:name)?)\s*(?:is|:|=|@)?\s*[\w._-]{2,}/i;
+  const labeledHandleRegex = /(?:^|[\s,(])(?:ig|insta|instagram|tg|telegram|fb|snap|snapchat|twitter|tiktok)\s*[:=\-]\s*@?[\w._-]{2,}/i;
 
-  if (socialHandleRegex.test(rawText) || handleMentionRegex.test(normalized)) {
+  if (
+    socialHandleRegex.test(rawText) ||
+    handleMentionRegex.test(normalized) ||
+    labeledHandleRegex.test(rawText)
+  ) {
     detectedTypes.push("social_handle");
     reasons.push("Social media handle or username reference detected.");
   }
 
   // 6. URLs, Web links & QR codes
   const urlRegex = /(?:https?:\/\/|www\.)[^\s]+/i;
-  const domainRegex = /\b[a-zA-Z0-9.-]+\.(?:com|ng|org|net|io|co|me|site|app|xyz|link|info|online)\b/i;
-  const inviteLinkRegex = /(?:wa\.me|t\.me|chat\.whatsapp\.com|discord\.gg|instagram\.com|facebook\.com)\/[^\s]+/i;
+  const domainRegex = /\b[a-zA-Z0-9-]+\.(?:com|ng|org|net|io|co|me|site|app|xyz|link|info|online|com\.ng)\b/i;
+  const inviteLinkRegex = /(?:wa\.me|t\.me|chat\.whatsapp\.com|discord\.gg|instagram\.com|facebook\.com|x\.com|tiktok\.com|linktr\.ee)\/[^\s]*/i;
   const qrRegex = /\b(?:qr\s*code|scan\s*(?:my\s*)?qr|qr\s*image|scan\s*code)\b/i;
 
   if (

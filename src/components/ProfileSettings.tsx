@@ -5,6 +5,7 @@ import { UserProfile } from "../types";
 import { NIGERIAN_CAMPUSES } from "../constants/campuses";
 import { SCHOOL_TYPES, NIGERIAN_SCHOOLS } from "../constants/schools";
 import { NIGERIAN_STATES, STATE_CITIES } from "../constants/locations";
+import { scanPublicFieldsForContactInfo, PUBLIC_CONTACT_POLICY_ERROR } from "../lib/contentFilter";
 import { 
   User, 
   MessageCircle, 
@@ -873,6 +874,15 @@ export default function ProfileSettings({ user, onBack, activeRole }: ProfileSet
     const wasIncomplete = !user.schoolName || !user.state || !user.city || (user.role !== "seller" && !user.deliveryAddress) || (user.role !== "buyer" && !user.verificationIdUrl);
     
     try {
+      const publicFieldCheck = scanPublicFieldsForContactInfo({
+        "Business / Store Name": businessName,
+        "Full Name": fullName,
+        "Username": username
+      });
+      if (publicFieldCheck.isBlocked) {
+        throw new Error(`${PUBLIC_CONTACT_POLICY_ERROR} (${publicFieldCheck.reason || "Contact or social info detected."})`);
+      }
+
       if (businessPhone.trim() && (phonePrefix === "+234" || country.toLowerCase() === "nigeria")) {
         const cleanBp = businessPhone.trim().replace(/\D/g, "");
         if (cleanBp.startsWith("0")) {

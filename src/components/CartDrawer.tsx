@@ -53,6 +53,7 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
 
   const hasEvent = selectedItems.some(item => item.ticketTierId);
   const hasService = selectedItems.some(item => item.type === "service");
+  const hasOneDollar = selectedItems.some(item => Boolean(item.isOneDollar));
   
   React.useEffect(() => {
     if (hasEvent) {
@@ -61,6 +62,12 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
   }, [hasEvent]);
 
   React.useEffect(() => {
+    if (hasOneDollar) {
+      if (paymentMethod !== "online") {
+        setPaymentMethod("online");
+      }
+      return;
+    }
     if (hasService) {
       const firstService = selectedItems.find(item => item.type === "service");
       if (firstService) {
@@ -81,7 +88,7 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
         setPaymentMethod("pod");
       }
     }
-  }, [hasService, selectedItems, paymentMethod]);
+  }, [hasOneDollar, hasService, selectedItems, paymentMethod]);
 
   const subtotal = selectedItems.reduce((acc, item) => acc + item.price * item.quantity, 0);
   
@@ -200,8 +207,16 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
           commissionAmount: itemPlatformCommission,
           sellerEarnings: itemSellerEarnings,
           deliveryType,
-          paymentMethod: item.ticketTierId ? "online" : paymentMethod,
+          paymentMethod: item.ticketTierId || item.isOneDollar ? "online" : paymentMethod,
           paymentStatus: isPaid ? "paid" : "pending",
+          escrowStatus: isPaid ? "held" : "not_applicable",
+          ...(item.isOneDollar ? {
+            isOneDollar: true,
+            escrowSelected: true,
+            deliveryHandledBy: "vendor",
+            ...(item.oneDollarListingId ? { oneDollarListingId: item.oneDollarListingId } : {}),
+            ...(item.usdPrice && item.usdPrice > 0 && item.usdPrice <= 1 ? { usdPrice: item.usdPrice } : {}),
+          } : {}),
           status: item.ticketTierId ? "acquired" : (item.type === "service" ? "accepted" : "Pending Seller Acceptance"),
           createdAt: new Date().toISOString(),
           deliveryAddress: currentUser?.deliveryAddress || "",
@@ -788,13 +803,14 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
                         onClick={() => setPaymentMethod("online")}
                         className={cn(
                           "flex flex-col items-center gap-2 p-3.5 rounded-2xl border transition-all group cursor-pointer",
+                          hasOneDollar && "col-span-2",
                           paymentMethod === "online" ? "border-orange-500 bg-orange-50/20 dark:bg-orange-950/20 text-orange-600 dark:text-orange-400 font-bold" : "border-slate-200 dark:border-zinc-800 text-slate-500 hover:border-slate-300 dark:hover:border-zinc-700"
                         )}
                       >
                         <CreditCard className={cn("w-4 h-4 transition-transform group-hover:scale-105", paymentMethod === "online" ? "text-orange-600 dark:text-orange-400" : "text-slate-400")} />
-                        <span className="text-[10px] sm:text-xs font-bold uppercase tracking-widest">Direct Pay</span>
+                        <span className="text-[10px] sm:text-xs font-bold uppercase tracking-widest">Paystack (Escrow)</span>
                       </button>
-                      {hasService ? (
+                      {!hasOneDollar && (hasService ? (
                         <button
                           onClick={() => setPaymentMethod("physical")}
                           className={cn(
@@ -818,7 +834,7 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
                             <span className="text-[10px] sm:text-xs font-bold uppercase tracking-widest">On Delivery</span>
                           </button>
                         )
-                      )}
+                      ))}
                     </div>
                  </div>
               </div>

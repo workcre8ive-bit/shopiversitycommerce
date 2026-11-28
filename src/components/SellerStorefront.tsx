@@ -22,22 +22,10 @@ import {
   Share2,
   Clock,
   MapPin,
-  LayoutGrid,
-  Phone,
-  Mail,
-  Instagram,
-  Globe,
-  AtSign
+  LayoutGrid
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/utils";
-import {
-  mergeSellerPublicContact,
-  hasAnyPublicContact,
-  normalizeUrl,
-  normalizeWhatsAppUrl,
-  normalizeTikTokUrl
-} from "../lib/publicContact";
 import { ProductCard, ProductCardSkeleton } from "./ProductCard";
 import VendorVerificationBadge from "./VendorVerificationBadge";
 
@@ -266,8 +254,6 @@ export default function SellerStorefront({ sellerId, currentUser, previewSetting
     </div>
   );
 
-  const sellerPublicContact = mergeSellerPublicContact(settings.publicContact, seller);
-
   const renderHeaderBlock = () => (
     <div key="header-block" className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-6 sm:p-8 border border-slate-100 dark:border-slate-800/80 shadow-sm space-y-5">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
@@ -313,82 +299,6 @@ export default function SellerStorefront({ sellerId, currentUser, previewSetting
           </div>
         </div>
       </div>
-
-      {hasAnyPublicContact(sellerPublicContact) && (
-        <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center gap-2.5">
-          <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mr-1">
-            Public Contact:
-          </span>
-          {sellerPublicContact.phone && (
-            <a
-              href={`tel:${sellerPublicContact.phone.replace(/\s+/g, "")}`}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 transition-all"
-            >
-              <Phone className="w-3.5 h-3.5 text-emerald-600" />
-              <span>{sellerPublicContact.phone}</span>
-            </a>
-          )}
-          {sellerPublicContact.whatsapp && (
-            <a
-              href={normalizeWhatsAppUrl(sellerPublicContact.whatsapp)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 border border-emerald-200/80 dark:border-emerald-800/50 transition-all"
-            >
-              <MessageCircle className="w-3.5 h-3.5" />
-              <span>WhatsApp: {sellerPublicContact.whatsapp}</span>
-            </a>
-          )}
-          {sellerPublicContact.email && (
-            <a
-              href={`mailto:${sellerPublicContact.email}`}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 border border-blue-200/80 dark:border-blue-800/50 transition-all"
-            >
-              <Mail className="w-3.5 h-3.5" />
-              <span>{sellerPublicContact.email}</span>
-            </a>
-          )}
-          {sellerPublicContact.instagram && (
-            <a
-              href={normalizeUrl(sellerPublicContact.instagram, "https://instagram.com/")}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-pink-50 dark:bg-pink-950/30 text-pink-700 dark:text-pink-300 hover:bg-pink-100 border border-pink-200/80 dark:border-pink-800/50 transition-all"
-            >
-              <Instagram className="w-3.5 h-3.5" />
-              <span>{sellerPublicContact.instagram}</span>
-            </a>
-          )}
-          {sellerPublicContact.twitter && (
-            <a
-              href={normalizeUrl(sellerPublicContact.twitter, "https://x.com/")}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-200 border border-slate-200 dark:border-slate-700 transition-all"
-            >
-              <AtSign className="w-3.5 h-3.5" />
-              <span>{sellerPublicContact.twitter}</span>
-            </a>
-          )}
-          {sellerPublicContact.tiktok && (
-            <a
-              href={normalizeTikTokUrl(sellerPublicContact.tiktok)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-purple-50 dark:bg-purple-950/30 text-purple-700 dark:text-purple-300 hover:bg-purple-100 border border-purple-200/80 dark:border-purple-800/50 transition-all"
-            >
-              <Globe className="w-3.5 h-3.5" />
-              <span>{sellerPublicContact.tiktok}</span>
-            </a>
-          )}
-          {(sellerPublicContact.facebook || sellerPublicContact.website || sellerPublicContact.other) && (
-            <span className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-orange-50 dark:bg-orange-950/30 text-orange-700 dark:text-orange-300 border border-orange-200/80 dark:border-orange-800/50">
-              <Globe className="w-3.5 h-3.5" />
-              <span>{sellerPublicContact.website || sellerPublicContact.facebook || sellerPublicContact.other}</span>
-            </span>
-          )}
-        </div>
-      )}
     </div>
   );
 

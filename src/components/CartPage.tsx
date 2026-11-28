@@ -30,7 +30,6 @@ import { getPaystackPublicKey, getSyncPaystackPublicKey } from "../utils/paystac
 import { notifyOrderPlaced, triggerTemplatedEmail } from "../utils/orderEmailNotifications";
 import { clampOneDollarUsd, formatUsd } from "../lib/oneDollarRate";
 import { resolveAvailableStockForCartItem } from "../lib/cartStock";
-import EscrowCheckoutModal, { EscrowSessionDetails } from "./EscrowCheckoutModal";
 
 interface CartPageProps {
   cart: CartItem[];
@@ -59,12 +58,7 @@ export default function CartPage({
   const [success, setSuccess] = React.useState(false);
   const [deliveryType, setDeliveryType] = React.useState<"delivery" | "pickup">("pickup");
   const [paymentMethod, setPaymentMethod] = React.useState<"online" | "pod" | "physical">("online");
-  const [useOneDollarEscrow, setUseOneDollarEscrow] = React.useState(true);
-  const [oneDollarProvider, setOneDollarProvider] = React.useState<"paystack" | "escrowpay">("paystack");
-  const [escrowSession, setEscrowSession] = React.useState<EscrowSessionDetails | null>(null);
-  const [isEscrowModalOpen, setIsEscrowModalOpen] = React.useState(false);
   const [checkoutError, setCheckoutError] = React.useState<string | null>(null);
-  const [failedEscrowOrders, setFailedEscrowOrders] = React.useState<Array<{ orderId: string; uniqueOrderId: string; totalPrice: number; sellerId: string; productName: string; commissionRate: number; amountNgn: number; isOneDollar: boolean }> | null>(null);
   const [selectedItemKeys, setSelectedItemKeys] = React.useState<string[]>([]);
   const isCreating = React.useRef(false);
 
@@ -168,7 +162,7 @@ export default function CartPage({
       initialOrderStatus?: string;
       skipSuccessScreen?: boolean;
       forceEscrowSelected?: boolean;
-      paymentProvider?: "escrowpay" | "paystack";
+      paymentProvider?: "paystack";
     }
   ): Promise<Array<{ orderId: string; uniqueOrderId: string; totalPrice: number; sellerId: string; productName: string; commissionRate: number }>> => {
     if (selectedItems.length === 0 || isCreating.current) return [];
@@ -247,7 +241,7 @@ export default function CartPage({
         const resolvedRateSource = validatedOneDollar?.exchangeRateSource || item.exchangeRateSource;
         const resolvedRateUpdated = validatedOneDollar?.exchangeRateUpdatedAt || item.exchangeRateUpdatedAt;
 
-        const resolvedEscrowSelected = options?.forceEscrowSelected ?? useOneDollarEscrow;
+        const resolvedEscrowSelected = options?.forceEscrowSelected ?? true;
         const orderData: any = {
           uniqueOrderId,
           uniqueProductId,
@@ -301,27 +295,6 @@ export default function CartPage({
           } : {
             ...(isPaid ? { escrowStatus: "held", payoutStatus: "escrow" } : {})
           }),
-          ...(options?.paymentProvider === "escrowpay" ? {
-            paymentReceipt: {
-              receiptNumber: `ESC-INIT-${Date.now().toString().slice(-6)}`,
-              orderId: "",
-              transactionId: paymentReference || "",
-              paymentReference: paymentReference || "",
-              paymentMethod: "online",
-              provider: "escrowpay",
-              amountPaid: itemTotal,
-              currency: "NGN",
-              platformFee: itemPlatformCommission,
-              buyerName: currentUser?.displayName || "Buyer",
-              productName: item.name,
-              quantity: item.quantity,
-              deliveryType,
-              verificationTimestamp: new Date().toISOString(),
-              escrowStatus: "not_applicable",
-              status: "processing",
-              verifiedStatus: "processing"
-            }
-          } : {}),
           ...(item.ticketTierId ? { ticketTierId: item.ticketTierId } : {}),
           ...(item.ticketTierName ? { ticketTierName: item.ticketTierName } : {}),
           ...(item.menuItemId ? { menuItemId: item.menuItemId } : {}),
@@ -610,7 +583,10 @@ export default function CartPage({
         };
       }
 
-      await createOrders(true, validatedOneDollar, response.reference);
+      await createOrders(true, validatedOneDollar, response.reference, {
+        forceEscrowSelected: true,
+        paymentProvider: "paystack"
+      });
     } catch (error: any) {
       console.error("Order creation failed", error);
       setCheckoutError(error?.message || "Failed to process order. Please contact support.");
@@ -621,178 +597,6 @@ export default function CartPage({
 
   const onClosePayment = () => {
     setLoading(false);
-  };
-
-  const startEscrowPayCheckout = async (
-    retryRecords?: Array<{ orderId: string; uniqueOrderId: string; totalPrice: number; sellerId: string; productName: string; commissionRate: number; amountNgn: number; isOneDollar: boolean }>
-  ) => {
-    setLoading(true);
-    setCheckoutError(null);
-    let createdRecordsForRetry: Array<{ orderId: string; uniqueOrderId: string; totalPrice: number; sellerId: string; productName: string; commissionRate: number; amountNgn: number; isOneDollar: boolean }> =
-      retryRecords || [];
-
-    try {
-      // Pre-flight check so missing EscrowPay credentials never wipe the user's cart or create orphan orders
-      const cfgRes = await fetch("/api/payments/escrow/config-status");
-      if (cfgRes.ok) {
-        const cfgData = await cfgRes.json();
-        if (!cfgData.configured) {
-          throw new Error(
-            "EscrowPay Sandbox API key is not configured on the server yet (missing ESCROWPAY_TEST_SECRET_KEY). Add it in your server environment variables and redeploy."
-          );
-        }
-      }
-
-      if (!retryRecords || retryRecords.length === 0) {
-        let validatedOneDollar: any = undefined;
-        if (hasOneDollarItems) {
-          const oneDollarSelected = selectedItems.filter(i => i.isOneDollar);
-          const valRes = await fetch("/api/one-dollar/validate-checkout", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              items: oneDollarSelected.map((i) => ({
-                productId: i.productId,
-                quantity: i.quantity,
-                usdPrice: clampOneDollarUsd(i.usdPrice),
-                unitPriceNgn: i.price
-              })),
-              paymentReference: `ESC_PRE_${Date.now()}`,
-              paymentMethod: "online",
-              paymentProvider: "escrowpay",
-              totalCartAmountNgn: total
-            })
-          });
-          const valData = await valRes.json();
-          if (!valRes.ok || !valData.success) {
-            throw new Error(valData.error || "One Dollar exchange rate validation failed.");
-          }
-          validatedOneDollar = {
-            oneDollarUnitNgn: valData.authoritativeUnitNgn,
-            exchangeRateUsdToNgn: valData.rateSnapshot?.rate,
-            exchangeRateSource: valData.rateSnapshot?.source,
-            exchangeRateUpdatedAt: valData.rateSnapshot?.updatedAt
-          };
-        }
-
-        // Create pending awaiting_payment order(s) FIRST — NEVER marked paid until EscrowPay verifies!
-        const createdRecords = await createOrders(false, validatedOneDollar, undefined, {
-          initialOrderStatus: "awaiting_payment",
-          skipSuccessScreen: true,
-          forceEscrowSelected: true,
-          paymentProvider: "escrowpay"
-        });
-
-        createdRecordsForRetry = createdRecords.map((rec) => ({
-          ...rec,
-          amountNgn: total,
-          isOneDollar: hasOneDollarItems
-        }));
-      }
-
-      const primaryRecord = createdRecordsForRetry[0];
-      if (!primaryRecord?.orderId) {
-        throw new Error("Could not create pending order for EscrowPay checkout.");
-      }
-
-      const checkoutAmount = primaryRecord.amountNgn || total;
-      const idToken = await auth.currentUser?.getIdToken(true);
-      const createRes = await fetch("/api/payments/escrow/create", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(idToken ? { Authorization: `Bearer ${idToken}` } : {})
-        },
-        body: JSON.stringify({
-          orderId: primaryRecord.orderId,
-          uniqueOrderId: primaryRecord.uniqueOrderId,
-          amountNgn: checkoutAmount,
-          description:
-            createdRecordsForRetry.length > 1
-              ? `Shopiversity Cart (${createdRecordsForRetry.length} items)`
-              : primaryRecord.productName,
-          sellerId: primaryRecord.sellerId,
-          buyerName: currentUser?.displayName || "Buyer",
-          buyerPhone: currentUser?.phoneNumber || "",
-          commissionRate: primaryRecord.commissionRate,
-          isOneDollar: Boolean(primaryRecord.isOneDollar),
-          returnOrigin: window.location.origin
-        })
-      });
-
-      const createData = await createRes.json().catch(() => ({}));
-      if (!createRes.ok || !createData.success) {
-        if (createdRecordsForRetry.length > 0) {
-          setFailedEscrowOrders(createdRecordsForRetry);
-        }
-        throw new Error(
-          createData.error ||
-            "Order saved in Payment Processing, but EscrowPay checkout session could not start right now."
-        );
-      }
-
-      setFailedEscrowOrders(null);
-
-      // Link EscrowPay transaction details back to all created order docs cleanly (no undefined fields)
-      const nowIso = new Date().toISOString();
-      await Promise.all(
-        createdRecordsForRetry.map((rec) =>
-          updateDoc(doc(db, "orders", rec.orderId), {
-            paymentReference: createData.reference,
-            paymentStatus: "pending",
-            paymentReceipt: {
-              receiptNumber: `${createData.isTestTransaction ? "ESC-TEST-" : "ESC-"}${Date.now().toString().slice(-6)}`,
-              orderId: rec.orderId,
-              transactionId: createData.transactionId,
-              paymentReference: createData.reference,
-              paymentMethod: "online",
-              provider: "escrowpay",
-              environment: createData.environment,
-              isTestTransaction: createData.isTestTransaction,
-              escrowId: createData.transactionId,
-              ...(createData.checkoutSessionId ? { checkoutSessionId: createData.checkoutSessionId } : {}),
-              ...(createData.checkoutUrl ? { checkoutUrl: createData.checkoutUrl } : {}),
-              ...(createData.virtualAccount ? { virtualAccount: createData.virtualAccount } : {}),
-              amountPaid: rec.totalPrice,
-              currency: "NGN",
-              platformFee: 0,
-              buyerName: currentUser?.displayName || "Buyer",
-              productName: rec.productName,
-              quantity: 1,
-              deliveryType,
-              verificationTimestamp: nowIso,
-              escrowStatus: "not_applicable",
-              status: "processing",
-              verifiedStatus: "processing"
-            },
-            updatedAt: nowIso
-          }).catch((updErr) => {
-            console.warn("Non-fatal paymentReceipt update warning:", updErr);
-          })
-        )
-      );
-
-      setEscrowSession({
-        orderId: primaryRecord.orderId,
-        uniqueOrderId: primaryRecord.uniqueOrderId,
-        transactionId: createData.transactionId,
-        reference: createData.reference,
-        environment: createData.environment,
-        isTestTransaction: createData.isTestTransaction,
-        amountNgn: checkoutAmount,
-        currency: "NGN",
-        checkoutUrl: createData.checkoutUrl,
-        checkoutSessionId: createData.checkoutSessionId,
-        virtualAccount: createData.virtualAccount,
-        returnUrl: createData.returnUrl
-      });
-      setIsEscrowModalOpen(true);
-    } catch (err: any) {
-      console.error("EscrowPay checkout error:", err);
-      setCheckoutError(err?.message || "Failed to initialize EscrowPay checkout. Please try again.");
-    } finally {
-      setLoading(false);
-    }
   };
 
   const handleCheckout = async () => {
@@ -806,7 +610,7 @@ export default function CartPage({
     }
 
     if (hasMixedCartItems) {
-      setCheckoutError("Please checkout One Dollar items separately from Regular Marketplace items so the right payment gateway applies to each.");
+      setCheckoutError("Please checkout One Dollar items separately from Regular Marketplace items.");
       return;
     }
 
@@ -827,18 +631,14 @@ export default function CartPage({
       }
     }
 
-    // One Dollar checkout: Paystack primary with optional EscrowPay
-    if (hasOneDollarItems) {
-      if (oneDollarProvider === "escrowpay") {
-        await startEscrowPayCheckout();
-        return;
-      }
+    // One Dollar checkout: strictly Paystack only
+    if (hasOneDollarItems || paymentMethod === "online") {
       setLoading(true);
       const activeKey = await getPaystackPublicKey();
       if (!activeKey) {
         setLoading(false);
         setCheckoutError(
-          "Paystack Public Key is not configured. Please add VITE_PAYSTACK_PUBLIC_KEY (or live_public_key) to your server environment variables, or choose the EscrowPay Option."
+          "Paystack Public Key is not configured. Please add VITE_PAYSTACK_PUBLIC_KEY (or live_public_key) to your server environment variables."
         );
         return;
       }
@@ -846,16 +646,12 @@ export default function CartPage({
       return;
     }
 
-    // Regular Marketplace checkout: EscrowPay ONLY (no Paystack!) for online payment; POD / Physical preserved
-    if (paymentMethod === "online") {
-      await startEscrowPayCheckout();
-    } else {
-      try {
-        await createOrders(false);
-      } catch (error: any) {
-        console.error("POD Order creation failed", error);
-        setCheckoutError(error?.message || "Failed to process order. Please try again.");
-      }
+    // Pay on Delivery / Physical Pay for regular marketplace items
+    try {
+      await createOrders(false);
+    } catch (error: any) {
+      console.error("POD Order creation failed", error);
+      setCheckoutError(error?.message || "Failed to process order. Please try again.");
     }
   };
 
@@ -1219,7 +1015,7 @@ export default function CartPage({
                 <div className="flex items-start gap-2 text-xs text-amber-900 dark:text-amber-200">
                   <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                   <p className="leading-relaxed">
-                    <strong>Separate Checkout Required:</strong> Regular marketplace items checkout via <strong>EscrowPay</strong>, while One Dollar items use <strong>Paystack</strong> (with an optional EscrowPay choice).
+                    <strong>Separate Checkout Required:</strong> Regular marketplace items and One Dollar items use separate delivery workflows and must be checked out separately.
                   </p>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
@@ -1245,91 +1041,28 @@ export default function CartPage({
             {hasOneDollarItems ? (
               <div className="space-y-3">
                 <label className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-zinc-400 block">
-                  One Dollar Payment Gateway &amp; Protection
+                  One Dollar Payment Method
                 </label>
-                <div className="grid grid-cols-2 gap-2.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPaymentMethod("online");
-                      setOneDollarProvider("paystack");
-                    }}
-                    className={cn(
-                      "flex flex-col items-center gap-1.5 p-3 rounded-2xl border transition-all cursor-pointer text-center",
-                      oneDollarProvider === "paystack"
-                        ? "border-[#ff6b00] bg-orange-50/40 dark:bg-orange-950/20 text-[#ff6b00] font-bold shadow-sm"
-                        : "border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400 hover:border-slate-300 dark:hover:border-zinc-700"
-                    )}
-                  >
-                    <CreditCard className="w-4 h-4" />
-                    <span className="text-xs font-bold">Paystack</span>
-                    <span className="text-[10px] text-slate-500 dark:text-zinc-400">Card / Bank / USSD</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPaymentMethod("online");
-                      setOneDollarProvider("escrowpay");
-                      setUseOneDollarEscrow(true);
-                    }}
-                    className={cn(
-                      "flex flex-col items-center gap-1.5 p-3 rounded-2xl border transition-all cursor-pointer text-center",
-                      oneDollarProvider === "escrowpay"
-                        ? "border-[#ff6b00] bg-orange-50/40 dark:bg-orange-950/20 text-[#ff6b00] font-bold shadow-sm"
-                        : "border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400 hover:border-slate-300 dark:hover:border-zinc-700"
-                    )}
-                  >
-                    <ShieldCheck className="w-4 h-4" />
-                    <span className="text-xs font-bold">EscrowPay Option</span>
-                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">Escrow Protected</span>
-                  </button>
-                </div>
-
-                {oneDollarProvider === "paystack" && (
-                  <div className="grid grid-cols-2 gap-2.5 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => setUseOneDollarEscrow(true)}
-                      className={cn(
-                        "flex flex-col items-center gap-1 p-2.5 rounded-xl border transition-all cursor-pointer text-center",
-                        useOneDollarEscrow
-                          ? "border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300 font-bold"
-                          : "border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400"
-                      )}
-                    >
-                      <span className="text-[11px] font-bold">Escrow Protected</span>
-                      <span className="text-[10px] opacity-80">Held Until Receipt</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setUseOneDollarEscrow(false)}
-                      className={cn(
-                        "flex flex-col items-center gap-1 p-2.5 rounded-xl border transition-all cursor-pointer text-center",
-                        !useOneDollarEscrow
-                          ? "border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-300 font-bold"
-                          : "border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400"
-                      )}
-                    >
-                      <span className="text-[11px] font-bold">Direct Payment</span>
-                      <span className="text-[10px] opacity-80">No Escrow Hold</span>
-                    </button>
+                <div className="p-3.5 rounded-2xl border border-[#ff6b00] bg-orange-50/40 dark:bg-orange-950/20 text-[#ff6b00] flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <CreditCard className="w-4 h-4 shrink-0" />
+                    <div>
+                      <span className="text-xs font-bold block">Paystack</span>
+                      <span className="text-[10px] text-slate-500 dark:text-zinc-400">Card / Bank / USSD</span>
+                    </div>
                   </div>
-                )}
-
+                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold uppercase tracking-wider">
+                    Escrow Protected
+                  </span>
+                </div>
                 <p className="text-[10px] text-slate-500 dark:text-zinc-400 leading-relaxed">
-                  {oneDollarProvider === "escrowpay"
-                    ? "Your One Dollar payment routes through EscrowPay and stays in Payment Processing until EscrowPay confirms escrow funding."
-                    : useOneDollarEscrow
-                    ? "Your online Paystack payment is held securely in Shopiversity Escrow until you confirm delivery."
-                    : "Your online Paystack payment settles directly after existing platform commission without an escrow hold."}
+                  One Dollar orders are paid via Paystack and held securely in Shopiversity Escrow until you confirm delivery.
                 </p>
               </div>
             ) : (
               <div className="space-y-3">
                 <label className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-zinc-400 block">
-                  Payment Option (Marketplace EscrowPay)
+                  Payment Option
                 </label>
                 <div className="grid grid-cols-2 gap-2.5">
                   <button
@@ -1342,8 +1075,8 @@ export default function CartPage({
                         : "border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400 hover:border-slate-300 dark:hover:border-zinc-700"
                     )}
                   >
-                    <ShieldCheck className="w-4 h-4" />
-                    <span className="text-xs font-bold">Pay via EscrowPay</span>
+                    <CreditCard className="w-4 h-4" />
+                    <span className="text-xs font-bold">Paystack</span>
                     <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">Escrow Protected</span>
                   </button>
 
@@ -1376,7 +1109,7 @@ export default function CartPage({
                       >
                         <Wallet className="w-4 h-4" />
                         <span className="text-xs font-bold">Pay on Delivery</span>
-                        <span className="text-[10px] text-slate-400 dark:text-zinc-500">EscrowPay Upon Delivery</span>
+                        <span className="text-[10px] text-slate-400 dark:text-zinc-500">Pay Upon Delivery</span>
                       </button>
                     )
                   )}
@@ -1429,11 +1162,7 @@ export default function CartPage({
                     Total Due Now:
                   </span>
                   <span className="text-[10px] text-slate-400 font-medium">
-                    {hasOneDollarItems
-                      ? oneDollarProvider === "escrowpay"
-                        ? "EscrowPay Escrow Hold"
-                        : (useOneDollarEscrow ? "Paystack Escrow Hold" : "Paystack Direct Payment")
-                      : (paymentMethod === "online" ? "EscrowPay Protected Transfer" : "Pay upon receipt")}
+                    {hasOneDollarItems || paymentMethod === "online" ? "Paystack Escrow Hold" : "Pay upon receipt"}
                   </span>
                 </div>
                 <span className="text-2xl font-black text-[#ff6b00] tracking-tight tabular-nums">
@@ -1446,11 +1175,7 @@ export default function CartPage({
             <div className="p-3 bg-slate-50 dark:bg-zinc-900/60 rounded-xl border border-slate-200/60 dark:border-zinc-800 text-left space-y-1">
               <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-700 dark:text-zinc-200">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                <span>
-                  {hasOneDollarItems && oneDollarProvider === "paystack" && !useOneDollarEscrow
-                    ? "Standard Direct Paystack Checkout"
-                    : "Protected by 72-Hour Campus Escrow"}
-                </span>
+                <span>Protected by 72-Hour Campus Escrow</span>
               </div>
               <p className="text-[10px] text-slate-500 dark:text-zinc-400 leading-normal">
                 By completing this order, you agree to the{" "}
@@ -1484,29 +1209,6 @@ export default function CartPage({
                     {checkoutError}
                   </p>
                 </div>
-                {failedEscrowOrders && failedEscrowOrders.length > 0 && (
-                  <div className="flex flex-wrap gap-2 pl-6">
-                    <button
-                      type="button"
-                      disabled={loading}
-                      onClick={() => void startEscrowPayCheckout(failedEscrowOrders)}
-                      className="px-3 py-1.5 rounded-xl bg-[#ff6b00] hover:bg-[#e05e00] text-white text-[11px] font-bold cursor-pointer disabled:opacity-50"
-                    >
-                      Retry EscrowPay Checkout
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCheckoutError(null);
-                        setFailedEscrowOrders(null);
-                        setActiveTab("orders");
-                      }}
-                      className="px-3 py-1.5 rounded-xl bg-white dark:bg-zinc-900 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-[11px] font-bold cursor-pointer"
-                    >
-                      View Saved Order
-                    </button>
-                  </div>
-                )}
               </div>
             )}
 
@@ -1528,13 +1230,9 @@ export default function CartPage({
                 <>
                   <ShieldCheck className="w-4 h-4" />
                   <span>
-                    {hasOneDollarItems
-                      ? oneDollarProvider === "escrowpay"
-                        ? `Pay ₦${total.toLocaleString()} via EscrowPay`
-                        : `Pay ₦${total.toLocaleString()} (${useOneDollarEscrow ? "Paystack Escrow" : "Paystack Direct"})`
-                      : (paymentMethod === "online" 
-                          ? `Pay ₦${total.toLocaleString()} via EscrowPay` 
-                          : `Place Order (₦${total.toLocaleString()} POD)`)}
+                    {hasOneDollarItems || paymentMethod === "online"
+                      ? `Pay ₦${total.toLocaleString()} via Paystack`
+                      : `Place Order (₦${total.toLocaleString()} ${paymentMethod === "physical" ? "Physical Pay" : "POD"})`}
                   </span>
                 </>
               )}
@@ -1550,25 +1248,6 @@ export default function CartPage({
           </div>
         </div>
       </div>
-
-      <EscrowCheckoutModal
-        isOpen={isEscrowModalOpen}
-        session={escrowSession}
-        onClose={() => {
-          setIsEscrowModalOpen(false);
-          setActiveTab("orders");
-        }}
-        onProceedToReturnCheck={(returnUrl) => {
-          setIsEscrowModalOpen(false);
-          try {
-            const parsed = new URL(returnUrl, window.location.origin);
-            window.history.pushState({}, "", `${parsed.pathname}${parsed.search}`);
-            window.dispatchEvent(new PopStateEvent("popstate"));
-          } catch {
-            window.location.href = returnUrl;
-          }
-        }}
-      />
     </div>
   );
 }
