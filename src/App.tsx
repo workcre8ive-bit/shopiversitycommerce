@@ -18,7 +18,13 @@ import {
 } from "firebase/firestore";
 import { Product, UserProfile, CartItem, Notification, OneDollarListing } from "./types";
 import { useOneDollarRate, getCachedOneDollarListings, setCachedOneDollarListings, clampOneDollarUsd, computeOneDollarNgn, formatUsd } from "./lib/oneDollarRate";
-import { resolveAvailableStockForCartItem, resolveAvailableStockForProduct } from "./lib/cartStock";
+import {
+  isCartItemExpired,
+  parseCartAddedAt,
+  pruneExpiredCartItems,
+  resolveAvailableStockForCartItem,
+  resolveAvailableStockForProduct,
+} from "./lib/cartStock";
 import { handleFirestoreError, OperationType, getFirestoreErrorMessage, isFirestoreQuotaError, FIRESTORE_QUOTA_EVENT, notifyFirestoreQuotaExceeded } from "./lib/firebase-errors";
 import {
   getCachedUserProfile,
@@ -434,10 +440,11 @@ export default function App() {
       const saved = localStorage.getItem("shopiversity_cart");
       if (saved) {
         const parsed: CartItem[] = JSON.parse(saved);
-        const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
-        const now = Date.now();
-        // Return only items added less than 48 hours ago
-        return parsed.filter(item => !item.addedAt || (now - item.addedAt) < TWO_DAYS_MS);
+        const valid = pruneExpiredCartItems(parsed, Date.now());
+        if (Array.isArray(parsed) && valid.length !== parsed.length) {
+          localStorage.setItem("shopiversity_cart", JSON.stringify(valid));
+        }
+        return valid;
       }
     } catch (e) {
       console.error("Failed to parse cart from localStorage", e);
@@ -454,21 +461,47 @@ export default function App() {
     }
   }, [cart]);
 
-  // Periodically clean up items older than 2 days (48 hours) so they are released back to stock for other buyers
-  React.useEffect(() => {
-    const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
-    const interval = setInterval(() => {
-      setCart((prev) => {
-        const now = Date.now();
-        const valid = prev.filter((item) => !item.addedAt || (now - item.addedAt) < TWO_DAYS_MS);
-        if (valid.length !== prev.length) {
-          triggerDynamicIsland("Expired cart items returned to available stock! 📦");
-        }
+  // Periodically clean up items whose 2-day (48-hour) reservation window has expired
+  const cleanupExpiredCart = React.useCallback(() => {
+    const now = Date.now();
+    setCart((prev) => {
+      const valid = pruneExpiredCartItems(prev, now);
+      if (valid.length !== prev.length) {
+        triggerDynamicIsland("Expired cart items returned to available stock! 📦");
         return valid;
-      });
-    }, 30000);
-    return () => clearInterval(interval);
-  }, []);
+      }
+      return prev;
+    });
+  }, [triggerDynamicIsland]);
+
+  React.useEffect(() => {
+    cleanupExpiredCart();
+    const interval = setInterval(cleanupExpiredCart, 15000);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        cleanupExpiredCart();
+      }
+    };
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === "shopiversity_cart") {
+        try {
+          const parsed: CartItem[] = e.newValue ? JSON.parse(e.newValue) : [];
+          setCart(pruneExpiredCartItems(parsed, Date.now()));
+        } catch {
+          setCart([]);
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", cleanupExpiredCart);
+    window.addEventListener("storage", handleStorage);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", cleanupExpiredCart);
+      window.removeEventListener("storage", handleStorage);
+    };
+  }, [cleanupExpiredCart]);
   const [pendingCartItem, setPendingCartItem] = React.useState<{
     product: Product;
     menuItem?: any;
@@ -540,6 +573,12 @@ export default function App() {
   const [tabHistory, setTabHistory] = React.useState<string[]>([]);
   const [viewingProduct, setViewingProduct] = React.useState<Product | null>(null);
   const [viewingSellerId, setViewingSellerId] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (activeTab === "cart") {
+      cleanupExpiredCart();
+    }
+  }, [activeTab, cleanupExpiredCart]);
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1761,9 +1800,12 @@ export default function App() {
       return;
     }
 
+    const now = Date.now();
     const itemUsd = clampOneDollarUsd(listing.usdPrice);
     const itemNgn = computeOneDollarNgn(itemUsd, oneDollarRate) || oneDollarRate.oneDollarNgnPrice;
-    const existingOneDollar = cart.find((item) => item.isOneDollar && item.productId === listing.productId);
+    const existingOneDollar = cart.find(
+      (item) => !isCartItemExpired(item, now) && item.isOneDollar && item.productId === listing.productId
+    );
     if (existingOneDollar && existingOneDollar.quantity >= listing.stock) {
       if (goToCartImmediately) {
         setActiveTab("cart");
@@ -1773,10 +1815,12 @@ export default function App() {
     }
 
     setCart((prev) => {
-      const existing = prev.find((item) => item.isOneDollar && item.productId === listing.productId);
+      const activePrev = pruneExpiredCartItems(prev, now);
+      const existing = activePrev.find((item) => item.isOneDollar && item.productId === listing.productId);
       if (existing) {
         const nextQty = Math.min(listing.stock, existing.quantity + 1);
-        return prev.map((item) =>
+        const preservedAddedAt = parseCartAddedAt(existing.addedAt) ?? now;
+        return activePrev.map((item) =>
           (item.isOneDollar && item.productId === listing.productId)
             ? {
                 ...item,
@@ -1787,13 +1831,13 @@ export default function App() {
                 exchangeRateUsdToNgn: oneDollarRate.rate,
                 exchangeRateSource: oneDollarRate.source,
                 exchangeRateUpdatedAt: oneDollarRate.updatedAt,
-                addedAt: Date.now()
+                addedAt: preservedAddedAt
               }
             : item
         );
       }
       return [
-        ...prev,
+        ...activePrev,
         {
           productId: listing.productId,
           name: listing.productName,
@@ -1804,7 +1848,7 @@ export default function App() {
           imageUrl: listing.imageUrl,
           deliveryOptions: { delivery: true, pickup: true },
           type: "good",
-          addedAt: Date.now(),
+          addedAt: now,
           isOneDollar: true,
           oneDollarListingId: listing.id,
           usdPrice: itemUsd,
@@ -1853,27 +1897,30 @@ export default function App() {
       (menuItem ? item.menuItemId === (menuItem.id || menuItem.name) : !item.menuItemId) &&
       (ticketTier ? item.ticketTierId === (ticketTier.id || ticketTier.name) : !item.ticketTierId);
 
-    const existingInCart = cart.find(matchesTarget);
+    const now = Date.now();
+    const existingInCart = cart.find((item) => !isCartItemExpired(item, now) && matchesTarget(item));
     if (existingInCart && maxStock !== undefined && existingInCart.quantity >= maxStock) {
       triggerDynamicIsland(`Maximum inventory (${maxStock}) already in your cart`);
       return;
     }
 
     setCart((prev) => {
-      const existing = prev.find(matchesTarget);
+      const activePrev = pruneExpiredCartItems(prev, now);
+      const existing = activePrev.find(matchesTarget);
       if (existing) {
         const nextQty =
           maxStock !== undefined
             ? Math.min(maxStock, existing.quantity + itemQuantity)
             : existing.quantity + itemQuantity;
-        return prev.map((item) =>
+        const preservedAddedAt = parseCartAddedAt(existing.addedAt) ?? now;
+        return activePrev.map((item) =>
           matchesTarget(item)
             ? {
                 ...item,
                 quantity: nextQty,
                 ...(maxStock !== undefined ? { maxStock } : {}),
                 formResponses: formResponses || item.formResponses,
-                addedAt: Date.now()
+                addedAt: preservedAddedAt
               }
             : item
         );
@@ -1881,7 +1928,7 @@ export default function App() {
       const initialQty =
         maxStock !== undefined ? Math.min(maxStock, itemQuantity) : itemQuantity;
       return [
-        ...prev,
+        ...activePrev,
         {
           productId: product.id,
           name: menuItem ? `${product.name} - ${menuItem.name}` : (ticketTier ? `${product.name} (${ticketTier.name})` : product.name),
@@ -1901,7 +1948,7 @@ export default function App() {
           cheapDataHubNetworkCode: menuItem?.cheapDataHubNetworkCode,
           formResponses: formResponses,
           type: product.type || "good",
-          addedAt: Date.now(),
+          addedAt: now,
         },
       ];
     });
@@ -3356,7 +3403,8 @@ export default function App() {
                   products={products}
                   oneDollarListings={oneDollarListings}
                   onUpdateQuantity={(productId, delta, menuItemId, ticketTierId, isOneDollar) => {
-                    setCart(prev => prev.map(item => {
+                    const now = Date.now();
+                    setCart(prev => pruneExpiredCartItems(prev, now).map(item => {
                       if (!(item.productId === productId && item.menuItemId === menuItemId && item.ticketTierId === ticketTierId && Boolean(item.isOneDollar) === Boolean(isOneDollar))) {
                         return item;
                       }

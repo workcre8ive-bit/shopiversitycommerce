@@ -29,7 +29,11 @@ import { usePaystackPayment } from "../hooks/usePaystackPayment";
 import { getPaystackPublicKey, getSyncPaystackPublicKey } from "../utils/paystackConfig";
 import { notifyOrderPlaced, triggerTemplatedEmail } from "../utils/orderEmailNotifications";
 import { clampOneDollarUsd, formatUsd } from "../lib/oneDollarRate";
-import { resolveAvailableStockForCartItem } from "../lib/cartStock";
+import {
+  formatCartReservationRemaining,
+  pruneExpiredCartItems,
+  resolveAvailableStockForCartItem,
+} from "../lib/cartStock";
 
 interface CartPageProps {
   cart: CartItem[];
@@ -62,16 +66,27 @@ export default function CartPage({
   const [selectedItemKeys, setSelectedItemKeys] = React.useState<string[]>([]);
   const isCreating = React.useRef(false);
 
+  const [reservationNow, setReservationNow] = React.useState<number>(() => Date.now());
+  React.useEffect(() => {
+    const timer = setInterval(() => setReservationNow(Date.now()), 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const activeCart = React.useMemo<CartItem[]>(
+    () => pruneExpiredCartItems(cart, reservationNow),
+    [cart, reservationNow]
+  );
+
   const getItemKey = (item: CartItem) => `${item.isOneDollar ? '1usd-' : ''}${item.productId}-${item.menuItemId || 'main'}-${item.ticketTierId || 'none'}`;
 
   // Initialize all items as selected on cart load and reset success message on new additions
   React.useEffect(() => {
-    setSelectedItemKeys(cart.map(getItemKey));
-    if (cart.length > 0) {
+    setSelectedItemKeys(activeCart.map(getItemKey));
+    if (activeCart.length > 0) {
       setSuccess(false);
       setCheckoutError(null);
     }
-  }, [cart.length]);
+  }, [activeCart.length]);
 
   const toggleSelection = (key: string) => {
     setSelectedItemKeys(prev => 
@@ -80,14 +95,14 @@ export default function CartPage({
   };
 
   const selectAll = () => {
-    if (selectedItemKeys.length === cart.length) {
+    if (selectedItemKeys.length === activeCart.length) {
       setSelectedItemKeys([]);
     } else {
-      setSelectedItemKeys(cart.map(getItemKey));
+      setSelectedItemKeys(activeCart.map(getItemKey));
     }
   };
 
-  const selectedItems = cart.filter(item => 
+  const selectedItems = activeCart.filter(item => 
     selectedItemKeys.includes(getItemKey(item))
   );
 
@@ -172,8 +187,8 @@ export default function CartPage({
     const createdRecords: Array<{ orderId: string; uniqueOrderId: string; totalPrice: number; sellerId: string; productName: string; commissionRate: number }> = [];
 
     try {
-      const uniqueSelectedItems = Array.from(
-        new Map(selectedItems.map(item => [getItemKey(item), item])).values()
+      const uniqueSelectedItems: CartItem[] = Array.from(
+        new Map<string, CartItem>(selectedItems.map(item => [getItemKey(item), item])).values()
       );
 
       // Group selected items by seller
@@ -704,7 +719,7 @@ export default function CartPage({
   }
 
   // Empty Cart Full Page State
-  if (cart.length === 0) {
+  if (activeCart.length === 0) {
     return (
       <div className="max-w-3xl mx-auto px-4 py-16 sm:py-24 text-center">
         <div className="w-24 sm:w-32 h-24 sm:h-32 bg-orange-50 dark:bg-zinc-900 rounded-[2.5rem] flex items-center justify-center mb-6 sm:mb-8 mx-auto border border-orange-100 dark:border-zinc-800">
@@ -745,7 +760,7 @@ export default function CartPage({
                 Shopping Cart
               </h1>
               <span className="px-2.5 py-0.5 bg-orange-100 dark:bg-orange-950/50 text-[#ff6b00] font-black text-xs rounded-full">
-                {cart.length} {cart.length === 1 ? "item" : "items"}
+                {activeCart.length} {activeCart.length === 1 ? "item" : "items"}
               </span>
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-0.5">
@@ -759,7 +774,7 @@ export default function CartPage({
             onClick={selectAll}
             className="text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-[#ff6b00] transition-colors cursor-pointer bg-transparent border-none"
           >
-            {selectedItemKeys.length === cart.length ? "Deselect All" : "Select All Items"}
+            {selectedItemKeys.length === activeCart.length ? "Deselect All" : "Select All Items"}
           </button>
           <span className="text-slate-300 dark:text-zinc-700">|</span>
           <button
@@ -786,7 +801,7 @@ export default function CartPage({
         <div className="lg:col-span-7 xl:col-span-8 space-y-4">
           <div className="flex items-center justify-between px-1">
             <span className="text-xs font-black uppercase tracking-wider text-slate-400 dark:text-zinc-500">
-              Selected Items ({selectedItems.length} of {cart.length})
+              Selected Items ({selectedItems.length} of {activeCart.length})
             </span>
             <span className="text-xs font-black uppercase tracking-wider text-slate-400 dark:text-zinc-500">
               Item Price
@@ -794,9 +809,10 @@ export default function CartPage({
           </div>
 
           <div className="space-y-3">
-            {cart.map((item, idx) => {
+            {activeCart.map((item, idx) => {
               const key = getItemKey(item);
               const isSelected = selectedItemKeys.includes(key);
+              const reservation = formatCartReservationRemaining(item, reservationNow);
 
               return (
                 <motion.div
@@ -872,6 +888,16 @@ export default function CartPage({
                             ({formatUsd(item.usdPrice)} USD{item.exchangeRateUsdToNgn ? ` @ ₦${item.exchangeRateUsdToNgn.toLocaleString()}/$1` : ""})
                           </span>
                         )}
+                      </div>
+
+                      <div className={cn(
+                        "inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold w-fit",
+                        reservation.isUrgent
+                          ? "bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400"
+                          : "bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400"
+                      )}>
+                        <Clock className="w-2.5 h-2.5 shrink-0" />
+                        <span>Reserved · {reservation.label}</span>
                       </div>
 
                       {item.isOneDollar && (

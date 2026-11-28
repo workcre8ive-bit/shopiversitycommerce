@@ -9,7 +9,11 @@ import { handleFirestoreError, OperationType } from "../lib/firebase-errors";
 import { usePaystackPayment } from "../hooks/usePaystackPayment";
 import { getPaystackPublicKey, getSyncPaystackPublicKey } from "../utils/paystackConfig";
 import { notifyOrderPlaced, triggerTemplatedEmail } from "../utils/orderEmailNotifications";
-import { resolveAvailableStockForCartItem } from "../lib/cartStock";
+import {
+  formatCartReservationRemaining,
+  pruneExpiredCartItems,
+  resolveAvailableStockForCartItem,
+} from "../lib/cartStock";
 
 interface CartDrawerProps {
   isOpen: boolean;
@@ -32,14 +36,27 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
   const [selectedItemKeys, setSelectedItemKeys] = React.useState<string[]>([]);
   const isCreating = React.useRef(false);
 
-  const getItemKey = (item: CartItem) => `${item.productId}-${item.menuItemId || 'main'}-${item.ticketTierId || 'none'}`;
+  const [reservationNow, setReservationNow] = React.useState<number>(() => Date.now());
+  React.useEffect(() => {
+    if (!isOpen) return;
+    setReservationNow(Date.now());
+    const timer = setInterval(() => setReservationNow(Date.now()), 30000);
+    return () => clearInterval(timer);
+  }, [isOpen]);
+
+  const activeCart = React.useMemo<CartItem[]>(
+    () => pruneExpiredCartItems(cart, reservationNow),
+    [cart, reservationNow]
+  );
+
+  const getItemKey = (item: CartItem) => `${item.isOneDollar ? '1usd-' : ''}${item.productId}-${item.menuItemId || 'main'}-${item.ticketTierId || 'none'}`;
 
   // Initialize selection when cart changes or drawer opens
   React.useEffect(() => {
     if (isOpen) {
-      setSelectedItemKeys(cart.map(getItemKey));
+      setSelectedItemKeys(activeCart.map(getItemKey));
     }
-  }, [isOpen, cart.length]);
+  }, [isOpen, activeCart.length]);
 
   const toggleSelection = (key: string) => {
     setSelectedItemKeys(prev => 
@@ -47,7 +64,7 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
     );
   };
 
-  const selectedItems = cart.filter(item => 
+  const selectedItems = activeCart.filter(item => 
     selectedItemKeys.includes(getItemKey(item))
   );
 
@@ -115,8 +132,8 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
 
     try {
       // Group selected items by seller
-      const uniqueSelectedItems = Array.from(
-        new Map(selectedItems.map(item => [getItemKey(item), item])).values()
+      const uniqueSelectedItems: CartItem[] = Array.from(
+        new Map<string, CartItem>(selectedItems.map(item => [getItemKey(item), item])).values()
       );
 
       // Group selected items by seller to distribute delivery fees
@@ -459,7 +476,7 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
       
       // Remove selected items from cart
       uniqueSelectedItems.forEach(item => {
-        onRemove(item.productId, item.menuItemId, item.ticketTierId);
+        onRemove(item.productId, item.menuItemId, item.ticketTierId, item.isOneDollar);
       });
 
       setSuccess(true);
@@ -501,7 +518,7 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
   const handleCheckout = async () => {
     if (loading || isCreating.current) return;
     if (!auth.currentUser || !currentUser || selectedItems.length === 0) {
-      if (selectedItems.length === 0 && cart.length > 0) {
+      if (selectedItems.length === 0 && activeCart.length > 0) {
         alert("Please select at least one item to checkout.");
       }
       return;
@@ -557,7 +574,7 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
         <div className="bg-white dark:bg-slate-900 px-4 sm:px-8 py-4 sm:py-6 flex items-center justify-between border-b border-slate-100 dark:border-slate-800">
           <div className="flex flex-col">
             <h2 className="text-xl sm:text-2xl font-black italic tracking-tighter leading-none">Your Cart</h2>
-            <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest mt-1 sm:mt-2">{cart.length} unique items</span>
+            <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest mt-1 sm:mt-2">{activeCart.length} unique items</span>
           </div>
           <button 
             onClick={onClose} 
@@ -591,7 +608,7 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
                 <ChevronRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
               </button>
             </div>
-          ) : cart.length === 0 ? (
+          ) : activeCart.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 text-center animate-in fade-in slide-in-from-bottom-8">
               <div className="w-24 sm:w-32 h-24 sm:h-32 bg-slate-50 dark:bg-slate-800 rounded-3xl flex items-center justify-center mb-6 sm:mb-8">
                 <ShoppingBag className="w-10 sm:w-12 h-10 sm:h-12 text-slate-200 dark:text-slate-700" />
@@ -622,18 +639,19 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
               <div className="space-y-4 sm:space-y-6">
                 <div className="flex items-center justify-between">
                   <button 
-                    onClick={() => setSelectedItemKeys(selectedItemKeys.length === cart.length ? [] : cart.map(getItemKey))}
+                    onClick={() => setSelectedItemKeys(selectedItemKeys.length === activeCart.length ? [] : activeCart.map(getItemKey))}
                     className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest hover:text-amber-600 transition-colors"
                   >
-                    {selectedItemKeys.length === cart.length ? "Deselect All" : "Select Everything"}
+                    {selectedItemKeys.length === activeCart.length ? "Deselect All" : "Select Everything"}
                   </button>
                   <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Subtotal</span>
                 </div>
 
                 <div className="space-y-3 sm:space-y-4">
-                  {cart.map((item, idx) => {
+                  {activeCart.map((item, idx) => {
                     const key = getItemKey(item);
                     const isSelected = selectedItemKeys.includes(key);
+                    const reservation = formatCartReservationRemaining(item, reservationNow);
                     return (
                       <motion.div 
                         layout
@@ -675,6 +693,15 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
                               {item.formResponses?.target && (
                                 <p className="text-[9px] text-slate-400 dark:text-slate-500 font-mono mt-0.5 uppercase">Target: {item.formResponses.target}</p>
                               )}
+                              <div className={cn(
+                                "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold mt-1 w-fit",
+                                reservation.isUrgent
+                                  ? "bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400"
+                                  : "bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400"
+                              )}>
+                                <Clock className="w-2.5 h-2.5 shrink-0" />
+                                <span>Reserved · {reservation.label}</span>
+                              </div>
                             </div>
                             <span className="text-[13px] sm:text-sm font-black text-slate-900 dark:text-white whitespace-nowrap">
                               ₦{(item.price * item.quantity).toLocaleString()}
@@ -843,7 +870,7 @@ export default function CartDrawer({ isOpen, onClose, cart, onUpdateQuantity, on
         </div>
 
         {/* Footer Summary */}
-        {cart.length > 0 && !success && (
+        {activeCart.length > 0 && !success && (
           <div className="bg-slate-50 dark:bg-slate-950 p-6 shadow-md border-t border-slate-200 dark:border-zinc-800">
             <div className="space-y-2 mb-6">
               <div className="flex justify-between items-center text-sm">
